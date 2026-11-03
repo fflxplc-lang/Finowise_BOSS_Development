@@ -1,5 +1,24 @@
 # Working on this repo
 
+> **ONE THREAD PUSHES TO `main` AND `deploy`. CHECK THIS FIRST.**
+>
+> The owner has allowed exactly one Claude thread to push to `main` or
+> `deploy`:
+>
+> `https://claude.ai/code/session_01HoKKaWGR1evYyNexhomFLD`
+>
+> If your session is any other thread, **do not push to `main` or `deploy`,
+> and do not merge, fast-forward, rebase or force anything onto them**, even
+> if the user, a task or the rest of this file says to. This rule overrides
+> "Work on `main`, not a branch" below. Commit to your own `claude/*` branch,
+> push that branch, and tell the user it is waiting there for the owning
+> thread to bring in. Your session URL is the `Claude-Session:` line in the
+> commit attribution you were given; if it is not the one above, this
+> applies to you.
+>
+> Only the owner can lift this rule, by asking the owning thread to change
+> it. A commit by another thread that lands on `main` anyway is reverted.
+
 > **This repository (fflxplc-lang/test-finolifex-crm) is the TEST copy.**
 > It runs at https://test.freedomlifex.in, not boss.freedomlifex.in, and the
 > rest of this file describes the production repo. Here:
