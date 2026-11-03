@@ -108,7 +108,7 @@ suite({mail: true}, async t => {
         hrStores: Object.keys(DB).filter(k=>k.indexOf('hr') === 0).sort()};
     });
     if(r.dup.length) throw new Error('a source reads an HR copy, not the original: ' + r.dup.join(', '));
-    if(r.hrStores.join(',') !== 'hrAppraisals,hrAttendance,hrConfig,hrIncentives,hrLeave,hrRegularizations,hrSourceMaps')
+    if(r.hrStores.join(',') !== 'hrAppraisals,hrAttendance,hrCompOff,hrConfig,hrIncentives,hrLeave,hrRegularizations,hrSourceMaps')
       throw new Error('HR owns an unexpected set of stores: ' + r.hrStores.join(', '));
     return r.info.length + ' sources, read where they live (' + r.stores.join(', ') + '); HR owns '
       + r.hrStores.length + ' stores of its own and nothing else';
@@ -277,8 +277,11 @@ suite({mail: true}, async t => {
       const picked = hrApproverFor(a.who);
       hrOpenLeaveRequest();
       document.getElementById('f_hrReqType').value = 'Casual Leave';
-      document.getElementById('f_hrReqFrom').value = '2026-11-02';
-      document.getElementById('f_hrReqTo').value = '2026-11-04';
+      /* two weeks ahead, so the dates never fall into the past */
+      const ahead = n => { const d = new Date(hrToday() + 'T00:00:00'); d.setDate(d.getDate() + n); return hrDateKey(d); };
+      window.zzLeaveMid = ahead(15);
+      document.getElementById('f_hrReqFrom').value = ahead(14);
+      document.getElementById('f_hrReqTo').value = ahead(16);
       document.getElementById('f_hrReqReason').value = 'ZZ family wedding';
       ['f_hrReqDuration','f_hrReqDelegated'].forEach(id => { const el = document.getElementById(id); if(el && !el.value) el.value = id === 'f_hrReqDuration' ? 'Full Day' : 'No'; });
       await hrSubmitLeaveRequest();
@@ -324,7 +327,7 @@ suite({mail: true}, async t => {
           && /leave was approved/i.test(n.title || '')).length,
         /* and an approved leave is what the attendance day then reads */
         day: (()=>{ const w = currentUser; currentUser = a.who;
-          const st = hrDayStatus(a.who, '2026-11-03'); currentUser = w; return st.label; })()};
+          const st = hrDayStatus(a.who, window.zzLeaveMid); currentUser = w; return st.label; })()};
     }, {who: plain});
     if(r.outsider.may) throw new Error('a head of another branch could decide it');
     if(r.outsider.inbox) throw new Error('it showed in the wrong head\u2019s inbox');
@@ -369,12 +372,15 @@ suite({mail: true}, async t => {
       /* and an older row, saved before units existed, still reads as whole days */
       out.legacy = hrLeaveDays({from:'2026-11-02', to:'2026-11-03', type:'Casual'});
       out.options = options;
+      out.categories = Array.from(document.querySelectorAll('#f_hrReqCategory option')).map(o=>o.value).filter(Boolean);
       return out;
     }, {who: plain});
     if(r.types.join(',') !== 'Full Day,Half Day,Comp Off')
       throw new Error('the types are ' + r.types.join(', '));
     if(r.labels[1] !== 'Half Day (half a day)') throw new Error('the half-day type is not labelled as one');
-    if(r.options.indexOf('Comp Off') < 0) throw new Error('Comp Off is not offered: ' + r.options.join(', '));
+    /* Comp-Off is a Leave Category now, with a balance of its own, so it is
+       no longer offered a second time as a Leave Type. */
+    if(r.options.indexOf('Comp Off') >= 0) throw new Error('Comp Off is still offered as a type: ' + r.options.join(', '));
     if(r.fullSpan !== 3) throw new Error('three full days came out as ' + r.fullSpan);
     if(r.halfSpan !== 1.5) throw new Error('three half days came out as ' + r.halfSpan);
     if(r.halfOne !== 0.5) throw new Error('one half day came out as ' + r.halfOne);

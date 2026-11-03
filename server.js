@@ -1237,7 +1237,7 @@ function attendanceRulesGuard(before, after) {
     const oldS = Array.isArray(was.sessions) ? was.sessions : [];
     const newS = Array.isArray(row.sessions) ? row.sessions : [];
     if (newS.length > oldS.length) {
-      const closed = hrClosedWhy(row.date, cfg);
+      const closed = cfg.compOffEnabled ? '' : hrClosedWhy(row.date, cfg);
       if (closed) return 'You cannot punch in today. ' + closed;
       const leave = hrApprovedLeave(row.userId, row.date);
       if (leave && !hrLeaveIsHalf(leave, cfg))
@@ -1252,7 +1252,7 @@ function attendanceRulesGuard(before, after) {
     for (let i = 0; i < Math.min(oldS.length, newS.length); i++) {
       const a = oldS[i] || {}, b = newS[i] || {};
       if (b.out && b.out !== a.out) {
-        if (hrClosedWhy(row.date, cfg)) return 'You cannot punch out today. ' + hrClosedWhy(row.date, cfg);
+        if (!cfg.compOffEnabled && hrClosedWhy(row.date, cfg)) return 'You cannot punch out today. ' + hrClosedWhy(row.date, cfg);
         if (now.mins >= until) return 'Punch Out closed at ' + cfg.day.until + '. Ask for a regularization if your last punch out is wrong.';
       }
     }
@@ -1383,6 +1383,28 @@ function leaveGuard(before, after) {
   return null;
 }
 
+// Comp-off: one record per person per extra working day, so the same day
+// can never be credited twice, and a decided record keeps the credit it was
+// decided at. Untouched older rows are left as they are.
+function compOffGuard(before, after) {
+  let old, next;
+  try { old = JSON.parse(before || '[]'); next = JSON.parse(after); } catch (e) { return null; }
+  if (!Array.isArray(next)) return null;
+  const byId = new Map((Array.isArray(old) ? old : []).filter((r) => r && r.id).map((r) => [r.id, r]));
+  const seen = new Map();
+  for (const r of next) {
+    if (!r || !r.id || !r.userId || !r.date) continue;
+    const k = r.userId + '|' + String(r.date).slice(0, 10);
+    if (seen.has(k)) return 'Comp-off for ' + String(r.date).slice(0, 10) + ' is already recorded. One day can be credited only once.';
+    seen.set(k, r.id);
+    const was = byId.get(r.id);
+    if (was && ['Approved', 'Rejected'].indexOf(was.status) >= 0
+        && (was.status !== r.status || Number(was.credit) !== Number(r.credit)))
+      return 'This comp-off was already ' + was.status.toLowerCase() + ' and cannot be changed.';
+  }
+  return null;
+}
+
 // PUT /api/storage/:key  body: { value: "..." } -> { key, value }
 app.put('/api/storage/:key', checkApiKey, (req, res) => {
   let { value } = req.body || {};
@@ -1395,6 +1417,10 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
   }
   if (req.params.key === 'hrLeave') {
     const wrong = leaveGuard(store.hrLeave, value);
+    if (wrong) return res.status(422).json({ error: wrong });
+  }
+  if (req.params.key === 'hrCompOff') {
+    const wrong = compOffGuard(store.hrCompOff, value);
     if (wrong) return res.status(422).json({ error: wrong });
   }
   if (req.params.key === 'tasks') {
@@ -3923,6 +3949,8 @@ function hrConfigNow() {
     weeklyOff: Array.isArray(c.weeklyOff) ? c.weeklyOff : [],
     holidays: Array.isArray(c.holidays) ? c.holidays : [],
     leaveTypes: Array.isArray(c.leaveTypes) ? c.leaveTypes : [],
+    // With comp-off on, a Sunday, weekly off or holiday can be worked and punched.
+    compOffEnabled: ((c.annualLeave || {}).compOffEnabled) !== false,
     reminders: {
       enabled: r.enabled !== false,
       inAt: hhmmOk(r.inEmailAt) ? r.inEmailAt : '09:15',

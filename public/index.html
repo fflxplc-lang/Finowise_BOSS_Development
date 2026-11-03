@@ -33541,7 +33541,7 @@ let DB = { settings:{}, settingsAudit:[], workActivities:[], djtEntries:[], camp
            /* HR's own stores. Nothing else in BOSS reads or writes them,
               and HR writes nothing outside them. */
            hrAttendance:[], hrLeave:[], hrSourceMaps:[], hrIncentives:[], hrAppraisals:[], hrConfig:{},
-           hrRegularizations:[],
+           hrRegularizations:[], hrCompOff:[],
            /* What the firm has wired BOSS to, what each run of it did, and
               what has been pushed in through a connector's own door and is
               waiting to be mapped. The credentials are not here: they live
@@ -33655,6 +33655,7 @@ async function loadAll(){
   DB.hrAttendance = await sget('hrAttendance', []);
   DB.hrLeave = await sget('hrLeave', []);
   DB.hrRegularizations = await sget('hrRegularizations', []);
+  DB.hrCompOff = await sget('hrCompOff', []);
   DB.hrSourceMaps = await sget('hrSourceMaps', []);
   DB.hrIncentives = await sget('hrIncentives', []);
   DB.hrAppraisals = await sget('hrAppraisals', []);
@@ -35035,6 +35036,7 @@ async function boot(){
      their attendance as the server holds it — not from whatever this tab
      happened to load first. */
   hrActWire();
+  hrCompOffSweep().catch(e=>console.error('comp-off sweep', e));
   hrNudgeVerify().then(()=>hrNudgeTick());
   pushEnsure().catch(()=>{});
   await loadAccounts();
@@ -35112,7 +35114,7 @@ const LIVE_KEY_TO_DB = {
   aumMonthly:'aumMonthly', assetUploads:'assetUploads', reviewEdits:'reviewEdits', reviewReports:'reviewReports',
   exportHistory:'exportHistory',
   hrAttendance:'hrAttendance', hrLeave:'hrLeave', hrSourceMaps:'hrSourceMaps', hrRegularizations:'hrRegularizations',
-  hrIncentives:'hrIncentives', hrAppraisals:'hrAppraisals', hrConfig:'hrConfig',
+  hrCompOff:'hrCompOff', hrIncentives:'hrIncentives', hrAppraisals:'hrAppraisals', hrConfig:'hrConfig',
   automationExecutionLog:'automationExecutionLog', webhooks:'webhooks', workActivities:'workActivities',
   config:'config', settings:'settings', slaRules:'slaRules', automationRules:'automationRules',
 };
@@ -80078,6 +80080,20 @@ function hrConfigDefaults(){
     /* Leave balance tracking. Empty: the leave form says the balance
        is not tracked rather than showing a number nobody set. */
     leaveBalance: {enabled: false, perYear: {}},
+    /* ANNUAL LEAVE: PAID, UNPAID AND COMP-OFF.
+
+       Every request is filed under one of three categories. Paid comes
+       out of an annual entitlement (12 days a calendar year unless HR
+       says otherwise); Comp-Off comes out of what has been earned by
+       working a Sunday, weekly off or holiday, once that day is
+       approved; Unpaid comes out of nothing and is always open. Only
+       approved rows move a balance. The hours that earn a comp-off are
+       Punch In to Punch Out on that day; 9 hours or more earns a full
+       day and 4.5 or more half of one. compOffApprover is 'line' (the
+       same branch head / reporting manager / HR route as leave), 'hr'
+       (an HR administrator), or the id of one named person. */
+    annualLeave: {paidPerYear: 12, compOffEnabled: true, compOffFullHours: 9, compOffHalfHours: 4.5,
+      compOffApprover: 'line'},
     day: {
       start: '',            // e.g. '09:30' — what time the office starts
       end: '',              // e.g. '18:30'
@@ -80121,6 +80137,7 @@ function hrCfg(){
     reminders: Object.assign({}, d.reminders, c.reminders || {}),
     leaveBalance: Object.assign({}, d.leaveBalance, c.leaveBalance || {},
       {perYear: Object.assign({}, (c.leaveBalance || {}).perYear || {})}),
+    annualLeave: Object.assign({}, d.annualLeave, c.annualLeave || {}),
     weeklyOff: Array.isArray(c.weeklyOff) ? c.weeklyOff : d.weeklyOff,
     holidays: Array.isArray(c.holidays) ? c.holidays : d.holidays,
     leaveTypes: (Array.isArray(c.leaveTypes) ? c.leaveTypes : d.leaveTypes).map(hrLeaveTypeOf),
@@ -80449,8 +80466,11 @@ function hrClosedDayWhy(date){
 function hrPunchRules(rec, now){
   now = now || hrNow();
   const date = hrDateKey(now), at = hrHHMM(now), w = hrPunchWindow();
+  /* A Sunday or a holiday has no attendance of its own — but with comp-off
+     on, somebody who comes in anyway can punch, and the day is recorded
+     separately as an extra working day that may earn a comp-off. */
   const closed = hrClosedDayWhy(date);
-  if(closed) return {inOk:false, outOk:false, inWhy:closed, outWhy:closed};
+  if(closed && !hrAlCfg().compOffEnabled) return {inOk:false, outOk:false, inWhy:closed, outWhy:closed};
   /* An approved full-day leave shuts the punch clock for that date. A
      session already open when the leave was approved can still be closed,
      so nobody is left punched in all night by a decision made after they
@@ -80528,8 +80548,12 @@ function hrDayCredit(userId, date, rec){
   if(hrClosedDayWhy(date)) return {credit:0, leave:0, worked:0};
   const worked = Math.min(1, hrDayPct(userId, date, rec) / 100);
   const lv = hrLeaveOn(userId, date);
-  const leave = lv ? ((lv.unit || hrLeaveTypeUnit(lv.type)) === 'half' ? 0.5 : 1) : 0;
-  return {credit: Math.min(1, worked + leave), leave, worked};
+  const units = lv ? ((lv.unit || hrLeaveTypeUnit(lv.type)) === 'half' ? 0.5 : 1) : 0;
+  /* Approved Unpaid Leave is leave, but it is not a working day: it is
+     kept out of the credit, and reported on its own. */
+  const unpaid = lv && hrLeaveCategoryOf(lv) === 'Unpaid' ? units : 0;
+  const leave = units - unpaid;
+  return {credit: Math.min(1, worked + leave), leave, worked, unpaid};
 }
 function hrDatesBack(n, from){
   const out = [], d = new Date((from || hrToday()) + 'T00:00:00');
@@ -80541,14 +80565,14 @@ function hrDatesBack(n, from){
 function hrMonthDays(userId, month){
   const m = month || hrToday().slice(0, 7);
   const today = hrToday();
-  let days = 0, full = 0, leave = 0;
+  let days = 0, full = 0, leave = 0, unpaid = 0;
   const d = new Date(m + '-01T00:00:00');
   while(hrDateKey(d).slice(0, 7) === m && hrDateKey(d) <= today){
     const c = hrDayCredit(userId, hrDateKey(d));
-    days += c.credit; if(c.credit >= 1) full++; leave += c.leave;
+    days += c.credit; if(c.credit >= 1) full++; leave += c.leave; unpaid += c.unpaid || 0;
     d.setDate(d.getDate() + 1);
   }
-  return {days: Math.round(days * 100) / 100, full, leave, month: m};
+  return {days: Math.round(days * 100) / 100, full, leave, unpaid: Math.round(unpaid * 100) / 100, month: m};
 }
 function hrDaysText(n){ return (Math.round(n * 100) / 100) + ' day' + (n === 1 ? '' : 's'); }
 
@@ -80664,6 +80688,8 @@ async function hrPunchOut(){
   hrNudgeClear();
   if(!fix.ok) alert('Punched out.\n\nYour location was not recorded: ' + (fix.why || fix.status)
     + '\n\nThe punch stands and says so — nothing was guessed.');
+  // Worked a Sunday, a weekly off or a holiday: that is an extra day.
+  if(hrOffDayKind(date)) await hrCompOffSync(u.id, date);
   render();
 }
 
@@ -81302,9 +81328,11 @@ function viewHrDashboard(){
         <button class="btn sm" onclick="hrOpenLeaveRequest()">+ Leave Request</button>
       </div>
     </div>
+    ${hrLeaveBalanceCardHtml()}
     ${hrMonthBoardHtml()}
     ${hrRegInboxHtml()}
     ${hrLeaveInboxHtml()}
+    ${hrCompOffInboxHtml()}
     <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">\u{1F4B0} Incentive management</div>
       <div class="small-note" style="margin:0">${incOn
@@ -81354,6 +81382,7 @@ function viewHrAttendance(){
           <div class="pill-row" style="margin-top:4px">
             <span class="badge ${st.tone}">${esc(st.label)}</span>
             <span class="badge muted">${esc(fmtDate(today))}</span>
+            ${hrOffDayKind(today) && hrAlCfg().compOffEnabled ? `<span class="badge info" title="Hours worked today are recorded separately and can earn a comp-off once verified">${esc(hrOffDayKind(today))} \u2014 extra working day, counts towards Comp-Off</span>` : ''}
             ${late === null ? hrNotConfigured('Late rule')
               : late > 0 ? `<span class="badge warn">Late by ${late} min</span>`
               : `<span class="badge ok">On time</span>`}
@@ -81366,6 +81395,7 @@ function viewHrAttendance(){
         <div class="kpi"><div class="num" style="color:var(--ok)">${esc(String(month.days))}</div><div class="lbl">Days worked this month</div></div>
         <div class="kpi"><div class="num">${month.full}</div><div class="lbl">Full days (100%)</div></div>
         <div class="kpi"><div class="num">${esc(String(month.leave))}</div><div class="lbl">Approved leave days</div></div>
+        ${month.unpaid ? `<div class="kpi"><div class="num" style="color:var(--warn)">${esc(String(month.unpaid))}</div><div class="lbl">Unpaid leave days (not working days)</div></div>` : ''}
       </div>
       <div class="field-grid" style="--fg-gap:24px;gap:4px 24px;margin-top:12px">
         <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">First punch in:</span> <b>${hrClock(hrFirstIn(rec))}</b></div>
@@ -81382,6 +81412,8 @@ function viewHrAttendance(){
     ${hrRegInboxHtml()}
     ${hrLeaveCardHtml(u.id)}
     ${hrLeaveInboxHtml()}
+    ${hrCompOffMineHtml(u.id)}
+    ${hrCompOffInboxHtml()}
     ${hrIsStaff()? hrTeamAttendanceHtml() : ''}`;
 }
 
@@ -81427,8 +81459,11 @@ function hrRulesPanel(){
       `Once approved, the time is added to that day’s record; your original punches are kept beside it.`])}
     ${sec('🌴', 'Leave, Sundays and holidays', [
       `On a date with <b>approved full-day leave</b> (including Comp Off) Punch In and Punch Out are closed. A half-day leave leaves the punch clock open for the half you work.`,
-      `Approved leave counts towards your days: a full-day type as one day, a half-day type as half a day.`,
-      `There is no punch clock on <b>Sundays</b>${off ? ', on the weekly off (' + esc(off) + ')' : ''} or on the firm’s holidays, and no reminders are sent on those days.`,
+      `Approved Paid Leave and Comp-Off count towards your days: a full day as one day, a half day as half a day. <b>Approved Unpaid Leave does not</b> — it is not a working day.`,
+      `Every request is <b>Paid</b> (out of ${esc(hrAhNum(hrAlCfg().paidPerYear))} days a calendar year), <b>Comp-Off</b> (out of what you have earned) or <b>Unpaid</b> (always available). A balance moves only when the leave is approved, and only for working days.`,
+      hrAlCfg().compOffEnabled
+        ? `<b>Sundays</b>${off ? ', the weekly off (' + esc(off) + ')' : ''} and the firm’s holidays are not working days and no reminders are sent. If you work one, punch in and out as usual: the hours are recorded as an extra day, and once verified earn Comp-Off — a full day for ${esc(hrAlCfg().compOffFullHours)} h or more, half a day for ${esc(hrAlCfg().compOffHalfHours)} h or more.`
+        : `There is no punch clock on <b>Sundays</b>${off ? ', on the weekly off (' + esc(off) + ')' : ''} or on the firm’s holidays, and no reminders are sent on those days.`,
       holidays.length ? `Coming holidays: ${holidays.map(h=>esc(fmtDate(h.date)) + (h.name ? ' — ' + esc(h.name) : '')).join('; ')}.` : `No holidays are listed yet. HR adds them in HR Setup.`])}
   `, `<button class="btn primary" onclick="closeModal()">Close</button>`);
 }
@@ -81505,9 +81540,11 @@ function hrAhDay(userId, date){
   const day = {date, rec: r, bucket: '', units: 0, chip: st.label, tone: 'muted', remarks: '', reason: ''};
   if(lv){
     const half = (lv.unit || hrLeaveTypeUnit(lv.type)) === 'half';
-    day.bucket = 'leave'; day.units = half ? 0.5 : 1;
-    day.chip = lv.type || 'Leave'; day.tone = half ? 'warn' : 'info';
-    day.remarks = 'Approved leave' + (lv.reason ? ': ' + lv.reason : '');
+    const cat = hrLeaveCategoryOf(lv);
+    day.bucket = 'leave'; day.units = half ? 0.5 : 1; day.category = cat;
+    day.chip = (lv.type || 'Leave') + (cat === 'Paid' ? '' : ' (' + cat + ')'); day.tone = cat === 'Unpaid' ? 'danger' : half ? 'warn' : 'info';
+    day.remarks = 'Approved ' + HR_LEAVE_CATEGORY_LABEL[cat].toLowerCase() + (cat === 'Unpaid' ? ' (not a working day)' : '')
+      + (lv.reason ? ': ' + lv.reason : '');
   } else if(st.code === 'in' || st.code === 'present' || st.code === 'incomplete' || worked > 0){
     day.bucket = 'present'; day.units = 1;
     day.chip = st.code === 'in' ? 'Punched in' : st.code === 'incomplete' ? 'Incomplete' : 'Present';
@@ -81793,13 +81830,15 @@ function hrLeaveCardHtml(userId){
     <div class="between hr-fold-head"><div class="section-title" style="margin:0">\u{1F3D6} My leave</div>
       <div class="row" style="gap:8px;align-items:center">${mine? `<button class="btn sm primary" onclick="hrOpenLeaveRequest()">+ Leave Request</button>`:''}
       ${hrFoldBtn('leave')}</div></div>
+    ${hrLeaveBalanceStripHtml(userId)}
     ${rows.length? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr>
-        <th>From</th><th>To</th><th>Days</th><th>Type</th><th>Status</th><th>With</th>
+        <th>From</th><th>To</th><th>Days</th><th>Type</th><th>Category</th><th>Status</th><th>With</th>
         <th>Decided</th><th>Remarks</th>${mine ? '<th></th>' : ''}
       </tr></thead><tbody>
       ${rows.map(l=>`<tr data-leave="${esc(l.id)}">
         <td>${esc(fmtDate(l.from))}</td><td>${esc(fmtDate(l.to || l.from))}</td>
         <td>${hrDaysLabel(hrLeaveDays(l))}</td><td>${esc(l.type || '—')}</td>
+        <td>${esc(HR_LEAVE_CATEGORY_LABEL[hrLeaveCategoryOf(l)])}</td>
         <td><span class="badge ${l.status==='Approved'?'ok':(l.status==='Rejected'||l.status==='Declined')?'danger':/Cancelled/.test(l.status||'')?'muted':'warn'}"
           >${esc(l.status || 'Pending')}</span></td>
         <td>${esc(teamName(l.approverId) || '—')}${l.approverWhy
@@ -81825,12 +81864,13 @@ function hrLeaveInboxHtml(){
     <div class="between hr-fold-head"><div class="section-title" style="margin:0">\u{1F4E5} Leave requests waiting on you (${rows.length})</div>
       ${hrFoldBtn('leaveInbox')}</div>
     <div class="table-wrap"><table><thead><tr>
-      <th>Person</th><th>From</th><th>To</th><th>Days</th><th>Type</th><th>Reason</th><th>Asked</th><th></th>
+      <th>Person</th><th>From</th><th>To</th><th>Days</th><th>Type</th><th>Category</th><th>Reason</th><th>Asked</th><th></th>
     </tr></thead><tbody>
     ${rows.map(l=>`<tr>
       <td><b>${esc(teamName(l.userId) || l.userId)}</b></td>
       <td>${esc(fmtDate(l.from))}</td><td>${esc(fmtDate(l.to || l.from))}</td>
       <td>${hrDaysLabel(hrLeaveDays(l))}</td><td>${esc(l.type || '—')}</td>
+      <td>${esc(HR_LEAVE_CATEGORY_LABEL[hrLeaveCategoryOf(l)])}</td>
       <td>${esc(String(l.reason || '').slice(0, 80))}</td>
       <td>${esc(fmtDate(l.requestedAt || l.at))}</td>
       <td style="white-space:nowrap">
@@ -81910,14 +81950,18 @@ function hrMbClosed(date){
 /* One person's month: a code per date for the grid, and the totals. */
 function hrMbPerson(p, dates){
   const today = hrToday();
-  const row = {p, codes: [], present: 0, absent: 0, leave: 0, late: 0, mins: 0, credit: 0, pendingLeave: 0, pendingReg: 0, open: 0};
+  const row = {p, codes: [], present: 0, absent: 0, leave: 0, unpaid: 0, late: 0, mins: 0, credit: 0, pendingLeave: 0, pendingReg: 0, open: 0, extraMins: 0};
   dates.forEach(date=>{
     const closed = hrMbClosed(date);
     if(date > today){ row.codes.push({c: closed || '', t: closed ? hrMbClosedTitle(date, closed) : ''}); return; }
     if(closed){
       /* A Sunday or holiday somebody worked anyway is shown, not counted. */
       const r0 = hrAttendanceOf(p.id, date);
-      row.codes.push({c: closed, t: hrMbClosedTitle(date, closed) + (r0 && hrWorkedMinutes(r0) > 0 ? ' (worked ' + hrDuration(hrWorkedMinutes(r0)) + ')' : '')});
+      const w0 = r0 ? hrWorkedMinutes(r0) : 0;
+      const co = hrCompOffAll().find(c=>c && c.userId === p.id && c.date === date);
+      row.extraMins += w0;
+      row.codes.push({c: closed, t: hrMbClosedTitle(date, closed) + (w0 > 0 ? ' (worked ' + hrDuration(w0) + ' \u2014 extra day'
+        + (co ? ', comp-off ' + hrDaysLabel(co.credit || 0) + ' ' + String(co.status).toLowerCase() : '') + ')' : '')});
       return;
     }
     const d = hrAhDay(p.id, date);
@@ -81929,7 +81973,11 @@ function hrMbPerson(p, dates){
     if(hrAhLeaveOverlapping(p.id, date, ['Pending']).length) row.pendingLeave++;
     if(hrRegsOn(p.id, date).some(x=>x.status === 'Pending')) row.pendingReg++;
     let c = '·', t = d.chip;
-    if(d.bucket === 'leave'){ row.leave += d.units; c = d.units < 1 ? '½' : 'L'; }
+    if(d.bucket === 'leave'){
+      row.leave += d.units;
+      if(d.category === 'Unpaid'){ row.unpaid += d.units; c = 'U'; }
+      else c = d.units < 1 ? '½' : 'L';
+    }
     else if(d.bucket === 'present'){
       row.present++;
       if(d.chip === 'Punched in'){ c = 'IN'; row.open++; }
@@ -81942,6 +81990,7 @@ function hrMbPerson(p, dates){
     row.codes.push({c, t: fmtDate(date) + ' — ' + t});
   });
   row.leave = Math.round(row.leave * 100) / 100;
+  row.unpaid = Math.round(row.unpaid * 100) / 100;
   row.credit = Math.round(row.credit * 100) / 100;
   return row;
 }
@@ -81980,11 +82029,12 @@ function hrMbSet(k, v){
 function hrMbExport(){
   const D = hrMbData();
   const cols = ['Employee', 'Employee ID', 'Role', 'Branch', 'Working days in month', 'Working days so far', 'Present',
-    'Absent', 'Leave', 'Late days', 'Hours worked', 'Days worked this month', 'Attendance %'].concat(D.dates.map(d=>d.slice(8)));
+    'Absent', 'Leave', 'Unpaid leave', 'Late days', 'Hours worked', 'Extra-day hours (Sundays, weekly offs, holidays)', 'Days worked this month', 'Attendance %'].concat(D.dates.map(d=>d.slice(8)));
   const rows = D.rows.map(r=>{
     const o = {'Employee': r.p.name || '', 'Employee ID': r.p.id, 'Role': roleOf(r.p), 'Branch': r.p.branch || '',
       'Working days in month': D.working.length, 'Working days so far': D.elapsed.length, 'Present': r.present,
-      'Absent': r.absent, 'Leave': r.leave, 'Late days': r.late, 'Hours worked': Math.round(r.mins / 6) / 10,
+      'Absent': r.absent, 'Leave': r.leave, 'Unpaid leave': r.unpaid, 'Late days': r.late, 'Hours worked': Math.round(r.mins / 6) / 10,
+      'Extra-day hours (Sundays, weekly offs, holidays)': Math.round(r.extraMins / 6) / 10,
       'Days worked this month': r.credit, 'Attendance %': r.pct};
     D.dates.forEach((d, i)=>{ o[d.slice(8)] = r.codes[i].c === '·' ? '' : r.codes[i].c; });
     return o;
@@ -82026,7 +82076,7 @@ function hrMbToday(kind){
   openModal(esc(label) + ' — ' + esc(fmtDate(today)) + ' (' + rows.length + ')', body,
     `<button class="btn" onclick="closeModal()">Close</button>`, {wide:true});
 }
-const HR_MB_TONE = {P:'ok', IN:'ok', I:'warn', A:'danger', L:'info', '½':'info', S:'muted', H:'muted', W:'muted', '·':'muted', '':'muted'};
+const HR_MB_TONE = {P:'ok', IN:'ok', I:'warn', A:'danger', L:'info', U:'warn', '½':'info', S:'muted', H:'muted', W:'muted', '·':'muted', '':'muted'};
 function hrMonthBoardHtml(){
   if(!hrIsStaff()) return '';
   const D = hrMbData(), s = D.s, today = hrToday();
@@ -82047,7 +82097,8 @@ function hrMonthBoardHtml(){
       <td title="Same figure as Days worked this month on their own Attendance page: worked time over a full day, plus approved leave"><b>${hrAhNum(r.credit)}</b> <span class="small-note" style="margin:0">of ${D.elapsed.length}</span></td>
       <td><span class="badge ok">${r.present}</span></td>
       <td>${r.absent ? `<span class="badge danger">${r.absent}</span>` : '0'}</td>
-      <td>${r.leave ? `<span class="badge info">${hrAhNum(r.leave)}</span>` : '0'}</td>
+      <td>${r.leave ? `<span class="badge info">${hrAhNum(r.leave)}</span>` : '0'}${r.unpaid
+        ? `<div class="small-note" style="margin:0" title="Approved unpaid leave: not counted as working days">${hrAhNum(r.unpaid)} unpaid</div>` : ''}</td>
       <td>${r.late ? `<span class="badge warn">${r.late}</span>` : '0'}</td>
       <td>${hrDuration(r.mins)}</td>
       <td><div class="hmb-pct"><span style="width:${Math.min(100, r.pct)}%"></span></div><b>${r.pct}%</b></td>
@@ -82065,7 +82116,7 @@ function hrMonthBoardHtml(){
       || `<tr><td colspan="${D.dates.length + 6}" class="empty">Nobody matches.</td></tr>`}
     </tbody></table></div>
     <div class="hmb-legend small-note">${[['P', 'Present'], ['IN', 'Punched in now'], ['I', 'Incomplete / punch-out missing'], ['A', 'Absent'],
-      ['L', 'Leave'], ['½', 'Half-day leave'], ['S', 'Sunday'], ['H', 'Holiday'], ['W', 'Weekly off']]
+      ['L', 'Leave'], ['½', 'Half-day leave'], ['U', 'Unpaid leave'], ['S', 'Sunday'], ['H', 'Holiday'], ['W', 'Weekly off']]
       .map(([c, l])=>`<span><i class="hmb-c hmb-${HR_MB_TONE[c]}">${esc(c)}</i> ${esc(l)}</span>`).join('')}</div>`;
   return `<div class="card" id="hrMonthBoard" style="margin-top:14px">
     <div class="between" style="align-items:center;flex-wrap:wrap;gap:8px">
@@ -82303,6 +82354,7 @@ function hrOpenLeaveRequest(date){
     </div>
     <input type="hidden" id="f_hrReqLock" value="${esc(locked)}">
     ${locked ? `<div class="small-note" style="margin:-4px 0 8px">This request is for <b>${esc(fmtDate(locked))}</b> only, the day picked in the attendance history.</div>` : ''}
+    ${hrLeaveCategoryFieldHtml(u.id, day.slice(0, 4))}
     <div class="field"><label>Have you Delegate your Pending Task?${req}</label>
       <select id="f_hrReqDelegated" onchange="hrLeaveDelegateShow()"><option value="">Select…</option><option>Yes</option><option>No</option></select></div>
     <div id="hrReqDelegateBox" style="display:none">
@@ -82337,7 +82389,10 @@ const HR_LEAVE_DURATIONS = ['Full Day', 'Half Day (First Half)', 'Half Day (Seco
 function hrLeaveFormTypes(){
   const out = ['Sick Leave', 'Casual Leave'];
   hrCfg().leaveTypes.forEach(t=>{
-    if(t && t.name && !/^(full|half)\s*day$/i.test(t.name) && out.indexOf(t.name) < 0) out.push(t.name);
+    /* Comp-Off is a Leave Category now, with its own balance, so it is
+       not offered a second time as a type. */
+    if(t && t.name && !/^(full|half)\s*day$/i.test(t.name) && !/comp\s*-?\s*off/i.test(t.name)
+       && out.indexOf(t.name) < 0) out.push(t.name);
   });
   return out;
 }
@@ -82373,6 +82428,7 @@ function hrBalanceLine(userId, type){
     + ' (' + hrDaysLabel(b.used) + ' taken).';
 }
 function hrLeaveBalanceNote(){
+  hrLeaveCategoryRefresh();
   const el = document.getElementById('hrBalNote');
   const type = (document.getElementById('f_hrReqType') || {}).value || '';
   if(!el) return;
@@ -82380,8 +82436,13 @@ function hrLeaveBalanceNote(){
   const to = (document.getElementById('f_hrReqTo') || {}).value || from;
   const dur = (document.getElementById('f_hrReqDuration') || {}).value || '';
   const days = from ? hrLeaveDays({from, to, unit: /^Half/.test(dur) ? 'half' : 'full'}) : 0;
+  const cat = (document.getElementById('f_hrReqCategory') || {}).value || '';
+  const charge = from && cat && cat !== 'Unpaid'
+    ? hrLeaveChargeDays({from, to, unit: /^Half/.test(dur) ? 'half' : 'full'}) : null;
   el.textContent = hrBalanceLine(currentUser, type)
-    + (days ? '  \u00b7  asking for ' + hrDaysLabel(days) + '.' : '');
+    + (days ? '  \u00b7  asking for ' + hrDaysLabel(days) + '.' : '')
+    + (charge !== null && charge !== days ? '  ' + hrDaysLabel(charge) + ' of it is charged to '
+        + HR_LEAVE_CATEGORY_LABEL[cat] + ' (Sundays, weekly offs and holidays are not).' : '');
 }
 async function hrSubmitLeaveRequest(){
   const u = me(); if(!u) return;
@@ -82402,6 +82463,16 @@ async function hrSubmitLeaveRequest(){
   const half = /^Half/.test(duration);
   if(half && from !== to){ alert('A half day is for one date. Make the Start Date and End Date the same, or choose Full Day.'); return; }
   const session = half ? (/Second/.test(duration) ? 'Second Half' : 'First Half') : '';
+  const category = g('f_hrReqCategory');
+  if(HR_LEAVE_CATEGORIES.indexOf(category) < 0){ alert('Choose the Leave Category: Paid, Unpaid or Comp-Off.'); return; }
+  {
+    const probe = {userId: u.id, from, to, category, unit: half ? 'half' : 'full'};
+    if(category !== 'Unpaid' && !hrLeaveChargeDays(probe)){
+      alert('Every date you chose is a Sunday, a weekly off or a holiday, so there is nothing to charge to '
+        + HR_LEAVE_CATEGORY_LABEL[category] + '.'); return; }
+    const short = hrLeaveBalanceProblem(probe, false);
+    if(short){ alert(short + '\n\nChoose fewer days, or apply as Unpaid Leave.'); return; }
+  }
   const delegated = g('f_hrReqDelegated');
   if(!delegated){ alert('Answer "Have you Delegate your Pending Task?"'); return; }
   let handoverTo = '', delegateEmail = '', tasks = [];
@@ -82426,7 +82497,7 @@ async function hrSubmitLeaveRequest(){
   const now = new Date().toISOString();
   /* The unit is written onto the request, not looked up later: what
      this person asked for is what the firm's list said at the time. */
-  const row = {id: uid('HRL'), userId: u.id, from, to, type, unit: half ? 'half' : hrLeaveTypeUnit(type), reason,
+  const row = {id: uid('HRL'), userId: u.id, from, to, type, category, unit: half ? 'half' : hrLeaveTypeUnit(type), reason,
     status: 'Pending', approverId: approver.id, approverWhy: approver.why,
     requestedAt: now, requestedBy: u.id, at: now,
     duration, session, delegated, handoverTo, delegateEmail, delegatedTasks: tasks,
@@ -82443,10 +82514,12 @@ async function hrSubmitLeaveRequest(){
     {field:'Person', oldValue:'', newValue: u.name || u.id},
     {field:'Dates', oldValue:'', newValue: from + ' to ' + to + ' (' + hrDaysLabel(hrLeaveDays(row)) + ')'},
     {field:'Type', oldValue:'', newValue: type || '\u2014'},
+    {field:'Leave Category', oldValue:'', newValue: HR_LEAVE_CATEGORY_LABEL[category]
+      + (category === 'Unpaid' ? '' : ' \u2014 ' + hrDaysLabel(hrLeaveChargeDays(row)) + ' to be charged on approval')},
     {field:'With', oldValue:'', newValue: teamName(approver.id) + ' \u2014 ' + approver.why}]);
   await notifyUser(approver.id, {
     title: (u.name || 'A colleague') + ' has requested leave',
-    body: (type ? type + ' \u2014 ' : '') + fmtDate(from) + ' to ' + fmtDate(to)
+    body: HR_LEAVE_CATEGORY_LABEL[category] + ' \u00b7 ' + (type ? type + ' \u2014 ' : '') + fmtDate(from) + ' to ' + fmtDate(to)
       + ' (' + hrDaysLabel(hrLeaveDays(row)) + '). ' + reason.slice(0, 120),
     view: 'hrattendance', kind: 'hr-leave-request'});
   closeModal();
@@ -82590,6 +82663,11 @@ function hrOpenLeaveDecision(id, approving){
         <b>${esc(hrDaysLabel(hrLeaveDays(row)))}</b></div>
       <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Type:</span>
         <b>${esc(row.type || '\u2014')}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Leave Category:</span>
+        <b>${esc(HR_LEAVE_CATEGORY_LABEL[hrLeaveCategoryOf(row)])}</b>${hrLeaveCategoryOf(row) === 'Unpaid' ? ''
+          : ' \u00b7 ' + esc(hrDaysLabel(hrLeaveChargeDays(row))) + ' to charge'}</div>
+      <div style="padding:4px 0;font-size:13px;grid-column:1/-1"><span style="color:var(--muted)">Balance:</span>
+        ${esc(hrLeaveCategoryHelp(row.userId, String(row.from).slice(0, 4)))}</div>
       <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Requested:</span>
         <b>${esc(fmtDate(row.requestedAt || row.at))}</b></div>
     </div>
@@ -82639,14 +82717,30 @@ async function hrDecideLeave(id, approved){
     if(el && el.focus) try { el.focus(); } catch(e){}
     return;
   }
+  /* The balance is checked again at the moment of approval: something
+     else may have been approved since this was asked for. */
+  if(approved){
+    const short = hrLeaveBalanceProblem(row, true);
+    if(short){ alert('This cannot be approved as ' + HR_LEAVE_CATEGORY_LABEL[hrLeaveCategoryOf(row)] + '.\n\n' + short
+      + '\n\nDecline it with a reason, and they can apply again as Unpaid Leave.'); return; }
+  }
+  const cat = hrLeaveCategoryOf(row), yr = String(row.from).slice(0, 4);
+  const balBefore = hrLeaveBalances(row.userId, yr);
+  row.category = cat;
   row.status = approved ? 'Approved' : 'Declined';
   row.decidedBy = currentUser;
   row.decidedAt = new Date().toISOString();
   row.remarks = note;
+  if(approved) row.charged = cat === 'Unpaid' ? 0 : hrLeaveChargeDays(row);
   await save('hrLeave');
+  const balAfter = hrLeaveBalances(row.userId, yr);
+  const balKey = cat === 'Paid' ? 'paidLeft' : cat === 'Comp-Off' ? 'compLeft' : 'unpaid';
   await logAudit('HR', row.id, 'Leave ' + row.status, [
     {field:'Person', oldValue:'', newValue: teamName(row.userId) || row.userId},
     {field:'Dates', oldValue:'', newValue: row.from + ' to ' + (row.to || row.from)},
+    {field:'Leave Category', oldValue:'', newValue: HR_LEAVE_CATEGORY_LABEL[cat]},
+    {field: cat === 'Unpaid' ? 'Unpaid Leave taken (' + yr + ')' : HR_LEAVE_CATEGORY_LABEL[cat] + ' balance (' + yr + ')',
+      oldValue: hrAhNum(balBefore[balKey]), newValue: hrAhNum(balAfter[balKey])},
     {field:'Decided by', oldValue:'', newValue: teamName(currentUser) || currentUser},
     {field:'Reason', oldValue:'', newValue: row.remarks || '\u2014'}]);
   await notifyUser(row.userId, {
@@ -82679,7 +82773,7 @@ async function hrMailLeaveDecision(row){
     Name: who.name || '',
     Dates: fmtDate(row.from) + ' to ' + fmtDate(row.to || row.from),
     Days: hrDaysLabel(hrLeaveDays(row)),
-    Type: row.type || '\u2014',
+    Type: (row.type || '\u2014') + ' (' + HR_LEAVE_CATEGORY_LABEL[hrLeaveCategoryOf(row)] + ')',
     Approver: teamName(row.decidedBy) || '',
     Status: row.status,
     Remarks: row.remarks ? (row.status === 'Approved' ? 'Remarks: ' : 'Reason: ') + row.remarks + '\n' : '',
@@ -82697,6 +82791,495 @@ async function hrMailLeaveDecision(row){
       {field:'Reason', oldValue:'', newValue: row.remarks || '\u2014'}],
   });
   return {problem: mailResultNote(result, 'The leave decision')};
+}
+
+/* =====================================================================
+   ANNUAL LEAVE: PAID, UNPAID AND COMP-OFF
+
+   Three categories, three separate ledgers, one calendar year at a time.
+
+   PAID     the HR entitlement (12 a year unless set otherwise) less the
+            approved paid leave taken that year.
+   COMP-OFF earned by working a Sunday, a weekly off or a company holiday:
+            the day's Punch In to Punch Out, once the approver has
+            verified it, credits 1 day (9 h or more) or ½ (4.5 h or more).
+            Less the approved comp-off leave taken that year.
+   UNPAID   always open, never touches the other two, and earns no
+            working-day credit on the attendance screens.
+
+   Only Approved rows move a balance: a pending request is held against
+   what is left so two requests cannot spend the same day, but nothing is
+   deducted until it is approved. A leave is charged for its working
+   dates only — the Sundays, weekly offs and holidays inside a span are
+   not leave days, exactly as the attendance screens already read them.
+   Requests from before categories existed read as Paid (or Comp-Off,
+   where the type said so).
+   ===================================================================== */
+const HR_LEAVE_CATEGORIES = ['Paid', 'Unpaid', 'Comp-Off'];
+const HR_LEAVE_CATEGORY_LABEL = {'Paid': 'Paid Leave', 'Unpaid': 'Unpaid Leave', 'Comp-Off': 'Comp-Off'};
+function hrR2(n){ return Math.round((Number(n) || 0) * 100) / 100; }
+function hrAlCfg(){
+  const a = hrCfg().annualLeave || {};
+  const num = (v, dflt) => { const n = Number(v); return (v === '' || v === null || v === undefined || !isFinite(n) || n < 0) ? dflt : n; };
+  const full = num(a.compOffFullHours, 9), half = num(a.compOffHalfHours, 4.5);
+  return {paidPerYear: num(a.paidPerYear, 12), compOffEnabled: a.compOffEnabled !== false,
+    compOffFullHours: full, compOffHalfHours: Math.min(half, full), compOffApprover: a.compOffApprover || 'line'};
+}
+function hrLeaveCategoryOf(l){
+  if(l && HR_LEAVE_CATEGORIES.indexOf(l.category) >= 0) return l.category;
+  return l && /comp\s*-?\s*off/i.test(l.type || '') ? 'Comp-Off' : 'Paid';
+}
+/* A Sunday, a weekly off or a holiday: not a working day, so not a leave
+   day either, and a day that can earn a comp-off when it is worked. */
+function hrOffDayKind(date){
+  const h = hrHolidayOn(date);
+  if(h) return 'Holiday' + (h.name ? ' — ' + h.name : '');
+  if(hrIsSunday(date)) return 'Sunday';
+  if(hrIsWeeklyOff(date)) return 'Weekly off';
+  return '';
+}
+/* What a request charges against its balance, optionally for one year. */
+function hrLeaveChargeDays(l, year){
+  if(!l || !l.from) return 0;
+  const unit = l.unit || hrLeaveTypeUnit(l.type);
+  return hrR2(hrLeaveDatesOf(l).filter(d=>(!year || d.slice(0, 4) === String(year)) && !hrOffDayKind(d)).length
+    * (unit === 'half' ? 0.5 : 1));
+}
+function hrCompOffAll(){ return Array.isArray(DB.hrCompOff) ? DB.hrCompOff : []; }
+function hrCompOffOf(userId){
+  return hrCompOffAll().filter(c=>c && c.userId === userId)
+    .slice().sort((a, b)=>String(b.date).localeCompare(String(a.date)));
+}
+/* Hours worked to comp-off earned, by the thresholds HR set. */
+function hrCompOffCreditFor(minutes){
+  const a = hrAlCfg();
+  if(minutes >= a.compOffFullHours * 60) return 1;
+  if(a.compOffHalfHours > 0 && minutes >= a.compOffHalfHours * 60) return 0.5;
+  return 0;
+}
+/* Every figure for one person and one calendar year. exceptId leaves one
+   request out, so a request being approved is not held against itself. */
+function hrLeaveBalances(userId, year, exceptId){
+  year = String(year || hrToday().slice(0, 4));
+  const rows = (DB.hrLeave || []).filter(l=>l && l.userId === userId && l.id !== exceptId);
+  const sum = (cat, st) => hrR2(rows.filter(l=>hrLeaveCategoryOf(l) === cat && l.status === st)
+    .reduce((n, l)=>n + hrLeaveChargeDays(l, year), 0));
+  const credits = hrCompOffAll().filter(c=>c && c.userId === userId && String(c.date || '').slice(0, 4) === year);
+  const earned = hrR2(credits.filter(c=>c.status === 'Approved').reduce((n, c)=>n + (Number(c.credit) || 0), 0));
+  const creditPending = hrR2(credits.filter(c=>c.status === 'Pending').reduce((n, c)=>n + (Number(c.credit) || 0), 0));
+  const entitled = hrAlCfg().paidPerYear;
+  const b = {year, entitled,
+    paidUsed: sum('Paid', 'Approved'), paidPending: sum('Paid', 'Pending'),
+    compEarned: earned, compCreditPending: creditPending,
+    compUsed: sum('Comp-Off', 'Approved'), compPending: sum('Comp-Off', 'Pending'),
+    unpaid: sum('Unpaid', 'Approved'), unpaidPending: sum('Unpaid', 'Pending')};
+  b.paidLeft = hrR2(entitled - b.paidUsed);
+  b.compLeft = hrR2(earned - b.compUsed);
+  /* What a new request may still ask for: what is left, less what is
+     already asked for and waiting. */
+  b.paidFree = hrR2(b.paidLeft - b.paidPending);
+  b.compFree = hrR2(b.compLeft - b.compPending);
+  return b;
+}
+function hrLeaveYearsOf(l){
+  return [...new Set(hrLeaveDatesOf(l).map(d=>d.slice(0, 4)))];
+}
+/* Why this request cannot be met from its balance, or ''. approving:
+   held against the approved figure only (the request itself is one of the
+   pending ones). */
+function hrLeaveBalanceProblem(l, approving){
+  const cat = hrLeaveCategoryOf(l);
+  if(cat === 'Unpaid') return '';
+  for(const y of hrLeaveYearsOf(l)){
+    const need = hrLeaveChargeDays(l, y);
+    if(!need) continue;
+    const b = hrLeaveBalances(l.userId, y, l.id);
+    const have = cat === 'Paid' ? (approving ? b.paidLeft : b.paidFree) : (approving ? b.compLeft : b.compFree);
+    if(need > have + 1e-9)
+      return (cat === 'Paid' ? 'Paid Leave' : 'Comp-Off') + ' for ' + y + ': this needs ' + hrDaysLabel(need)
+        + ' and you have ' + hrDaysLabel(Math.max(0, have)) + ' ' + (approving ? 'left' : 'free')
+        + (approving ? '' : (cat === 'Paid' ? (b.paidPending ? ' (' + hrDaysLabel(b.paidPending) + ' is already requested and waiting)' : '')
+            : (b.compPending ? ' (' + hrDaysLabel(b.compPending) + ' is already requested and waiting)' : '')))
+        + '.';
+  }
+  return '';
+}
+/* The categories this person may choose for a request in this year. */
+function hrLeaveCategoriesFor(userId, year){
+  const b = hrLeaveBalances(userId, year);
+  const out = [];
+  if(b.paidFree > 0) out.push('Paid');
+  out.push('Unpaid');
+  if(b.compFree > 0) out.push('Comp-Off');
+  return out;
+}
+function hrLeaveCategoryHelp(userId, year){
+  const b = hrLeaveBalances(userId, year);
+  return 'Paid Leave: ' + hrAhNum(b.paidLeft) + ' of ' + hrAhNum(b.entitled) + ' left in ' + b.year
+    + (b.paidPending ? ' (' + hrAhNum(b.paidPending) + ' waiting for approval)' : '')
+    + ' · Comp-Off: ' + hrAhNum(b.compLeft) + ' left'
+    + (b.compPending ? ' (' + hrAhNum(b.compPending) + ' waiting)' : '')
+    + ' · Unpaid Leave: always available.';
+}
+/* The form's category list follows the dates: a request in next year
+   draws on next year's balance. The chosen value is kept where it is
+   still offered. */
+function hrLeaveCategoryRefresh(){
+  const sel = document.getElementById('f_hrReqCategory');
+  if(!sel) return;
+  const from = (document.getElementById('f_hrReqFrom') || {}).value || hrToday();
+  const year = from.slice(0, 4);
+  const cats = hrLeaveCategoriesFor(currentUser, year);
+  const was = sel.value;
+  sel.innerHTML = '<option value="">Select…</option>' + cats.map(c=>`<option value="${esc(c)}">${esc(HR_LEAVE_CATEGORY_LABEL[c])}</option>`).join('');
+  sel.value = cats.indexOf(was) >= 0 ? was : (cats.indexOf('Paid') >= 0 && !was ? 'Paid' : '');
+  /* The dropdown is painted into a search box when the form opens; the
+     box keeps its own copy of the rows, so it is told what changed. */
+  if(window._pickRows && sel.dataset.picked){
+    window._pickRows[sel.id] = cats.map(c=>({value: c, label: HR_LEAVE_CATEGORY_LABEL[c], note: ''}));
+    sel.dataset.pickWas = sel.value;
+    const box = document.getElementById('pickbox_' + sel.id);
+    if(box && box !== document.activeElement){
+      box.value = sel.value ? HR_LEAVE_CATEGORY_LABEL[sel.value] : '';
+      box.placeholder = 'Search';
+    }
+  }
+  const note = document.getElementById('hrCatNote');
+  if(note) note.textContent = hrLeaveCategoryHelp(currentUser, year);
+}
+function hrLeaveCategoryFieldHtml(userId, year){
+  return `<div class="field" id="hrCatField"><label>Leave Category (Paid / Unpaid / Comp-Off)<span class="req">*</span></label>
+      <select id="f_hrReqCategory" onchange="hrLeaveBalanceNote()"><option value="">Select…</option>${(()=>{
+        const cats = hrLeaveCategoriesFor(userId, year);
+        return cats.map(c=>`<option value="${esc(c)}"${c === (cats.indexOf('Paid') >= 0 ? 'Paid' : '') ? ' selected' : ''}>${esc(HR_LEAVE_CATEGORY_LABEL[c])}</option>`).join('');
+      })()}</select>
+      <div class="small-note" id="hrCatNote" style="margin-top:4px">${esc(hrLeaveCategoryHelp(userId, year))}</div></div>`;
+}
+/* The line under a person's own leave card: where each balance stands. */
+function hrLeaveBalanceStripHtml(userId){
+  const b = hrLeaveBalances(userId);
+  const tile = (num, lbl, tone) => `<div class="kpi"><div class="num"${tone ? ` style="color:var(--${tone})"` : ''}>${esc(hrAhNum(num))}</div><div class="lbl">${lbl}</div></div>`;
+  return `<div class="grid-kpi" id="hrBalStrip" style="margin:10px 0 0">
+    ${tile(b.paidLeft, 'Paid Leave left of ' + hrAhNum(b.entitled) + ' (' + b.year + ')', 'ok')}
+    ${tile(b.paidUsed, 'Paid Leave used')}
+    ${tile(b.compLeft, 'Comp-Off left', 'info')}
+    ${tile(b.compEarned, 'Comp-Off earned')}
+    ${tile(b.unpaid, 'Unpaid Leave taken', b.unpaid ? 'warn' : '')}
+  </div>`;
+}
+
+/* ---------- comp-off: the extra day, recorded and verified ---------- */
+
+function hrCompOffApproverFor(userId){
+  const a = hrAlCfg();
+  const live = (DB.team || []).filter(t=>t && isMemberActive(t) && t.id !== userId && hrCanAnswerLeave(t));
+  if(a.compOffApprover === 'hr'){
+    const hr = live.find(t=>hrIsAdmin(t));
+    if(hr) return {id: hr.id, why: 'HR'};
+  } else if(a.compOffApprover && a.compOffApprover !== 'line'){
+    const named = live.find(t=>t.id === a.compOffApprover);
+    if(named) return {id: named.id, why: 'comp-off approver'};
+  }
+  return hrApproverFor(userId);
+}
+/* One eligibility record per person per extra day, made (or brought up to
+   date while it is still waiting) from the day's punches. A day already
+   decided is never touched again, and a second record for the same day is
+   never made — the server refuses one too. */
+async function hrCompOffSync(userId, date, quiet){
+  if(!hrAlCfg().compOffEnabled) return null;
+  const kind = hrOffDayKind(date);
+  if(!kind) return null;
+  const rec = hrAttendanceOf(userId, date);
+  if(!rec || hrOpenSession(rec)) return null;
+  const minutes = Math.round(hrWorkedMinutes(rec));
+  const credit = hrCompOffCreditFor(minutes);
+  const have = hrCompOffAll().find(c=>c && c.userId === userId && c.date === date);
+  const now = new Date().toISOString();
+  if(have){
+    if(have.status !== 'Pending' || (have.minutes === minutes && have.credit === credit)) return have;
+    const next = Object.assign({}, have, {minutes, hours: hrR2(minutes / 60), credit, updatedAt: now,
+      history: (have.history || []).concat([{at: now, by: currentUser, what: 'Hours updated from the punches',
+        from: hrDuration(have.minutes || 0), to: hrDuration(minutes)}])});
+    if(!credit){
+      next.status = 'Not Eligible';
+      next.history.push({at: now, by: currentUser, what: 'Below the half-day threshold'});
+    }
+    DB.hrCompOff = hrCompOffAll().map(c=>c.id === have.id ? next : c);
+    await save('hrCompOff');
+    return next;
+  }
+  if(!credit) return null;
+  const approver = hrCompOffApproverFor(userId);
+  const row = {id: uid('HRC'), userId, date, kind, minutes, hours: hrR2(minutes / 60), credit,
+    status: 'Pending', approverId: approver ? approver.id : '', approverWhy: approver ? approver.why : '',
+    attendanceId: rec.id, createdAt: now, createdBy: currentUser,
+    history: [{at: now, by: currentUser, what: 'Eligibility recorded', to: hrDuration(minutes) + ' worked → ' + hrDaysLabel(credit)}]};
+  const before = hrCompOffAll();
+  DB.hrCompOff = before.concat([row]);
+  if(await save('hrCompOff') === false){ DB.hrCompOff = before; return null; }
+  await logAudit('HR', row.id, 'Comp-Off Eligibility Recorded', [
+    {field:'Person', oldValue:'', newValue: teamName(userId) || userId},
+    {field:'Day', oldValue:'', newValue: date + ' (' + kind + ')'},
+    {field:'Worked', oldValue:'', newValue: hrDuration(minutes)},
+    {field:'Comp-Off', oldValue:'', newValue: hrDaysLabel(credit)},
+    {field:'With', oldValue:'', newValue: approver ? teamName(approver.id) + ' — ' + approver.why : 'nobody on file'}]);
+  if(approver) await notifyUser(approver.id, {
+    title: (teamName(userId) || 'A colleague') + ' worked on ' + kind.split(' — ')[0].toLowerCase(),
+    body: fmtDate(date) + ': ' + hrDuration(minutes) + ' worked, ' + hrDaysLabel(credit) + ' comp-off to verify.',
+    view: 'hrattendance', kind: 'hr-compoff-request'});
+  if(!quiet && userId === currentUser)
+    alert('You worked ' + hrDuration(minutes) + ' on a ' + kind.split(' — ')[0].toLowerCase() + '.\n\n'
+      + hrDaysLabel(credit) + ' of Comp-Off is waiting for ' + (approver ? teamName(approver.id) : 'an approver')
+      + ' to verify. It is credited once they approve it.');
+  return row;
+}
+/* The person's own extra days that have no record yet — a punch out made
+   before this existed, or a tab closed before the record was written. */
+async function hrCompOffSweep(){
+  if(!hrAlCfg().compOffEnabled || !currentUser) return;
+  const since = hrDatesBack(62)[61];
+  const days = hrAttendanceFor(currentUser).filter(r=>r.date >= since && r.date < hrToday() && hrOffDayKind(r.date));
+  for(const r of days){
+    const have = hrCompOffAll().find(c=>c && c.userId === currentUser && c.date === r.date);
+    if(!have || have.status === 'Pending') await hrCompOffSync(currentUser, r.date, true);
+  }
+}
+function hrMayDecideCompOff(row){
+  if(!row || row.status !== 'Pending') return false;
+  if(row.userId === currentUser && !hrIsAdmin()) return false;
+  return hrIsAdmin() || row.approverId === currentUser;
+}
+function hrCompOffPendingForMe(){
+  return hrCompOffAll().filter(c=>hrMayDecideCompOff(c)).slice().sort((a, b)=>String(a.date).localeCompare(String(b.date)));
+}
+function hrOpenCompOffDecision(id, approving){
+  const row = hrCompOffAll().find(c=>c && c.id === id);
+  if(!hrMayDecideCompOff(row)){ alert('That comp-off is not yours to decide.'); return; }
+  const yes = approving !== false;
+  const rec = hrAttendanceOf(row.userId, row.date);
+  openModal((yes ? 'Approve comp-off ' : 'Reject comp-off ') + '— ' + esc(teamName(row.userId) || row.userId), `
+    <div class="field-grid" style="--fg-gap:24px;gap:4px 24px">
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Day:</span> <b>${esc(fmtDate(row.date))}</b> · ${esc(row.kind || '')}</div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Punch In → Out:</span>
+        <b>${esc(hrClock(hrFirstIn(rec)))} → ${esc(hrClock(hrLastOut(rec)))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Worked:</span> <b>${esc(hrDuration(row.minutes || 0))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Comp-Off:</span> <b>${esc(hrDaysLabel(row.credit))}</b></div>
+    </div>
+    <div class="small-note">${esc(hrAlCfg().compOffFullHours)} h or more earns a full day; ${esc(hrAlCfg().compOffHalfHours)} h or more, half a day.</div>
+    <div class="field"><label>${yes ? 'Remarks (optional)' : 'Reason for rejecting'}${yes ? '' : '<span class="req">*</span>'}</label>
+      <textarea id="f_hrCoNote"></textarea></div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     ${yes ? `<button class="btn" style="background:var(--ok);border-color:var(--ok);color:#fff" onclick="hrDecideCompOff('${esc(id)}', true)">Approve and credit</button>`
+           : `<button class="btn" style="background:var(--danger);border-color:var(--danger);color:#fff" onclick="hrDecideCompOff('${esc(id)}', false)">Reject</button>`}`);
+}
+async function hrDecideCompOff(id, approved, noteArg){
+  const row = hrCompOffAll().find(c=>c && c.id === id);
+  if(!hrMayDecideCompOff(row)){ alert('That comp-off is not yours to decide.'); return; }
+  const note = (noteArg !== undefined ? String(noteArg) : ((document.getElementById('f_hrCoNote') || {}).value || '')).trim();
+  if(!approved && !note){ alert('A rejected comp-off needs a reason.'); return; }
+  const now = new Date().toISOString();
+  const before = hrCompOffAll().slice();
+  const next = Object.assign({}, row, {status: approved ? 'Approved' : 'Rejected', decidedBy: currentUser, decidedAt: now,
+    remarks: note, creditedAt: approved ? now : undefined,
+    history: (row.history || []).concat([{at: now, by: currentUser, what: approved ? 'Approved — credited' : 'Rejected',
+      to: approved ? '+' + hrDaysLabel(row.credit) : note}])});
+  DB.hrCompOff = before.map(c=>c.id === id ? next : c);
+  if(await save('hrCompOff') === false){ DB.hrCompOff = before; return; }
+  const b = hrLeaveBalances(row.userId, String(row.date).slice(0, 4));
+  await logAudit('HR', row.id, approved ? 'Comp-Off Approved and Credited' : 'Comp-Off Rejected', [
+    {field:'Person', oldValue:'', newValue: teamName(row.userId) || row.userId},
+    {field:'Day', oldValue:'', newValue: row.date + ' (' + (row.kind || '') + ')'},
+    {field:'Worked', oldValue:'', newValue: hrDuration(row.minutes || 0)},
+    {field:'Comp-Off', oldValue:'', newValue: approved ? '+' + hrDaysLabel(row.credit) : 'none'},
+    {field:'Comp-Off balance', oldValue: approved ? hrAhNum(b.compLeft - row.credit) : '', newValue: hrAhNum(b.compLeft)},
+    {field:'Remarks', oldValue:'', newValue: note || '—'}]);
+  await notifyUser(row.userId, {
+    title: 'Your comp-off for ' + fmtDate(row.date) + ' was ' + (approved ? 'approved' : 'rejected'),
+    body: approved ? hrDaysLabel(row.credit) + ' credited. Comp-Off left: ' + hrDaysLabel(b.compLeft) + '.' : note.slice(0, 160),
+    view: 'hrattendance', kind: 'hr-compoff-decided'});
+  closeModal();
+  render();
+}
+function hrCompOffInboxHtml(){
+  const rows = hrCompOffPendingForMe();
+  if(!rows.length) return '';
+  return `<div class="card" id="hrCompOffInbox" style="margin-top:14px;border-left:3px solid var(--info)">
+    <div class="section-title" style="margin-top:0">\u{1F504} Comp-Off to verify (${rows.length})</div>
+    <div class="table-wrap"><table><thead><tr><th>Person</th><th>Day</th><th>Worked</th><th>Comp-Off</th><th></th></tr></thead><tbody>
+    ${rows.map(c=>`<tr data-compoff="${esc(c.id)}"><td><b>${esc(teamName(c.userId) || c.userId)}</b></td>
+      <td>${esc(fmtDate(c.date))}<div class="small-note" style="margin:0">${esc(c.kind || '')}</div></td>
+      <td>${esc(hrDuration(c.minutes || 0))}</td><td><b>${esc(hrDaysLabel(c.credit))}</b></td>
+      <td style="white-space:nowrap">
+        <button class="btn sm" style="background:var(--ok);border-color:var(--ok);color:#fff" onclick="hrOpenCompOffDecision('${esc(c.id)}', true)">Approve</button>
+        <button class="btn sm" style="background:var(--danger);border-color:var(--danger);color:#fff" onclick="hrOpenCompOffDecision('${esc(c.id)}', false)">Reject</button></td></tr>`).join('')}
+    </tbody></table></div></div>`;
+}
+function hrCompOffMineHtml(userId){
+  const rows = hrCompOffOf(userId);
+  if(!rows.length && !hrAlCfg().compOffEnabled) return '';
+  const a = hrAlCfg();
+  return `<div class="card" id="hrMyCompOff" style="margin-top:14px">
+    <div class="section-title" style="margin-top:0">\u{1F504} My Comp-Off</div>
+    <div class="small-note" style="margin:0 0 8px">Working on a Sunday, a weekly off or a company holiday earns comp-off from
+      your Punch In to Punch Out that day: ${esc(a.compOffFullHours)} h or more is a full day, ${esc(a.compOffHalfHours)} h or more
+      half a day. It is credited once it is verified.</div>
+    ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Day</th><th>Worked</th><th>Comp-Off</th><th>Status</th><th>With</th><th>Remarks</th></tr></thead><tbody>
+      ${rows.map(c=>`<tr data-compoff="${esc(c.id)}"><td>${esc(fmtDate(c.date))}<div class="small-note" style="margin:0">${esc(c.kind || '')}</div></td>
+        <td>${esc(hrDuration(c.minutes || 0))}</td><td>${esc(hrDaysLabel(c.credit || 0))}</td>
+        <td><span class="badge ${c.status === 'Approved' ? 'ok' : c.status === 'Pending' ? 'warn' : c.status === 'Rejected' ? 'danger' : 'muted'}">${esc(c.status)}</span></td>
+        <td>${esc(teamName(c.decidedBy || c.approverId) || '—')}</td><td>${esc(c.remarks || '—')}</td></tr>`).join('')}
+      </tbody></table></div>` : `<div class="empty" style="padding:12px">No extra working days yet.</div>`}
+  </div>`;
+}
+
+/* ---------- HR: the Remaining Leave Balance report ---------- */
+
+function hrLbState(){
+  return window._hlb || (window._hlb = {q: '', dept: '', year: hrToday().slice(0, 4), cat: ''});
+}
+function hrLbDept(u){ return userDepartmentNames(u).join(', ') || u.department || ''; }
+function hrLbRows(){
+  const s = hrLbState();
+  const q = String(s.q || '').trim().toLowerCase();
+  return (DB.team || []).filter(t=>t && isMemberActive(t))
+    .filter(t=>!q || [t.name, t.employeeId, t.id].some(v=>String(v || '').toLowerCase().indexOf(q) >= 0))
+    .filter(t=>!s.dept || hrLbDept(t).split(', ').indexOf(s.dept) >= 0)
+    .map(t=>({t, b: hrLeaveBalances(t.id, s.year)}))
+    .filter(r=>!s.cat || (s.cat === 'Paid' ? r.b.paidUsed > 0 || r.b.paidPending > 0
+      : s.cat === 'Comp-Off' ? r.b.compEarned > 0 || r.b.compUsed > 0 || r.b.compCreditPending > 0
+      : r.b.unpaid > 0 || r.b.unpaidPending > 0))
+    .sort((a, b)=>String(a.t.name || '').localeCompare(String(b.t.name || '')));
+}
+const HR_LB_COLS = [
+  {k:'entitled', l:'Annual Paid Leave', cat:'Paid'}, {k:'paidUsed', l:'Paid Leave Used', cat:'Paid'},
+  {k:'paidLeft', l:'Remaining Paid Leave', cat:'Paid'}, {k:'compEarned', l:'Total Comp-Off Earned', cat:'Comp-Off'},
+  {k:'compUsed', l:'Comp-Off Used', cat:'Comp-Off'}, {k:'compLeft', l:'Remaining Comp-Off', cat:'Comp-Off'},
+  {k:'unpaid', l:'Total Unpaid Leave Taken', cat:'Unpaid'}];
+function hrLbTableHtml(){
+  const s = hrLbState();
+  const cols = HR_LB_COLS.filter(c=>!s.cat || c.cat === s.cat);
+  const rows = hrLbRows();
+  const tot = {}; cols.forEach(c=>{ tot[c.k] = hrR2(rows.reduce((n, r)=>n + r.b[c.k], 0)); });
+  return `<div class="grid-kpi" style="margin:0 0 10px">
+      <div class="kpi"><div class="num">${rows.length}</div><div class="lbl">Employees</div></div>
+      ${cols.map(c=>`<div class="kpi"><div class="num">${esc(hrAhNum(tot[c.k]))}</div><div class="lbl">${esc(c.l)}</div></div>`).join('')}
+    </div>
+    <div class="table-wrap"><table id="hrLbTable"><thead><tr><th>Employee Name</th><th>Employee ID</th><th>Department</th>
+      ${cols.map(c=>`<th style="text-align:right">${esc(c.l)}</th>`).join('')}<th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr class="row-clickable" data-lb="${esc(r.t.id)}" onclick="hrOpenLeaveLedger('${esc(r.t.id)}')">
+      <td><b>${esc(r.t.name || r.t.id)}</b></td><td>${esc(r.t.employeeId || r.t.id)}</td><td>${esc(hrLbDept(r.t) || '—')}</td>
+      ${cols.map(c=>`<td style="text-align:right" data-k="${c.k}">${c.k === 'paidLeft' || c.k === 'compLeft'
+        ? `<b style="color:var(--${r.b[c.k] > 0 ? 'ok' : 'muted'})">${esc(hrAhNum(r.b[c.k]))}</b>` : esc(hrAhNum(r.b[c.k]))}</td>`).join('')}
+      <td><button class="btn ghost sm" onclick="event.stopPropagation();hrOpenLeaveLedger('${esc(r.t.id)}')">History</button></td></tr>`).join('')
+      || `<tr><td colspan="${cols.length + 4}" class="empty">Nobody matches.</td></tr>`}
+    </tbody></table></div>`;
+}
+function hrLbSet(k, v){
+  hrLbState()[k] = v;
+  const box = document.getElementById('hrLbBody');
+  if(box) box.innerHTML = hrLbTableHtml();
+}
+function hrOpenLeaveBalances(){
+  if(!hrIsStaff()){ alert('Leave balances are for HR and administrators.'); return; }
+  const s = hrLbState();
+  const depts = [...new Set((DB.team || []).filter(t=>t && isMemberActive(t))
+    .reduce((all, t)=>all.concat(hrLbDept(t).split(', ')), []).filter(Boolean))].sort();
+  const thisYear = Number(hrToday().slice(0, 4));
+  const years = [...new Set([thisYear + 1, thisYear, thisYear - 1, thisYear - 2].map(String)
+    .concat((DB.hrLeave || []).map(l=>String((l && l.from) || '').slice(0, 4)))
+    .concat(hrCompOffAll().map(c=>String((c && c.date) || '').slice(0, 4))))].filter(y=>/^\d{4}$/.test(y)).sort().reverse();
+  openModal('Remaining Leave Balance', `
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <input type="text" id="hrLbQ" placeholder="Employee name or ID" value="${esc(s.q)}" oninput="hrLbSet('q', this.value)" style="max-width:220px">
+      <select id="hrLbDept" onchange="hrLbSet('dept', this.value)" style="max-width:200px"><option value="">All departments</option>${
+        depts.map(d=>`<option ${d === s.dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
+      <select id="hrLbYear" onchange="hrLbSet('year', this.value)" style="max-width:120px">${
+        years.map(y=>`<option ${y === s.year ? 'selected' : ''}>${esc(y)}</option>`).join('')}</select>
+      <select id="hrLbCat" onchange="hrLbSet('cat', this.value)" style="max-width:200px"><option value="">All leave categories</option>${
+        HR_LEAVE_CATEGORIES.map(c=>`<option value="${esc(c)}" ${c === s.cat ? 'selected' : ''}>${esc(HR_LEAVE_CATEGORY_LABEL[c])}</option>`).join('')}</select>
+    </div>
+    <div class="small-note" style="margin:0 0 10px">Calendar year ${esc(s.year)}. Only approved leave and approved comp-off move a balance;
+      a leave is charged for its working days. Choosing a leave category shows its columns and the people who have used it. Click a row for that person’s history.</div>
+    <div id="hrLbBody">${hrLbTableHtml()}</div>`,
+    `<button class="btn" onclick="hrLbExport()">Export</button><button class="btn" onclick="closeModal()">Close</button>`, {wide: true});
+}
+function hrLbExport(){
+  const s = hrLbState();
+  const cols = HR_LB_COLS.filter(c=>!s.cat || c.cat === s.cat);
+  const rows = hrLbRows().map(r=>{
+    const o = {'Employee Name': r.t.name || '', 'Employee ID': r.t.employeeId || r.t.id, 'Department': hrLbDept(r.t), 'Year': s.year};
+    cols.forEach(c=>{ o[c.l] = r.b[c.k]; });
+    return o;
+  });
+  exportDownload('leave-balance-' + s.year + '.csv', exportCsvText(rows, ['Employee Name', 'Employee ID', 'Department', 'Year'].concat(cols.map(c=>c.l))));
+}
+/* One person's year as a ledger: the allocation, every comp-off credit and
+   every leave, in date order, with the two running balances beside them. */
+function hrLeaveLedger(userId, year){
+  year = String(year || hrToday().slice(0, 4));
+  const out = [{date: year + '-01-01', what: 'Annual Paid Leave allocated', cat: 'Paid', status: 'Allocated', paid: hrAlCfg().paidPerYear, comp: 0}];
+  hrCompOffAll().filter(c=>c && c.userId === userId && String(c.date || '').slice(0, 4) === year).forEach(c=>{
+    out.push({date: c.date, what: 'Comp-Off earned — ' + (c.kind || '') + ', ' + hrDuration(c.minutes || 0) + ' worked',
+      cat: 'Comp-Off', status: c.status, paid: 0, comp: c.status === 'Approved' ? Number(c.credit) || 0 : 0,
+      note: (c.status === 'Approved' ? '+' : '') + hrDaysLabel(Number(c.credit) || 0)
+        + (c.decidedBy ? ' · ' + c.status.toLowerCase() + ' by ' + teamName(c.decidedBy) : '') + (c.remarks ? ' — ' + c.remarks : '')});
+  });
+  (DB.hrLeave || []).filter(l=>l && l.userId === userId && hrLeaveYearsOf(l).indexOf(year) >= 0).forEach(l=>{
+    const cat = hrLeaveCategoryOf(l), days = hrLeaveChargeDays(l, year);
+    const counts = l.status === 'Approved';
+    out.push({date: String(l.from).slice(0, 10), what: HR_LEAVE_CATEGORY_LABEL[cat] + (l.type ? ' — ' + l.type : '')
+        + ' · ' + fmtDate(l.from) + (l.to && l.to !== l.from ? ' to ' + fmtDate(l.to) : ''),
+      cat, status: l.status || 'Pending', paid: counts && cat === 'Paid' ? -days : 0, comp: counts && cat === 'Comp-Off' ? -days : 0,
+      note: (counts && cat !== 'Unpaid' ? '−' : '') + hrDaysLabel(days) + (l.decidedBy ? ' · by ' + teamName(l.decidedBy) : '')
+        + (l.remarks ? ' — ' + l.remarks : '')});
+  });
+  out.sort((a, b)=>a.date.localeCompare(b.date) || (a.status === 'Allocated' ? -1 : 0));
+  let paid = 0, comp = 0;
+  out.forEach(e=>{ paid = hrR2(paid + e.paid); comp = hrR2(comp + e.comp); e.paidBal = paid; e.compBal = comp; });
+  return out;
+}
+function hrOpenLeaveLedger(userId, year){
+  const t = (DB.team || []).find(x=>x.id === userId) || {};
+  year = String(year || hrLbState().year || hrToday().slice(0, 4));
+  const b = hrLeaveBalances(userId, year);
+  const L = hrLeaveLedger(userId, year);
+  const tone = st => st === 'Approved' || st === 'Allocated' ? 'ok' : st === 'Pending' ? 'warn' : /Reject|Declin/.test(st) ? 'danger' : 'muted';
+  openModal('Leave history — ' + esc(t.name || userId) + ' — ' + esc(year), `
+    <div class="small-note" style="margin-top:0">${esc(t.employeeId || t.id || '')} · ${esc(hrLbDept(t) || '—')}</div>
+    <div class="grid-kpi" style="margin:8px 0 12px">
+      <div class="kpi"><div class="num" style="color:var(--ok)">${esc(hrAhNum(b.paidLeft))}</div><div class="lbl">Paid left of ${esc(hrAhNum(b.entitled))}</div></div>
+      <div class="kpi"><div class="num">${esc(hrAhNum(b.paidUsed))}</div><div class="lbl">Paid used</div></div>
+      <div class="kpi"><div class="num" style="color:var(--info)">${esc(hrAhNum(b.compLeft))}</div><div class="lbl">Comp-Off left</div></div>
+      <div class="kpi"><div class="num">${esc(hrAhNum(b.compEarned))} / ${esc(hrAhNum(b.compUsed))}</div><div class="lbl">Comp-Off earned / used</div></div>
+      <div class="kpi"><div class="num">${esc(hrAhNum(b.unpaid))}</div><div class="lbl">Unpaid taken</div></div>
+    </div>
+    <div class="table-wrap"><table id="hrLedger"><thead><tr><th>Date</th><th>What</th><th>Category</th><th>Status</th><th>Change</th>
+      <th style="text-align:right">Paid balance</th><th style="text-align:right">Comp-Off balance</th></tr></thead><tbody>
+    ${L.map(e=>`<tr><td>${esc(fmtDate(e.date))}</td><td>${esc(e.what)}</td><td>${esc(HR_LEAVE_CATEGORY_LABEL[e.cat] || e.cat)}</td>
+      <td><span class="badge ${tone(e.status)}">${esc(e.status)}</span></td><td>${esc(e.note || (e.paid ? '+' + hrDaysLabel(e.paid) : ''))}</td>
+      <td style="text-align:right">${esc(hrAhNum(e.paidBal))}</td><td style="text-align:right">${esc(hrAhNum(e.compBal))}</td></tr>`).join('')}
+    </tbody></table></div>`,
+    `<button class="btn" onclick="hrOpenLeaveBalances()">← All employees</button><button class="btn" onclick="closeModal()">Close</button>`, {wide: true});
+}
+function hrLeaveBalanceCardHtml(){
+  if(!hrIsStaff()) return '';
+  const year = hrToday().slice(0, 4);
+  const people = (DB.team || []).filter(t=>t && isMemberActive(t));
+  const bs = people.map(t=>hrLeaveBalances(t.id, year));
+  const paidLeft = hrR2(bs.reduce((n, b)=>n + b.paidLeft, 0));
+  const compLeft = hrR2(bs.reduce((n, b)=>n + b.compLeft, 0));
+  const unpaid = hrR2(bs.reduce((n, b)=>n + b.unpaid, 0));
+  const out = bs.filter(b=>b.paidLeft <= 0).length;
+  return `<div class="card hr-lb-card row-clickable" id="hrLeaveBalanceCard" style="margin-top:14px;cursor:pointer" onclick="hrOpenLeaveBalances()">
+    <div class="between"><div class="section-title" style="margin:0">\u{1F4C5} Remaining Leave Balance</div>
+      <span class="small-note" style="margin:0">${esc(year)} · click for every employee ›</span></div>
+    <div class="grid-kpi" style="margin:10px 0 0">
+      <div class="kpi"><div class="num" style="color:var(--ok)">${esc(hrAhNum(paidLeft))}</div><div class="lbl">Paid Leave days remaining</div></div>
+      <div class="kpi"><div class="num" style="color:var(--info)">${esc(hrAhNum(compLeft))}</div><div class="lbl">Comp-Off days remaining</div></div>
+      <div class="kpi"><div class="num">${esc(hrAhNum(unpaid))}</div><div class="lbl">Unpaid Leave taken</div></div>
+      <div class="kpi"><div class="num" style="color:var(--${out ? 'warn' : 'muted'})">${out}</div><div class="lbl">Employees with no Paid Leave left</div></div>
+    </div></div>`;
 }
 
 /* =====================================================================
@@ -83127,6 +83710,8 @@ function renderSettingsHr(){
       <div id="hrReminderLog" style="margin-top:10px"><button class="btn sm" onclick="hrReminderLogLoad()">Show what was sent</button></div>
     </div>
 
+    ${hrAnnualLeaveSetupHtml()}
+
     <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">Leave balance</div>
       <div class="field"><label>
@@ -83171,6 +83756,60 @@ function renderSettingsHr(){
       <div class="small-note" style="margin-top:6px">The role chips above save as you press them. These fields
         save when you press this.</div>
     </div>`;
+}
+function hrAnnualLeaveSetupHtml(){
+  const a = hrAlCfg();
+  const people = (DB.team || []).filter(t=>t && isMemberActive(t) && hrCanAnswerLeave(t))
+    .slice().sort((x, y)=>String(x.name || '').localeCompare(String(y.name || '')));
+  return `<div class="card" id="hrAnnualLeaveSetup" style="margin-top:14px">
+      <div class="section-title" style="margin-top:0">Annual Leave Configuration</div>
+      <div class="small-note" style="margin:0 0 10px">Every leave request is Paid, Unpaid or Comp-Off. Paid Leave comes out of
+        one annual entitlement — a full day takes 1 and a half day ½ from the same balance, with no separate allowance
+        for either. Comp-Off is a separate balance, earned by working a Sunday, a weekly off or a holiday. Unpaid Leave is
+        always available and touches neither. Balances run by calendar year and move only on approval.</div>
+      <div class="field-grid">
+        <div class="field"><label>Annual Paid Leave Entitlement (days per employee per year)</label>
+          <input type="number" min="0" step="0.5" id="f_alPaid" value="${esc(String(a.paidPerYear))}"></div>
+        <div class="field"><label>Comp-Off approver</label>
+          <select id="f_alApprover">
+            <option value="line" ${a.compOffApprover === 'line' ? 'selected' : ''}>Reporting manager / branch head (same route as leave)</option>
+            <option value="hr" ${a.compOffApprover === 'hr' ? 'selected' : ''}>HR</option>
+            ${people.map(t=>`<option value="${esc(t.id)}" ${a.compOffApprover === t.id ? 'selected' : ''}>${esc(t.name || t.id)}</option>`).join('')}
+          </select></div>
+      </div>
+      <div class="field"><label><input type="checkbox" id="f_alCoOn" style="width:auto" ${a.compOffEnabled ? 'checked' : ''}>
+        Comp-Off: let people punch in on Sundays, weekly offs and holidays and earn comp-off for it</label></div>
+      <div class="field-grid">
+        <div class="field"><label>Full-day Comp-Off at (hours worked, Punch In to Punch Out)</label>
+          <input type="number" min="0" step="0.25" id="f_alFull" value="${esc(String(a.compOffFullHours))}"></div>
+        <div class="field"><label>Half-day Comp-Off at (hours worked)</label>
+          <input type="number" min="0" step="0.25" id="f_alHalf" value="${esc(String(a.compOffHalfHours))}"></div>
+      </div>
+      <div class="small-note" style="margin:0 0 8px">Less than the half-day figure earns nothing. Each extra day is verified by
+        the approver before it is credited, and one day can be credited only once.</div>
+      <button class="btn primary" onclick="hrSaveAnnualLeave()">Save annual leave settings</button>
+    </div>`;
+}
+async function hrSaveAnnualLeave(){
+  if(!hrIsAdmin()){ alert('HR configuration is an administrator’s to change.'); return; }
+  const g = id => document.getElementById(id) || {};
+  const paid = Number(g('f_alPaid').value), full = Number(g('f_alFull').value), half = Number(g('f_alHalf').value);
+  if(String(g('f_alPaid').value || '').trim() === '' || !(paid >= 0)){ alert('Enter the annual paid leave entitlement in days.'); return; }
+  if(!(full > 0) || !(half > 0)){ alert('Enter both comp-off thresholds in hours.'); return; }
+  if(half >= full){ alert('The half-day threshold has to be below the full-day one.'); return; }
+  const c = hrCfg();
+  const was = hrAlCfg();
+  c.annualLeave = {paidPerYear: paid, compOffEnabled: !!g('f_alCoOn').checked, compOffFullHours: full,
+    compOffHalfHours: half, compOffApprover: g('f_alApprover').value || 'line'};
+  if(await hrCfgSave(c)){
+    await logAudit('HR', 'config', 'Annual Leave Configuration Changed', [
+      {field:'Annual Paid Leave', oldValue: String(was.paidPerYear), newValue: String(paid)},
+      {field:'Comp-Off', oldValue: was.compOffEnabled ? 'On' : 'Off', newValue: c.annualLeave.compOffEnabled ? 'On' : 'Off'},
+      {field:'Full / half day at', oldValue: was.compOffFullHours + ' h / ' + was.compOffHalfHours + ' h', newValue: full + ' h / ' + half + ' h'},
+      {field:'Comp-Off approver', oldValue: was.compOffApprover, newValue: c.annualLeave.compOffApprover}]);
+    alert('Saved.');
+    render();
+  }
 }
 function renderSettingsHrSources(){
   if(!hrIsAdmin()) return `<div class="empty">HR configuration is an administrator\u2019s to change.</div>`;
