@@ -3014,8 +3014,14 @@ async function sget(key, fallback, shared){
    root this rebuilds.
    --------------------------------------------------------------------- */
 let selfDrawTimer = 0, selfDrawTries = 0;
+/* Not before boot() has drawn the first screen. The loader and the
+   migrations write while the team, the signed-in member and half the
+   stores are still being read in; a redraw then works from a database that
+   is not there yet (on a fresh install me() is undefined and render()
+   throws). boot() draws once it is done, so nothing is lost by waiting. */
+let appBooted = false;
 function drawAfterWrite(){
-  if(systemResetting || inPublicMode() || typeof render !== 'function') return;
+  if(!appBooted || systemResetting || inPublicMode() || typeof render !== 'function') return;
   if(!document.getElementById('root')) return;
   clearTimeout(selfDrawTimer);
   selfDrawTimer = setTimeout(()=>{
@@ -35043,6 +35049,7 @@ async function boot(){
   /* Which connectors hold a credential, so the editor can say so without
      ever being told what it is. */
   await apiLoadSecretState();
+  appBooted = true;
   render();
   /* Anything an external system pushed in while nobody was signed in is
      applied now, and the connectors on a schedule are checked \u2014 then
