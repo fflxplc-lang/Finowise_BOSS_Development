@@ -48,8 +48,6 @@ startsrv(){
       CRM_NAV_URL="http://127.0.0.1:$(($PORT + 311))/NAVAll.txt" \
       CRM_MARKET_URL="http://127.0.0.1:$(($PORT + 317))" \
       CRM_MARKET_CACHE_SECONDS=0 \
-      CRM_MFAPI_URL="http://127.0.0.1:$(($PORT + 311))/mfapi" \
-      CRM_RESEARCH_ALLOW_PRIVATE=1 \
       exec node server.js ) > "$WORK/server.log" 2>&1 &
   SRV=$!
   for _ in $(seq 1 120); do
