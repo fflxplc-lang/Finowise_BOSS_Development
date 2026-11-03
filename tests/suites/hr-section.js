@@ -233,7 +233,7 @@ suite({mail: true}, async t => {
 
   t.section('leave, asked for and decided');
 
-  await t.step('the Dashboard button is Leave Request, not Attendance', async () => {
+  await t.step('the Dashboard header carries the punch clock only: no Leave Request, no Attendance link', async () => {
     const r = await t.eval(async (a)=>{
       const m = DB.team.find(t=>t.id === a.who);
       m.hrAccess = {attendance: 1};
@@ -245,10 +245,10 @@ suite({mail: true}, async t => {
       return {slot, leave: /Leave Request/.test(slot),
         oldButton: /navigate\('hrattendance'\)/.test(slot), punch: /Punch In|Punch Out/.test(slot)};
     }, {who: plain});
-    if(!r.leave) throw new Error('no Leave Request button: ' + r.slot.slice(0, 140));
+    if(r.leave) throw new Error('Leave Request is still on the main Dashboard');
     if(r.oldButton) throw new Error('the old Attendance button is still there');
     if(!r.punch) throw new Error('punching was lost along with it');
-    return 'Punch In and Leave Request on the Dashboard; the Attendance link is gone';
+    return 'Punch In on the Dashboard; Leave Request and the Attendance link are not';
   });
 
   await t.step('a request goes to the branch head for that branch, as Pending', async () => {
@@ -653,13 +653,14 @@ suite({mail: true}, async t => {
     if(!r.section || !r.rail) throw new Error('HR is not in their rail by default');
     if(r.items.join(',') !== 'hrattendance')
       throw new Error('the HR group offers them: ' + r.items.join(', '));
-    if(!r.widget || !r.leave) throw new Error('the punch clock or Leave Request is missing');
+    if(!r.widget) throw new Error('the punch clock is missing');
+    if(r.leave) throw new Error('Leave Request is back on the main Dashboard');
     if(r.attendance !== 'hrattendance') throw new Error('their own attendance did not open');
     if(!r.ownOnly) throw new Error('they can see everybody\u2019s attendance by default');
     ['hrdashboard','hrincentive','hrappraisal'].forEach(v=>{
       if(r[v] === v) throw new Error('typing the ' + v + ' route got them in');
     });
-    return 'HR in the rail with Attendance Management alone, the punch clock and Leave Request on the '
+    return 'HR in the rail with Attendance Management alone, the punch clock on the '
       + 'Dashboard, their own records only \u2014 and the HR Dashboard, Incentive and Appraisal all bounce';
   });
 

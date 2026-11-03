@@ -30409,6 +30409,10 @@ function viewQueries(){
   if(window._qChip==='breached') rows = rows.filter(q=>queryFirstResponse(q).breached);
   if(window._qChip==='unassigned') rows = rows.filter(q=>!q.assignTo);
   rows = applyStatusFilterQ(rows);
+  rows = applyCardFilter('Queries', rows, {
+    open: q=>queryIsOpen(q), unassigned: q=>!q.assignTo && queryIsOpen(q),
+    breached: q=>queryFirstResponse(q).breached,
+    resolved: q=>/resolved/i.test(q.status||''), closed: q=>/closed/i.test(q.status||'')});
   rows = rows.filter(q=>matchesSearch(window._qSearch, q, {
     subject:q=>q.subject, client:q=>clientOf(q).cmsName, category:q=>q.category,
     status:q=>q.status, id:q=>q.id, rm:q=>teamName(queryOwnerFor(q)),
@@ -30424,15 +30428,16 @@ function viewQueries(){
         {label:'Settings', icon:'⚙', onclick:"navigate('settings','queries')"},
         can('Queries','create') && {label:'Raise a Ticket', icon:'+', kind:'primary', onclick:'openQueryForm()'},
       ]})}
-    ${kpiCards([
-      {label:'Open', value:open.length, tone: open.length? 'warn':'ok'},
-      {label:'Unassigned', value:all.filter(q=>!q.assignTo && queryIsOpen(q)).length, tone:'danger'},
-      {label:'Past the SLA', value:breached.length, tone: breached.length? 'danger':'ok'},
-      {label:'Resolved', value:all.filter(q=>/resolved/i.test(q.status||'')).length, tone:'ok'},
-      {label:'Closed', value:all.filter(q=>/closed/i.test(q.status||'')).length},
+    <div id="qmsKpis">${kpiCards([
+      filterCard('Queries', 'open', 'Open', open.length, open.length? 'warn':'ok', {onclick:`window._qStatus=''; cardFilterSet('Queries', 'open')`}),
+      filterCard('Queries', 'unassigned', 'Unassigned', all.filter(q=>!q.assignTo && queryIsOpen(q)).length, 'danger', {onclick:`window._qStatus=''; cardFilterSet('Queries', 'unassigned')`}),
+      filterCard('Queries', 'breached', 'Past the SLA', breached.length, breached.length? 'danger':'ok', {onclick:`window._qStatus=''; cardFilterSet('Queries', 'breached')`}),
+      filterCard('Queries', 'resolved', 'Resolved', all.filter(q=>/resolved/i.test(q.status||'')).length, 'ok', {onclick:`window._qStatus=''; cardFilterSet('Queries', 'resolved')`}),
+      filterCard('Queries', 'closed', 'Closed', all.filter(q=>/closed/i.test(q.status||'')).length, '', {onclick:`window._qStatus=''; cardFilterSet('Queries', 'closed')`}),
     ])}
     ${kpiCards(queryStatuses().map(st=>({label:st, value: all.filter(q=>q.status===st).length,
-      onclick:`window._qStatus='${window._qStatus===st?'':st}'; render()`, selected: window._qStatus===st})))}
+      onclick:`window._qStatus='${window._qStatus===st?'':st}'; window[cardFilterKey('Queries')]=''; render()`, selected: window._qStatus===st})))}</div>
+    ${cardFilterNote('Queries', {open:'Open', unassigned:'Unassigned', breached:'Past the SLA', resolved:'Resolved', closed:'Closed'})}
     ${listSearchRow({stateKey:'_qSearch', live:true})}
     ${quickChips([
       {label:'Mine', icon:'👤', on:window._qChip==='mine', onclick:`window._qChip='${window._qChip==='mine'?'':'mine'}'; render()`},
@@ -40445,7 +40450,47 @@ function sameStageFilter(module, states){
 function filterByStageGroup(module, states){
   const key = stageFilterKey(module);
   window[key] = sameStageFilter(module, states) ? null : states;
+  window[cardFilterKey(module)] = '';      // one card filters at a time
   render();
+}
+/* THE OTHER CARDS ON A MODULE'S DASHBOARD FILTER THE LIST TOO.
+
+   Total, KYC Completed, a category, Meeting Due: clicking one narrows the
+   list below to what it counts, it is drawn selected, clicking another
+   moves the filter there, and clicking it again (or Total) clears it. The
+   counts on every card are worked out from the records before any card's
+   filter, so the dashboard's figures never change with the selection.
+   A stage card and one of these share the one selection. */
+function cardFilterKey(module){ return '_cardFilter' + module; }
+function cardFilterOn(module){ return window[cardFilterKey(module)] || ''; }
+function cardFilterSet(module, key){
+  const k = cardFilterKey(module);
+  window[k] = (!key || window[k] === key) ? '' : key;
+  window[stageFilterKey(module)] = null;
+  render();
+}
+/* A card for the row: key '' is the "everything" card (Total), selected
+   while nothing else is. */
+function filterCard(module, key, label, value, tone, extra){
+  const on = cardFilterOn(module);
+  const selected = key ? on === key : (!on && !window[stageFilterKey(module)]);
+  return Object.assign({label, value, tone, selected,
+    onclick: `cardFilterSet('${module}', '${String(key).replace(/'/g, "\\'")}')`}, extra || {});
+}
+/* The list under the cards, narrowed by whichever card is chosen. tests
+   maps a card's key to what it counts; a key no longer offered is ignored. */
+function applyCardFilter(module, rows, tests){
+  const on = cardFilterOn(module);
+  if(!on) return rows;
+  const fn = tests[on] || (on.indexOf(':') > 0 && tests[on.split(':')[0] + ':'] ? (r=>tests[on.split(':')[0] + ':'](r, on.slice(on.indexOf(':') + 1))) : null);
+  return fn ? rows.filter(fn) : rows;
+}
+function cardFilterNote(module, labels){
+  const on = cardFilterOn(module);
+  if(!on) return '';
+  const label = labels[on] || on.slice(on.indexOf(':') + 1);
+  return `<div class="stage-filter-note">Showing <b>${esc(label)}</b>
+    <a href="javascript:void(0)" onclick="cardFilterSet('${module}', '')">clear</a></div>`;
 }
 function applyStageFilter(module, rows){
   const sel = window[stageFilterKey(module)];
@@ -42051,6 +42096,24 @@ function viewCMS(){
   const catCounts = cats.map(k=>[k, inWindow.filter(c=>cfgIs('arc.categories', c.clientCategory, k)).length]);
   const catNone  = inWindow.filter(c=>!String(c.clientCategory || '').trim()).length;
   const catOther = inWindow.length - catNone - catCounts.reduce((n, p)=>n + p[1], 0);
+  /* The cards filter the list; their counts above are read from inWindow,
+     before this, so they stay as they are whichever card is chosen. */
+  rows = applyCardFilter('CMS', rows, {
+    'kyc:done': c=>c.kycStatus==='Validated',
+    'kyc:pending': c=>c.kycStatus!=='Validated',
+    'cat:': (c, v)=>{
+      const has = String(c.clientCategory || '').trim();
+      if(v === '__none') return !has;
+      if(v === '__other') return !!has && !cats.some(k=>cfgIs('arc.categories', c.clientCategory, k));
+      return cfgIs('arc.categories', c.clientCategory, v);
+    }});
+  const catOn = cardFilterOn('CMS');
+  const catChip = (key, text, tone, title) => {
+    const on = catOn === 'cat:' + key;
+    return `<span class="badge ${tone} cms-cat-chip${on ? ' on' : ''}" role="button" tabindex="0" data-cat="${esc(key)}"
+      style="margin-right:5px;cursor:pointer${on ? ';outline:2px solid currentColor;outline-offset:1px' : ''}"${title ? ` title="${esc(title)}"` : ''}
+      onclick="event.stopPropagation(); cardFilterSet('CMS', 'cat:' + this.dataset.cat)">${text}</span>`;
+  };
   const sel = bulkSelection.CMS;
   return `
     ${moduleHeader({
@@ -42062,17 +42125,18 @@ function viewCMS(){
       ]})}
     ${branchTabs({rows:all, stateKey:'_cmsBranch', branchOf:c=>c.branch, teamFilterKey:'_cmsTeam', note:'clients'})}
     ${timelineBarHtml('CMS')}
-    ${kpiCards([
-      {label:'Total Clients', value:inWindow.length},
-      {label:'KYC Completed', value:kycDone, tone:'ok'},
-      {label:'KYC Pending', value:inWindow.length-kycDone, tone:'warn'},
-      {label:'Categories', wide:true, html: (catCounts.map(([k,n])=>`<span class="badge info" style="margin-right:5px">${esc(k)}: ${n}</span>`)
-        .concat(catOther > 0 ? [`<span class="badge warn" style="margin-right:5px" title="A category on the record that is not one of the configured review tiers">Not a configured tier: ${catOther}</span>`] : [])
-        .concat(catNone > 0 ? [`<span class="badge muted" style="margin-right:5px">No category: ${catNone}</span>`] : [])
+    <div id="cmsKpis">${kpiCards([
+      filterCard('CMS', '', 'Total Clients', inWindow.length),
+      filterCard('CMS', 'kyc:done', 'KYC Completed', kycDone, 'ok'),
+      filterCard('CMS', 'kyc:pending', 'KYC Pending', inWindow.length-kycDone, 'warn'),
+      {label:'Categories', wide:true, selected: /^cat:/.test(catOn), html: (catCounts.map(([k,n])=>catChip(k, esc(k) + ': ' + n, 'info'))
+        .concat(catOther > 0 ? [catChip('__other', 'Not a configured tier: ' + catOther, 'warn', 'A category on the record that is not one of the configured review tiers')] : [])
+        .concat(catNone > 0 ? [catChip('__none', 'No category: ' + catNone, 'muted')] : [])
         ).join('') || '—'},
     ])}
-    ${kpiCards(dashboardStageCards('CMS', inWindow))}
+    ${kpiCards(dashboardStageCards('CMS', inWindow))}</div>
     ${stageFilterNote('CMS')}
+    ${cardFilterNote('CMS', {'kyc:done':'KYC Completed', 'kyc:pending':'KYC Pending', 'cat:__none':'No category', 'cat:__other':'Not a configured tier'})}
     ${listSearchRow({stateKey:'_cmsSearch', live:true})}
     ${quickChips([
       {label:'My Clients', icon:'👤', on:window._cmsChip==='mine', onclick:`window._cmsChip='${window._cmsChip==='mine'?'':'mine'}'; render()`},
@@ -43996,6 +44060,11 @@ function viewRMS(){
   const meetingDue = open.filter(r=>r.meetingDate && r.meetingDate >= today).length;
   const meetingOverdue = open.filter(r=>r.meetingDate && r.meetingDate < today).length;
   const meetingClosed = inWindow.length - open.length;
+  rows = applyCardFilter('RMS', rows, {
+    open: r=>!isClosed(r),
+    due: r=>!isClosed(r) && !!r.meetingDate && r.meetingDate >= today,
+    overdue: r=>!isClosed(r) && !!r.meetingDate && r.meetingDate < today,
+    closed: r=>isClosed(r)});
   const sel = bulkSelection.RMS;
   return `
     ${moduleHeader({
@@ -44007,13 +44076,14 @@ function viewRMS(){
       ]})}
     ${branchTabs({rows:all, stateKey:'_rmsBranch', branchOf:r=>clientOf(r).branch, teamFilterKey:'_rmsTeam', note:'reviews'})}
     ${timelineBarHtml('RMS')}
-    ${kpiCards([
-      {label:'Open Review', value:open.length},
-      {label:'Meeting Due', value:meetingDue, tone:'warn'},
-      {label:'Meeting Over Due', value:meetingOverdue, tone:meetingOverdue?'danger':''},
-      {label:'Meeting Closed', value:meetingClosed, tone:'ok'},
-    ].concat(dashboardStageCards('RMS', inWindow)))}
+    <div id="rmsKpis">${kpiCards([
+      filterCard('RMS', 'open', 'Open Review', open.length),
+      filterCard('RMS', 'due', 'Meeting Due', meetingDue, 'warn'),
+      filterCard('RMS', 'overdue', 'Meeting Over Due', meetingOverdue, meetingOverdue?'danger':''),
+      filterCard('RMS', 'closed', 'Meeting Closed', meetingClosed, 'ok'),
+    ].concat(dashboardStageCards('RMS', inWindow)))}</div>
     ${stageFilterNote('RMS')}
+    ${cardFilterNote('RMS', {open:'Open reviews', due:'Meeting due', overdue:'Meeting over due', closed:'Meeting closed'})}
     ${listSearchRow({stateKey:'_rmsSearch', live:true,
       sortKey:'_rmsSort', sortOptions:[['due','↑ Due soonest'],['newest','↓ Newest first'],['client','Client A–Z']]})}
     ${quickChips([
@@ -44863,7 +44933,12 @@ function viewDST(){
      filter for the list below. Completed counts a task once, for whoever
      completed it, not for each person who gave or passed it on. */
   const credit = dstCompletedCredit();
-  const kpiOf = k => mainTasks.filter(t=>dstKpiMatch(t, k, credit));
+  /* Counted off a copy taken here, before the card's own filter narrows
+     mainTasks below: kpiOf runs when the cards are drawn, after that, and
+     reading mainTasks then made every card count only the clicked one's
+     rows. A card filters the list; it does not change the counts. */
+  const kpiBase = mainTasks;
+  const kpiOf = k => kpiBase.filter(t=>dstKpiMatch(t, k, credit));
   const status = window._dstStatus || '';
   const kpi = (k, label, tone) => ({label, value:kpiOf(k).length, tone, selected:status===k,
     onclick:`window._dstStatus='${k}'; render()`});
@@ -45275,6 +45350,9 @@ function viewRecommendations(){
     rm:r=>teamName(r.createdBy),
     scheme:r=>allocSchemes(r).map(l=>l.schemeName).join(' '),
   }));
+  rows = applyCardFilter('Recommendations', rows, {
+    draft: r=>r.status==='Draft', awaiting: r=>r.status==='Pending Internal Approval',
+    client: r=>r.status==='Sent to Client', accepted: r=>r.status==='Client Accepted', query: r=>r.status==='Client Query'});
   const awaiting = all.filter(r=>r.status==='Pending Internal Approval').length;
   return `
     ${moduleHeader({
@@ -45285,14 +45363,15 @@ function viewRecommendations(){
         can('Recommendations','create') && {label:'New Asset Allocation', icon:'+', kind:'primary', onclick:'openRecommendationForm()'},
       ]})}
     ${branchTabs({rows:all, stateKey:'_allocBranch', branchOf, teamFilterKey:'_allocTeam', note:'allocations'})}
-    ${kpiCards([
-      {label:'Total', value:all.length, selected:true},
-      {label:'Draft', value:counts['Draft']||0},
-      {label:'Awaiting Internal', value:awaiting, tone: awaiting?'warn':''},
-      {label:'With Client', value:counts['Sent to Client']||0, tone:'info'},
-      {label:'Accepted', value:counts['Client Accepted']||0, tone:'ok'},
-      {label:'Client Query', value:counts['Client Query']||0, tone: (counts['Client Query']||0)?'danger':''},
-    ])}
+    <div id="recoKpis">${kpiCards([
+      filterCard('Recommendations', '', 'Total', all.length),
+      filterCard('Recommendations', 'draft', 'Draft', counts['Draft']||0),
+      filterCard('Recommendations', 'awaiting', 'Awaiting Internal', awaiting, awaiting?'warn':''),
+      filterCard('Recommendations', 'client', 'With Client', counts['Sent to Client']||0, 'info'),
+      filterCard('Recommendations', 'accepted', 'Accepted', counts['Client Accepted']||0, 'ok'),
+      filterCard('Recommendations', 'query', 'Client Query', counts['Client Query']||0, (counts['Client Query']||0)?'danger':''),
+    ])}</div>
+    ${cardFilterNote('Recommendations', {draft:'Draft', awaiting:'Awaiting internal approval', client:'With the client', accepted:'Accepted', query:'Client query'})}
     ${dateRangeRow({stateKey:'_allocDate', label:'Prepared', note:rows.length+' in range'})}
     ${listSearchRow({stateKey:'_allocSearch', live:true})}
     ${bulkBar('Recommendations')}
@@ -47960,6 +48039,9 @@ function viewCalls(){
     subject:c=>c.subject, contact:c=>callContactName(c), type:c=>c.callType,
     category:c=>c.callCategory, status:c=>c.status, by:c=>teamName(c.loggedBy), branch:c=>c.branch,
   }));
+  rows = applyCardFilter('Calls', rows, {
+    conv: callWasConversation, dnc: callWasAttempted,
+    followup: c=>!!c.followUpDate && !callWasConversation(c)});
   rows = rows.slice().sort((a,b)=> window._callSort==='oldest'
     ? String((a.callDate||'')+(a.startTime||'')).localeCompare(String((b.callDate||'')+(b.startTime||'')))
     : window._callSort==='longest' ? callDurationSeconds(b)-callDurationSeconds(a)
@@ -47982,13 +48064,14 @@ function viewCalls(){
         can('Calls','create') && {label:'Log a Call', icon:'+', kind:'primary', onclick:'openCallForm()'},
       ]})}
     ${branchTabs({rows:all, stateKey:'_callBranch', branchOf:callBranchOf, teamFilterKey:'_callTeam', note:'calls'})}
-    ${kpiCards([
-      {label:'Total Calls', value:all.length},
-      {label:'Conversations', value:completed.length, tone:'ok'},
-      {label:'Did Not Connect', value:attempted.length, tone:'warn'},
-      {label:'Talk Time', value: fmtDurationTotal(totalSec)},
-      {label:'Follow-ups Due', value:chasing.length, tone:'purple'},
-    ])}
+    <div id="callKpis">${kpiCards([
+      filterCard('Calls', '', 'Total Calls', all.length),
+      filterCard('Calls', 'conv', 'Conversations', completed.length, 'ok'),
+      filterCard('Calls', 'dnc', 'Did Not Connect', attempted.length, 'warn'),
+      filterCard('Calls', 'conv', 'Talk Time', fmtDurationTotal(totalSec), '', {selected: false}),
+      filterCard('Calls', 'followup', 'Follow-ups Due', chasing.length, 'purple'),
+    ])}</div>
+    ${cardFilterNote('Calls', {conv:'Conversations', dnc:'Did not connect', followup:'Follow-ups due'})}
     <div class="list-searchrow">
       <input class="search list-search" placeholder="Search"
              value="${esc(window._callSearch||'')}" oninput="window._callSearch=this.value; render()">
@@ -53708,7 +53791,7 @@ function viewProjects(){
   window._prjStatus = window._prjStatus || '';
   window._prjBranch = window._prjBranch || '';
   window._prjMine = window._prjMine || false;
-  const rows = all
+  let rows = all
     .filter(p=>!window._prjStatus || p.status===window._prjStatus)
     .filter(p=>!window._prjBranch || p.branch===window._prjBranch)
     .filter(p=>!window._prjMine || p.owner===currentUser || p.assignTo===currentUser)
@@ -53716,6 +53799,8 @@ function viewProjects(){
       no:p=>p.projectNo, title:p=>p.name, category:p=>p.category,
       owner:p=>teamName(p.owner), status:p=>p.status, branch:p=>p.branch}))
     .slice().reverse();
+  rows = applyCardFilter('Projects', rows, {
+    progress: p=>p.status==='In Progress', completed: p=>p.status==='Completed', overdue: projectIsOverdue});
   const overdue = all.filter(projectIsOverdue).length;
   return `
     ${moduleHeader({
@@ -53726,12 +53811,13 @@ function viewProjects(){
         {label:'Help', icon:'?', onclick:"openModuleHelp('Projects')"},
         can('Projects','create') && {label:'New Project', icon:'+', kind:'primary', onclick:"openProjectForm()"},
       ]})}
-    ${kpiCards([
-      {label:'Total projects', value:all.length},
-      {label:'In progress', value:all.filter(p=>p.status==='In Progress').length, tone:'warn'},
-      {label:'Completed', value:all.filter(p=>p.status==='Completed').length, tone:'ok'},
-      {label:'Overdue', value:overdue, tone:overdue?'danger':''},
-    ])}
+    <div id="prjKpis">${kpiCards([
+      filterCard('Projects', '', 'Total projects', all.length),
+      filterCard('Projects', 'progress', 'In progress', all.filter(p=>p.status==='In Progress').length, 'warn'),
+      filterCard('Projects', 'completed', 'Completed', all.filter(p=>p.status==='Completed').length, 'ok'),
+      filterCard('Projects', 'overdue', 'Overdue', overdue, overdue?'danger':''),
+    ])}</div>
+    ${cardFilterNote('Projects', {progress:'In progress', completed:'Completed', overdue:'Overdue'})}
     <div class="list-searchrow">
       <input class="search list-search" placeholder="Search" value="${esc(window._prjSearch||'')}"
              oninput="window._prjSearch=this.value; render()">
@@ -81260,8 +81346,8 @@ function hrNotConfigured(what){
 
    Punching in is the one HR action every person does every day, and
    making them navigate to a module first is a tax on all of them. So
-   it sits at the right of the Dashboard's own header: the status, the
-   button, and a way into the rest of their attendance.
+   it sits at the right of the Dashboard's own header: the status and the
+   button.
 
    It is the same two functions the Attendance page calls — same
    account, same date, same one-open-session rule, same audit line.
@@ -81280,9 +81366,9 @@ function hrPunchWidgetHtml(){
           >since ${hrClock(open.in)}</span>`
       : worked > 0
         ? `<span class="small-note" style="margin:0">${hrDuration(worked)} today</span>` : ''}
-    ${hrPunchButtonsHtml(rec, 'sm')}
-    <button class="btn sm ghost" onclick="hrOpenLeaveRequest()"
-      title="Apply for leave — it goes to your branch head">Leave Request</button>`;
+    ${hrPunchButtonsHtml(rec, 'sm')}`;
+  /* Leave is asked for from Attendance Management (and the HR Dashboard),
+     not from the main Dashboard's header: the firm asked for it off here. */
 }
 /* The two buttons, each disabled with its reason when the rules say no.
    Before anybody has punched in only Punch In is shown; once they have,
