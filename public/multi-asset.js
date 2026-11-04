@@ -1390,6 +1390,7 @@ function maStyle(){
     .ma-alloc{display:flex;flex-direction:column;gap:6px}.ma-alloc-row{display:grid;grid-template-columns:150px 1fr 110px 54px;gap:8px;align-items:center;font-size:12px}
     .ma-bar{height:9px;border-radius:5px;background:var(--line);overflow:hidden}.ma-bar i{display:block;height:100%;background:var(--teal,var(--navy))}
     .ma-matrix td{vertical-align:middle}.ma-matrix input[type=file]{max-width:210px;font-size:12px}
+    .ma-tpl{margin-top:3px;font-size:11.5px}.ma-tpl a{color:var(--info);text-decoration:none}.ma-tpl a:hover{text-decoration:underline}
     .ma-chip{display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;background:var(--line);margin-left:4px}
     .ma-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
     .ma-seg button{border:0;background:transparent;padding:8px 14px;cursor:pointer;text-align:left}
@@ -1768,7 +1769,11 @@ function viewAssetUpload(){
         const la = maLastUpload(p, 'aum'), ls = maLastUpload(p, 'sip');
         const last = [la, ls].filter(Boolean).sort((a, b)=>(b.seq || 0) - (a.seq || 0))[0];
         const fileCell = kind => `<input type="file" accept=".xlsx,.xls,.csv,.pdf" data-ma="${esc(p.id)}:${kind}" onchange="maPick(this)" ${MA.busy ? 'disabled' : ''}>
-          ${MA.picked[p.id + ':' + kind] ? `<div class="small-note" style="margin:2px 0 0">${esc(MA.picked[p.id + ':' + kind].name)}</div>` : ''}`;
+          ${MA.picked[p.id + ':' + kind] ? `<div class="small-note" style="margin:2px 0 0">${esc(MA.picked[p.id + ':' + kind].name)}</div>` : ''}
+          <div class="ma-tpl"><a href="javascript:void 0" data-tpl="${esc(p.id)}:${kind}" onclick="maDownloadTemplate('${esc(p.id)}', '${kind}')"
+            title="An Excel sheet laid out as this file should be, with sample rows and a guide to every column">⬇ Sample template</a>${
+            kind === 'aum' && maKey(p.product + ' ' + p.name) === 'mf nj' ? ` · <a href="javascript:void 0" data-tpl="${esc(p.id)}:folio"
+            onclick="maDownloadTemplate('${esc(p.id)}', 'aum', 'nj_folio')" title="NJ's Folio Detail report fills in the client records; it goes in this same AUM column">Folio Detail</a>` : ''}</div>`;
         return `<tr><td>${esc(p.product)}</td><td><b>${esc(p.name)}</b></td><td>${fileCell('aum')}</td><td>${fileCell('sip')}</td>
           <td class="small-note">${last ? 'v' + last.version + ' · ' + esc(fmtDate(last.at)) + ' · data as of ' + maDate(last.snapshotDate) : '—'}</td></tr>`;
       }).join('')}</tbody></table></div>
@@ -2302,6 +2307,214 @@ function maColumnNamesHtml(){
       <button class="btn sm primary" onclick="maAddColumnName()">Add column name</button>
     </div>
   </div>`;
+}
+/* =====================================================================
+   SAMPLE UPLOAD TEMPLATES
+
+   Every row of the upload matrix offers a template for its AUM file and
+   its SIP file: a workbook laid out exactly as that platform's own report
+   is — the same title lines, the same "As on" / "Report Date" line, the
+   same heading rows (NJ's two-row AUM(₹) heading, Anand Rathi's banner
+   over its sleeves, Omni Science's Capital In › Cash · Stock · Total) and
+   the same column names — with two sample clients filled in, and a second
+   sheet saying what each column is and how to write it. A platform BOSS
+   has no report layout for gets a plain table for its category, in
+   headings the reader already knows.
+
+   Every template is read back by the same reader as an upload (the
+   platform-templates suite does that for each one), so following the
+   template is following what the reader expects.
+
+   The guide is one sentence per row on purpose: a sheet of single cells
+   never looks like a table, so the data sheet is the one read even if the
+   guide is left in the workbook.
+   ===================================================================== */
+const MA_TEMPLATE_KNOWN = {
+  'mf finowise': {aum: 'finowise_aum', sip: 'finowise_sip'},
+  'mf nj': {aum: 'nj_aum', sip: 'nj_sip'},
+  'mf anand rathi': {aum: 'ar_aum'},
+  'stocks motilal oswal': {aum: 'mo_aum'},
+  'stocks omni science': {aum: 'omni_pms'},
+  'pms omni science': {aum: 'omni_pms'},
+};
+/* Statements BOSS reads straight from the platform's PDF. */
+const MA_TEMPLATE_PDF = {
+  'stocks philip capital': 'PhillipCapital’s COSMOS monthly report (PDF) is read as it is — upload the PDF itself. Use this sheet only for holdings you keep in Excel.',
+  'pms ametra': 'Ametra’s portfolio factsheet (PDF) is read as it is, one account per page — upload the PDF itself. Use this sheet only for accounts you keep in Excel.',
+};
+function maTplDate(iso){ const d = String(iso || maToday()); return d.slice(8, 10) + '-' + d.slice(5, 7) + '-' + d.slice(0, 4); }
+/* Sample PANs no real investor holds, so a template uploaded unedited can
+   never land on somebody's account by PAN. */
+const MA_TPL_C1 = {name: 'Sample Client One', pan: 'ZZZPZ9999Z', mobile: '9876543210', email: 'client.one@example.com', dob: '15-06-1980'};
+const MA_TPL_C2 = {name: 'Sample Client Two', pan: 'ZZZPZ9998Y', mobile: '9123456780', email: 'client.two@example.com', dob: '02-11-1975'};
+/* The platforms' own layouts. rows: the lines above and including the
+   heading; data: the sample records, cell for cell; bold: the heading rows. */
+function maTplKnown(id, asOn){
+  const d = maTplDate(asOn);
+  const month = new Date((asOn || maToday()) + 'T00:00:00').toLocaleDateString('en-IN', {month: 'short', year: 'numeric'}).replace(' ', '-');
+  const pad = at => { const r = []; Object.keys(at).forEach(k=>{ r[Number(k)] = at[k]; }); for(let i = 0; i < r.length; i++) if(r[i] === undefined) r[i] = ''; return r; };
+  const L = {
+    finowise_aum: {head: [['Finowise Freedom LLP'], ['Investor Wise AUM Report (' + month + ')'], ['Report Date: ' + d],
+        ['Name', 'PAN', 'Branch', 'RM Name', 'Associate Name', 'Inv. Cost', 'Current Value', 'XIRR', 'Mobile']], bold: [0, 1, 2, 3],
+      data: [[MA_TPL_C1.name, MA_TPL_C1.pan, 'Varanasi', '', 'Ravi Sharma', 250000, 312500, 14.2, MA_TPL_C1.mobile],
+             [MA_TPL_C2.name, MA_TPL_C2.pan, 'Varanasi', '', '', 600000, 655000, 9.8, MA_TPL_C2.mobile]]},
+    finowise_sip: {head: [['Finowise Freedom LLP'], ['Active SIP (RM Name: All)'], ['Report Date: ' + d],
+        ['Investor Name', 'PAN Number', 'Mobile', 'Branch', 'RM Name', 'Associate Name', 'Folio', 'Scheme Name', 'Reg Date', 'Start Date', 'End Date',
+         'SIP Date', 'Frequency', 'SIP Amount', 'Monthly Amount', 'Inv. Cost', 'Current Value', 'XIRR(%)', 'Client ID', 'ISIN No', 'RTA Code']], bold: [0, 1, 2, 3],
+      data: [[MA_TPL_C1.name, MA_TPL_C1.pan, MA_TPL_C1.mobile, 'Varanasi', '', 'Ravi Sharma', '1234567890', 'Parag Parikh Flexi Cap Fund - Direct Growth',
+              '01-01-2024', '10-01-2024', '10-12-2099', 10, 'Monthly', 5000, 5000, 110000, 132000, 15.1, 'FW1001', 'INF879O01027', 'CAMS'],
+             [MA_TPL_C2.name, MA_TPL_C2.pan, MA_TPL_C2.mobile, 'Varanasi', '', '', '9988776655', 'HDFC Balanced Advantage Fund - Direct Growth',
+              '15-03-2023', '05-04-2023', '05-03-2033', 5, 'Monthly', 10000, 10000, 310000, 362000, 11.4, 'FW1002', 'INF179K01UT0', 'CAMS']]},
+    nj_aum: {head: [['Investor Wise AUM Report ( As On ' + d + ' )'], ['Sr. No.', 'Partner/Employee', 'Group', 'Investor', 'AUM(₹)', '', '', '', '', ''],
+        ['', '', '', '', 'EQUITY', 'DEBT', 'HYBRID', 'PHYSICAL ASSETS', 'OTHERS', 'TOTAL']], bold: [0, 1, 2],
+      data: [[1, 'Partner Name', 'Sample Group', MA_TPL_C1.name, 180000, 40000, 30000, 0, 0, 250000],
+             [2, 'Partner Name', 'Sample Group', MA_TPL_C2.name, 400000, 150000, 50000, 25000, 0, 625000]]},
+    nj_sip: {head: [['Live SIP Detail Report |  As on ' + d],
+        ['Sr. No.', 'Partner/Employee', 'Group', 'Investor', 'Folio No', 'Scheme', 'Start Date', 'End Date', 'Amount(₹)', 'Frequency',
+         'Monthly SIP Amount', 'Total No. of Installments', 'SIP Type', 'SIP No.', 'Base SIP No.', 'Top-Up Start Date', 'Registered Top-Up Amt.']], bold: [0, 1],
+      data: [[1, 'Partner Name', 'Sample Group', MA_TPL_C1.name, '12345678/90', 'HDFC Flexi Cap Fund - Growth', '05-01-2024', '05-12-2099', 5000, 'Monthly',
+              5000, 912, 'Normal', 'SIP1001', '', '', ''],
+             [2, 'Partner Name', 'Sample Group', MA_TPL_C2.name, '98765432/10', 'SBI Small Cap Fund - Growth', '10-06-2023', '10-05-2028', 3000, 'Monthly',
+              3000, 60, 'Top-Up', 'SIP1002', 'SIP0900', '10-06-2024', 500]]},
+    nj_folio: {head: [['Folio Detail Report( As on' + d + ')'],
+        ['Sr No', 'AMC', 'Folio No', 'Partner/ Employee', 'Group', 'Investor Name', 'First Holder PAN', 'First holder DOB', 'TAX_STATUS', 'Address', 'City',
+         'Pin code', 'State', 'Country', 'Mobile No', 'Email', 'Phone_Off', 'Phone_Res', 'Occupation', 'Mode of Holding', 'Bank Ac No.', 'Bank_Name',
+         'Bank Branch', 'IFSC Code', '1st Nominee Name', 'Relation with Investor', '1st Nominee %']], bold: [0, 1],
+      data: [[1, 'HDFC Mutual Fund', '12345678/90', 'Partner Name', 'Sample Group', MA_TPL_C1.name, MA_TPL_C1.pan, MA_TPL_C1.dob, 'Individual',
+              '12 MG Road', 'Varanasi', '221001', 'Uttar Pradesh', 'India', MA_TPL_C1.mobile, MA_TPL_C1.email, '', '', 'Service', 'Single',
+              '123456789012', 'HDFC Bank', 'Sigra', 'HDFC0001234', 'Nominee Name', 'Spouse', 100],
+             [2, 'SBI Mutual Fund', '98765432/10', 'Partner Name', 'Sample Group', MA_TPL_C2.name, MA_TPL_C2.pan, MA_TPL_C2.dob, 'Individual',
+              '45 Civil Lines', 'Prayagraj', '211001', 'Uttar Pradesh', 'India', MA_TPL_C2.mobile, MA_TPL_C2.email, '', '', 'Business', 'Single',
+              '987654321098', 'State Bank of India', 'Civil Lines', 'SBIN0000123', 'Nominee Name', 'Son', 100]]},
+    ar_aum: {head: [pad({0: 'Since inception to ' + d, 10: 'Strategy Set by the client while onboarding', 15: 'Equity MF', 18: 'Debt MF',
+          21: 'Non PP Structured Product', 24: 'Wealth + Portfolio', 29: 'Short Term Portfolio', 32: 'Tax Portfolio'}),
+        ['Client Code', 'Client Full Name', 'Mobile Number', 'Email Address', 'DOB', 'PAN', 'Rm Code', 'Rm Name', 'BDM Name', 'Account Open Date',
+         'Current Wealth', 'Annual Savings', 'Strategy Years', 'WS Equity Allocation Per', 'ARTarget Wealth', 'Equity Investment', 'Equity Current Value',
+         'Equity Xirr', 'Debt Investment Value', 'Debt Current Value', 'Debt Xirr', 'SP Investment', 'SP Current Value', 'SP XIRR', 'WealthPlus Investment',
+         'WealthPlus Current Value', 'WealthPlus XIRR', 'MF Allocation', 'SP Allocation', 'Cash Investment', 'Cash Current Value', 'Cash XIRR',
+         'Tax Investment', 'Tax Current Value', 'Tax XIRR', 'Total Investment', 'Total Current Value', 'Total XIRR', 'SIP Executed last month',
+         'Nach Mandate Status', 'Realized Gain', 'Unrealized Gain', 'Total Portfolio Return', 'App Install Status', 'Last Purchase Date',
+         'Long Term Non AR Equity Holdings Current Value', '% of Total_Portfolio']], bold: [0, 1],
+      data: [['AR10001', MA_TPL_C1.name, MA_TPL_C1.mobile, MA_TPL_C1.email, MA_TPL_C1.dob, MA_TPL_C1.pan, 'RM01', '', 'BDM Name', '10-06-2022',
+              5000000, 600000, 10, 60, 20000000, 1000000, 1300000, 12.5, 500000, 540000, 7.1, 200000, 230000, 9, 0, 0, 0, 70, 30, 10000, 10000, 0,
+              0, 0, 0, 1710000, 2080000, 11.2, 25000, 'Active', 50000, 320000, 21.6, 'Yes', '01-09-2026', 0, 60],
+             ['AR10002', MA_TPL_C2.name, MA_TPL_C2.mobile, MA_TPL_C2.email, MA_TPL_C2.dob, MA_TPL_C2.pan, 'RM01', '', 'BDM Name', '15-01-2023',
+              3000000, 400000, 8, 50, 10000000, 600000, 690000, 10.4, 400000, 424000, 6.8, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0,
+              0, 0, 0, 1000000, 1114000, 9.1, 15000, 'Active', 20000, 94000, 11.4, 'No', '20-08-2026', 0, 40]]},
+    mo_aum: {head: [['Client Name', 'Client Code', 'Sub Broker Code', 'Total AUM', 'Cash', 'Mutual Fund', 'FD', 'Bonds', 'PMS', 'Real Estate', 'AIF', 'PE', 'IAP', 'ledger']],
+      bold: [0],
+      data: [[MA_TPL_C1.name, 'MO10001', 'SB01', 905000, 600000, 200000, 0, 100000, 0, 0, 0, 0, 0, 5000],
+             [MA_TPL_C2.name, 'MO10002', 'SB01', 1540000, 900000, 0, 0, 0, 640000, 0, 0, 0, 0, 0]]},
+    omni_pms: {head: [pad({1: 'Fund Activity Report\nFor the period ' + d + ' To ' + d}), [], [],
+        pad({11: 'Capital IN', 18: 'Capital Out', 22: 'AUM'}),
+        pad({1: 'OFIN Code', 3: 'Client Name', 6: 'Scheme Name', 7: 'Status', 8: 'Date of Investment', 9: 'Distributor', 10: 'Opening NAV',
+          11: 'Initial Investment', 14: 'Additional Investment', 18: 'Capital Withdrawal', 22: 'Closing NAV'}),
+        pad({1: 'OFINCode', 6: 'PMS', 11: 'Cash', 12: 'Stock', 13: 'Total', 14: 'Cash', 15: 'Stock', 16: 'Total', 17: 'Grand Total',
+          18: 'Cash', 19: 'Stock', 20: 'Total'})], bold: [0, 3, 4, 5],
+      data: [pad({1: 'OFIN0001', 3: MA_TPL_C1.name, 6: 'Omni Science Value Strategy', 7: 'Active', 8: '15-01-2025', 9: 'Finowise', 10: 1600000,
+               11: 0, 12: 0, 13: 0, 14: 50000, 15: 0, 16: 50000, 17: 50000, 18: 0, 19: 0, 20: 0, 22: 1650000}),
+             pad({1: 'OFIN0002', 3: MA_TPL_C2.name, 6: 'Omni Science Value Strategy', 7: 'Active', 8: '01-02-2026', 9: 'Finowise', 10: 900000,
+               11: 0, 12: 0, 13: 0, 14: 0, 15: 0, 16: 0, 17: 0, 18: 100000, 19: 0, 20: 100000, 22: 810000})]},
+  };
+  return L[id] || null;
+}
+/* A plain table for a platform with no report layout of its own: one per
+   category, the headings the reader knows, the sample in that category's
+   terms. [heading, type, what it is] */
+const MA_TPL_GENERIC = {
+  MF: {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Mobile', 'mobile'], ['Scheme Name', 'text', 1], ['ISIN', 'isin'], ['Folio No', 'text'],
+      ['Category', 'text'], ['Units', 'num'], ['Avg NAV', 'num'], ['Invested Amount', 'money'], ['Current NAV', 'num'], ['Current Value', 'money', 1], ['XIRR', 'pct']],
+    data: [[MA_TPL_C1.name, MA_TPL_C1.pan, MA_TPL_C1.mobile, 'Parag Parikh Flexi Cap Fund - Direct Growth', 'INF879O01027', '1234567890', 'Equity - Flexi Cap', 1520.35, 65.78, 100000, 82.21, 124990, 15.2],
+           [MA_TPL_C1.name, MA_TPL_C1.pan, MA_TPL_C1.mobile, 'HDFC Corporate Bond Fund - Direct Growth', 'INF179K01XQ0', '1234567891', 'Debt - Corporate Bond', 1650.2, 30.3, 50000, 32.45, 53549, 7.6],
+           [MA_TPL_C2.name, MA_TPL_C2.pan, MA_TPL_C2.mobile, 'SBI Small Cap Fund - Direct Growth', 'INF200K01T51', '9988776655', 'Equity - Small Cap', 410.5, 146.16, 60000, 172.4, 70770, 18.1]]},
+  Stocks: {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Stock Name', 'text', 1], ['ISIN', 'isin'], ['Symbol', 'text'], ['Qty', 'num', 1],
+      ['Avg Price', 'num'], ['Invested Amount', 'money'], ['LTP', 'num'], ['Market Value', 'money', 1]],
+    data: [[MA_TPL_C1.name, MA_TPL_C1.pan, 'Infosys Ltd', 'INE009A01021', 'INFY', 100, 1420.5, 142050, 1503.2, 150320],
+           [MA_TPL_C1.name, MA_TPL_C1.pan, 'HDFC Bank Ltd', 'INE040A01034', 'HDFCBANK', 50, 1560, 78000, 1640.75, 82037.5],
+           [MA_TPL_C2.name, MA_TPL_C2.pan, 'Larsen & Toubro Ltd', 'INE018A01030', 'LT', 25, 3400, 85000, 3766.4, 94160]]},
+  PMS: {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Account No', 'text'], ['Strategy Name', 'text', 1], ['Inception Date', 'date'],
+      ['Invested Amount', 'money', 1], ['Current Value', 'money', 1], ['XIRR', 'pct']],
+    data: [[MA_TPL_C1.name, MA_TPL_C1.pan, 'PMS0001', 'Sample Multi Cap Strategy', '16-04-2025', 5000000, 5420000, 12.4],
+           [MA_TPL_C2.name, MA_TPL_C2.pan, 'PMS0002', 'Sample Factor Income Strategy', '01-10-2025', 2500000, 2561000, 4.9]]},
+  AIF: {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Fund Name', 'text', 1], ['Category', 'text'], ['Investment Date', 'date'],
+      ['Invested Amount', 'money', 1], ['Current Value', 'money', 1], ['XIRR', 'pct']],
+    data: [[MA_TPL_C1.name, MA_TPL_C1.pan, 'Sample Long Short Fund', 'Category III AIF', '10-01-2025', 10000000, 11250000, 13.1],
+           [MA_TPL_C2.name, MA_TPL_C2.pan, 'Sample Private Credit Fund', 'Category II AIF', '20-07-2025', 5000000, 5310000, 9.4]]},
+  Bonds: {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Bond Name', 'text', 1], ['ISIN', 'isin'], ['Qty', 'num'],
+      ['Invested Amount', 'money', 1], ['Current Value', 'money', 1], ['Maturity Date', 'date']],
+    data: [[MA_TPL_C1.name, MA_TPL_C1.pan, '7.91% Sample Finance NCD 2027', 'INE000A07001', 200, 200000, 203400, '07-10-2027'],
+           [MA_TPL_C2.name, MA_TPL_C2.pan, '8.50% Sample Infra Bond 2029', 'INE000B07002', 500, 500000, 498750, '06-03-2029']]},
+  LAS: {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Particulars', 'text', 1], ['Loan Outstanding', 'money', 1], ['Start Date', 'date'], ['End Date', 'date']],
+    data: [[MA_TPL_C1.name, MA_TPL_C1.pan, 'Loan against mutual funds', 350000, '01-04-2026', '31-03-2027'],
+           [MA_TPL_C2.name, MA_TPL_C2.pan, 'Loan against shares', 800000, '15-06-2026', '14-06-2027']]},
+  Other: {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Description', 'text', 1], ['Category', 'text'], ['Invested Amount', 'money'],
+      ['Current Value', 'money', 1], ['Start Date', 'date'], ['Maturity Date', 'date']],
+    data: [[MA_TPL_C1.name, MA_TPL_C1.pan, 'GIFT City US Equity Fund', 'GIFT City', 1000000, 1085000, '05-02-2026', ''],
+           [MA_TPL_C2.name, MA_TPL_C2.pan, 'Sample Fixed Deposit', 'Fixed Deposit', 500000, 518000, '01-01-2026', '01-01-2027']]},
+};
+const MA_TPL_GENERIC_SIP = {cols: [['Client Name', 'name', 1], ['PAN', 'pan'], ['Scheme Name', 'text', 1], ['ISIN', 'isin'], ['Folio No', 'text'],
+    ['SIP Amount', 'money', 1], ['Frequency', 'freq', 1], ['SIP Date', 'day'], ['Start Date', 'date'], ['End Date', 'date'], ['Status', 'status']],
+  data: [[MA_TPL_C1.name, MA_TPL_C1.pan, 'Parag Parikh Flexi Cap Fund - Direct Growth', 'INF879O01027', '1234567890', 5000, 'Monthly', 10, '10-01-2024', '10-12-2099', 'Active'],
+         [MA_TPL_C2.name, MA_TPL_C2.pan, 'SBI Small Cap Fund - Direct Growth', 'INF200K01T51', '9988776655', 3000, 'Monthly', 5, '05-06-2023', '05-05-2028', 'Active']]};
+const MA_TPL_TYPE_NOTE = {
+  name: 'the investor’s full name as the platform has it', pan: '10 characters, five letters, four digits, a letter (ABCDE1234F) — the surest way to match a client',
+  mobile: '10 digits', email: 'an email address', date: 'a date, written DD-MM-YYYY', money: 'rupees, digits only (no ₹ or commas needed)',
+  pct: 'a percentage as a number (12.5 for 12.5%)', int: 'a whole number', num: 'a number', isin: '12 characters (INE… for shares and bonds, INF… for mutual funds)',
+  team: 'the RM’s name exactly as in BOSS › Team Members, or left blank', text: 'text', freq: 'Monthly, Quarterly, Half Yearly, Yearly, Weekly or Daily',
+  day: 'the day of the month the SIP is debited, 1–31', status: 'Active, or Ceased / Cancelled for one that has stopped',
+};
+/* What the template for this platform row and file is: sheets, file name,
+   and the number of sample records the reader should find in it. */
+function maTemplateBook(p, kind, opts){
+  opts = opts || {};
+  const key = maKey(p.product + ' ' + p.name);
+  const kindLabel = MA_KIND_LABEL[kind];
+  const fmtId = opts.layout || (MA_TEMPLATE_KNOWN[key] || {})[kind];
+  const known = fmtId ? maTplKnown(fmtId, opts.asOn) : null;
+  const guide = [[p.name + ' · ' + (MA_PRODUCT_LABEL[p.product] || p.product) + ' · ' + kindLabel + ' upload template']];
+  const say = t => guide.push([t]);
+  let rows, bold, samples;
+  if(known){
+    rows = known.head.concat(known.data); bold = known.bold; samples = known.data.length;
+    const fmt = fmtId === 'nj_folio' ? null : impFormat(fmtId);
+    say('This is laid out exactly as ' + p.name + '’s own ' + (fmt ? fmt.label.replace(/^.*?—\s*/, '') : 'Folio Detail report') + ' is: the same title lines, heading rows and column names. A report downloaded from ' + p.name + ' can be uploaded as it is; this sheet shows the shape it must have.');
+    if(fmt && fmt.note) say(fmt.note);
+    say('');
+    say('THE COLUMNS');
+    if(fmt) fmt.cols.forEach(c=>{
+      const to = impMapFor(fmt.id)[c.src];
+      say(c.src + (c.req ? ' (required)' : '') + ' — ' + (MA_TPL_TYPE_NOTE[c.t] || 'text')
+        + (to ? '' : '. Kept with the upload but not read into BOSS') + (c.review ? '. ' + c.review : ''));
+    });
+    else say('Investor Name, First Holder PAN, First holder DOB, Mobile No, Email, Address, City, Pin code, State and the bank columns fill in the client record. The report carries no values, so it adds no holdings.');
+  } else {
+    const g = kind === 'sip' ? MA_TPL_GENERIC_SIP : (MA_TPL_GENERIC[p.product] || MA_TPL_GENERIC.Other);
+    const title = p.name + ' ' + (MA_PRODUCT_LABEL[p.product] || p.product) + ' ' + (kind === 'sip' ? 'SIP Report' : 'Holdings Report') + ' | As on ' + maTplDate(opts.asOn);
+    rows = [[title], g.cols.map(c=>c[0])].concat(g.data); bold = [0, 1]; samples = g.data.length;
+    if(MA_TEMPLATE_PDF[key]) say(MA_TEMPLATE_PDF[key]);
+    say('BOSS has no report layout of ' + p.name + '’s own for this file, so this is the general ' + (kind === 'sip' ? 'SIP' : MA_PRODUCT_LABEL[p.product] || p.product)
+      + ' table. Any file whose headings read like these is understood — the names below are the surest.');
+    say('');
+    say('THE COLUMNS');
+    g.cols.forEach(c=>say(c[0] + (c[2] ? ' (required)' : '') + ' — ' + MA_TPL_TYPE_NOTE[c[1]]));
+    if(kind !== 'sip' && p.product === MA_LOANS) say('A loan is shown on its own and is never added to AUM.');
+  }
+  say('');
+  say('BEFORE YOU UPLOAD');
+  say('1. Replace the sample rows (Sample Client One, Sample Client Two) with your own. Uploaded as they are, they would be added as two clients.');
+  say('2. Keep the heading rows and column names as they are. Extra columns are kept with the upload but not read.');
+  say('3. Keep the date line at the top ("As on", "Report Date" or "For the period … To") — it is the date the figures are true of, and the upload is filed under it. Or set Data as of on the upload page.');
+  say('4. One row per ' + (kind === 'sip' ? 'SIP registration' : known && fmtId !== 'nj_folio' && impFormat(fmtId) && /AUM/.test(impFormat(fmtId).report) ? 'client account' : 'holding') + '. Clients are matched on PAN first, then name.');
+  say('5. Choose the file in the ' + kindLabel + ' file column of the ' + (MA_PRODUCT_LABEL[p.product] || p.product) + ' · ' + p.name + ' row and press Upload All.');
+  const safe = s => String(s).replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_');
+  return {sheets: [{name: kindLabel + ' data', rows, boldRows: bold, autoWidth: true}, {name: 'How to fill', rows: guide, boldRows: [0]}],
+    file: safe(p.name + ' ' + p.product + ' ' + kindLabel + (fmtId === 'nj_folio' ? ' Folio Detail' : '') + ' template') + '.xlsx', samples, layout: fmtId || 'generic'};
+}
+function maDownloadTemplate(pid, kind, layout){
+  const p = maPlatforms().find(x=>x.id === pid);
+  if(!p) return;
+  const b = maTemplateBook(p, kind, {layout});
+  downloadXlsx(b.sheets, b.file);
 }
 const MA_FORMATS = {'.xlsx': 'xlsx', '.xls': 'xls', '.csv': 'xlsx', '.pdf': 'pdf'};
 async function maReadFile(file, kind, password, strict){
