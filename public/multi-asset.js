@@ -574,6 +574,22 @@ const MaExtract = (function(){
     return {holdings, notes};
   }
 
+  /* Every page's text as pdf.js gives it — each word with where it sits —
+     and as lines of cells, for the readers of statements whose layout is
+     known (MaStatements). */
+  async function pdfPages(buffer, password){
+    const lib = await maLoadPdfJs();
+    const pdf = await lib.getDocument({data: new Uint8Array(buffer), password: password || undefined,
+      isEvalSupported: false}).promise;
+    const pages = [];
+    for(let p = 1; p <= pdf.numPages; p++){
+      const content = await (await pdf.getPage(p)).getTextContent();
+      const items = content.items.filter(it=>it.str && it.str.trim())
+        .map(it=>({text: it.str.trim(), x: it.transform[4], y: it.transform[5], w: it.width, h: Math.abs(it.transform[3]) || 8}));
+      pages.push({items, lines: pageLines(content.items)});
+    }
+    return pages;
+  }
   /* kind: 'aum' (holdings) or 'sip' (SIP registrations). */
   async function extract(file, buffer, format, password, kind, strict){
     P = PROFILES[kind] || PROFILES.aum;
@@ -585,7 +601,7 @@ const MaExtract = (function(){
     return format === 'pdf' ? extractPdf(buffer, password) : extractExcel(file);
   }
   function matchFieldFor(header, kind){ P = PROFILES[kind || 'aum']; CUSTOM = new Map(); return matchField(header); }
-  return {extract, matchField: matchFieldFor, parseNumber, parseDate, inferAssetClass, completeSip, norm,
+  return {extract, pdfPages, matchField: matchFieldFor, parseNumber, parseDate, inferAssetClass, completeSip, norm,
     fields: {aum: AUM_FIELDS, sip: SIP_FIELDS, details: DETAIL_FIELDS}};
 })();
 
@@ -608,6 +624,249 @@ function maLoadPdfJs(){
   });
   return _maPdf;
 }
+
+/* =====================================================================
+   STATEMENTS WHOSE LAYOUT IS KNOWN
+
+   A PMS or advisory statement is a client's portfolio account, not a list
+   of schemes they chose: what they put in is a figure for the whole
+   account (Contribution, Net) and what it is worth is another (Portfolio
+   Value, Current Strategy Value). Read stock by stock, as the general PDF
+   reader does, the account came in with no amount invested — so the
+   review showed its whole value as gain — and without the cash, debt and
+   dividends that are part of its value. On the Ametra factsheet a name
+   that wraps onto two lines also sent each value one stock down.
+
+   So these are read as the platform lays them out: one line per account,
+   with the statement's own invested, value, gain, inception date and
+   returns, and the holdings and sector split kept on that line. The
+   general reader still takes every other PDF.
+   ===================================================================== */
+const MaStatements = (function(){
+  const num = t => MaExtract.parseNumber(t);
+  const isNum = t => /^[(\-−]?[₹]?\s*[\d,]+(\.\d+)?\)?$/.test(String(t || '').trim());
+  const isPct = t => /^-?\d+(\.\d+)?\s*%$/.test(String(t || '').trim());
+  const date = t => { const d = typeof impDate === 'function' ? impDate(String(t || '').trim()) : MaExtract.parseDate(t); return d || null; };
+  const round2 = n => Math.round(n * 100) / 100;
+  const textOf = page => page.lines.map(l=>l.map(c=>c.text).join(' ')).join('\n');
+  /* The cell that matches, and the one after it on the same line. */
+  function cellAfter(page, re, opts){
+    opts = opts || {};
+    for(const line of page.lines){
+      for(let i = 0; i < line.length; i++){
+        const m = re.exec(line[i].text);
+        if(!m) continue;
+        if(opts.x0 !== undefined && line[i].x0 > opts.x0) continue;
+        const inCell = (m[1] || '').trim();
+        if(inCell) return {text: inCell, line, i};
+        for(let j = i + 1; j < line.length; j++){
+          if(opts.before !== undefined && line[j].x0 >= opts.before) break;
+          if(/^\*+$/.test(line[j].text) || (opts.numeric && !isNum(line[j].text))) continue;
+          return {text: line[j].text.replace(/\*+$/, '').trim(), line, i: j};
+        }
+      }
+    }
+    return null;
+  }
+  function joinParts(parts){
+    return parts.reduce((s, p)=>!s ? p : /-$/.test(s) ? s + p : s + ' ' + p, '').replace(/\s+/g, ' ').trim();
+  }
+
+  /* ---- Ametra: one PMS account per page ---- */
+  function ametraPage(page){
+    const txt = textOf(page);
+    if(!/AMETRA INVESTMENT MANAGERS/i.test(txt) || !/Portfolio Summary/i.test(txt)) return null;
+    /* The holdings heading, from the words themselves: Sr. · Security ·
+       Sector, on one line, in the right-hand column. */
+    const secIt = page.items.find(it=>/^Security$/i.test(it.text));
+    const sectorIt = secIt && page.items.filter(it=>/^Sector$/i.test(it.text) && Math.abs(it.y - secIt.y) < 2 && it.x > secIt.x)
+      .sort((a, b)=>a.x - b.x)[0];
+    if(!secIt || !sectorIt) return null;
+    const srIt = page.items.filter(it=>/^Sr\.?$/i.test(it.text) && Math.abs(it.y - secIt.y) < 2 && it.x < secIt.x).sort((a, b)=>b.x - a.x)[0];
+    const split = (srIt ? srIt.x : secIt.x - 18) - 2;
+    const left = {before: split};
+    const field = re => { const c = cellAfter(page, re, left); return c ? c.text : ''; };
+    const account = field(/^Account:\s*(.*)$/i);
+    const parts = account.split(/\s+-\s+/);
+    const accountNo = (parts[0] || '').trim();
+    const code = parts.length > 2 ? parts[parts.length - 1].trim() : '';
+    const name = (parts.length > 2 ? parts.slice(1, -1) : parts.slice(1)).join(' - ').trim();
+    const amount = re => { const c = cellAfter(page, re, Object.assign({numeric: true}, left)); return c ? num(c.text) : null; };
+    const contribution = amount(/^Contribution$/i), withdrawal = amount(/^Withdrawal$/i);
+    const profit = amount(/^Profit\s*\/\s*Loss$/i), value = amount(/^Portfolio Value\b.*$/i);
+    const asOf = date((/As of:\s*([\d\/.\-]+)/i.exec(txt) || [])[1]);
+    /* TWRR: the Portfolio line, then the benchmark's (its name can wrap). */
+    const perf = page.lines.findIndex(l=>l.some(c=>/^Performance\s*\(TWRR\)/i.test(c.text) && c.x0 < split));
+    const pctsOf = l => l.filter(c=>c.x0 < split && (isPct(c.text) || c.text === '-')).map(c=>c.text === '-' ? null : num(c.text));
+    let twrr = null, bench = null;
+    if(perf >= 0){
+      /* The holdings on the right share these lines, so only the left
+         column is read, and a benchmark name that wraps ("NSE Multi Asset"
+         / "Index 2") is put back together from the lines round it. */
+      const leftText = l => l.filter(c=>c.x0 < split && !isPct(c.text) && c.text !== '-').map(c=>c.text);
+      for(let k = perf + 1; k < Math.min(page.lines.length, perf + 30); k++){
+        const l = page.lines[k];
+        if(leftText(l).some(t=>/returns are after/i.test(t))) break;
+        const p = pctsOf(l);
+        if(p.length < 4) continue;
+        const label = joinParts(leftText(l));
+        const v = {m1: p[0], m3: p[1], y1: p[2], sinceInception: p[3]};
+        if(!twrr && /^Portfolio$/i.test(label)){ twrr = v; continue; }
+        if(twrr && !bench){
+          const near = d => { const x = page.lines[k + d]; return x && !pctsOf(x).length ? leftText(x).filter(t=>!/^(1m|3m|1y|since|\d\d\/\d\d\/\d\d)$/i.test(t)) : []; };
+          bench = Object.assign({name: joinParts((label ? [] : near(-1)).concat([label], near(1).length === 1 ? near(1) : []).filter(Boolean))}, v);
+          break;
+        }
+      }
+    }
+    /* Sector allocation: sr · sector · %, a long sector wrapping on to the next line. */
+    const sectors = [];
+    const secHead = page.lines.findIndex(l=>l.some(c=>/^Sector Allocation$/i.test(c.text) && c.x0 < split));
+    if(secHead >= 0){
+      for(let k = secHead + 1; k < page.lines.length; k++){
+        const l = page.lines[k].filter(c=>c.x0 < split);
+        if(!l.length) continue;
+        if(l.some(c=>/^Total$/i.test(c.text))) break;
+        if(l.some(c=>/^Sr\.?$/i.test(c.text))) continue;
+        const pct = l.length && isPct(l[l.length - 1].text) ? num(l[l.length - 1].text) : null;
+        const words = l.filter(c=>!isPct(c.text)).map(c=>c.text).filter((t, i)=>!(i === 0 && /^\d{1,3}$/.test(t)));
+        if(pct !== null) sectors.push({sector: joinParts(words), pct});
+        else if(sectors.length && words.length) sectors[sectors.length - 1].sector = joinParts([sectors[sectors.length - 1].sector].concat(words));
+      }
+    }
+    /* Holdings, from the words themselves. Each line has a serial number
+       printed half-way down its row; the values sit at the top of the row
+       and the name and sector wrap around the middle, so a value is matched
+       to its row by order and a word by the serial nearest it. */
+    const holdings = [];
+    const hy = secIt.y;
+    const right = page.items.filter(it=>it.x >= split - 1 && it.y < hy - 1);
+    const totalIt = right.filter(it=>/^Total$/i.test(it.text)).sort((a, b)=>b.y - a.y)[0];
+    const body = right.filter(it=>!totalIt || it.y > totalIt.y + 1);
+    const xSec = secIt.x, xSector = sectorIt.x;
+    const serials = [], vals = [], pcts = [], words = [];
+    body.forEach(it=>{
+      const t = it.text;
+      if(it.x < xSec - 1 && /^\d{1,3}$/.test(t)) serials.push(it);
+      else if(it.x >= xSector - 1 && isPct(t)) pcts.push(it);
+      else if(it.x >= xSector - 1 && isNum(t)) vals.push(it);
+      else if(it.x < xSec - 1 && /^(\d{1,3})\s+(.+)$/.test(t)){
+        const m = /^(\d{1,3})\s+(.+)$/.exec(t);
+        serials.push(Object.assign({}, it, {text: m[1]}));
+        words.push(Object.assign({}, it, {text: m[2], x: xSec}));
+      }
+      else words.push(it);
+    });
+    const top = (a, b) => b.y - a.y;
+    serials.sort(top); vals.sort(top); pcts.sort(top);
+    serials.forEach((s, i)=>holdings.push({sr: Number(s.text), y: s.y, vy: null, name: [], sector: [], value: null, pct: null}));
+    const nearest = it => holdings.reduce((best, h)=>!best || Math.abs(h.y - it.y) < Math.abs(best.y - it.y) ? h : best, null);
+    if(vals.length === holdings.length) vals.forEach((v, i)=>{ holdings[i].value = num(v.text); holdings[i].vy = v.y; });
+    else vals.forEach(v=>{ const h = nearest(v); if(h && h.value === null){ h.value = num(v.text); h.vy = v.y; } });
+    if(pcts.length === holdings.length) pcts.forEach((v, i)=>{ holdings[i].pct = num(v.text); });
+    /* A sector starts on its row's value line and runs down from there, so a
+       sector word belongs to the last row whose value is at or above it. */
+    const sectorRow = w => {
+      let h = null;
+      holdings.forEach(x=>{ if(x.vy !== null && x.vy >= w.y - 1.5 && (!h || x.vy < h.vy)) h = x; });
+      return h || nearest(w);
+    };
+    words.sort((a, b)=>top(a, b) || a.x - b.x).forEach(w=>{
+      const h = w.x >= xSector - 1 ? sectorRow(w) : nearest(w); if(!h) return;
+      (w.x >= xSector - 1 ? h.sector : h.name).push(w.text);
+    });
+    /* A name printed so close to its sector that the two came as one word
+       ("… 25Mar2028 Fixed Income"): the sector is taken back off the end. */
+    const known = sectors.map(x=>x.sector).filter(Boolean).sort((a, b)=>b.length - a.length);
+    holdings.forEach(h=>{
+      if(h.sector.length) return;
+      const nm = joinParts(h.name);
+      const k = known.find(x=>nm.toLowerCase().endsWith(' ' + x.toLowerCase()));
+      if(k){ h.name = [nm.slice(0, nm.length - k.length).trim()]; h.sector = [k]; }
+    });
+    const list = holdings.map(h=>({sr: h.sr, security: joinParts(h.name), sector: joinParts(h.sector), value: h.value, pct: h.pct}))
+      .filter(h=>h.security || h.value !== null);
+    const strategy = field(/^Strategy:\s*(.*)$/i);
+    if(!accountNo && !name) return null;
+    const invested = contribution !== null ? round2(contribution - (withdrawal || 0)) : null;
+    const gain = value !== null && invested !== null ? round2(value - invested) : profit;
+    return {client_name: name, client_id: accountNo || null, security_name: strategy || 'Ametra PMS', identifier: accountNo || null,
+      category: 'PMS', asset_class: 'PMS', invested, current_value: value, gain_loss: gain,
+      return_pct: invested ? round2(gain / invested * 100) : null, xirr: null,
+      start_date: date(field(/^Inception Date:\s*(.*)$/i)), as_of: asOf,
+      extra: {format: 'ametra_pms', platformClientCode: accountNo, distributorCode: code, strategy,
+        portfolioManager: field(/^Portfolio Manager:\s*(.*)$/i), contribution, withdrawal, profitLoss: profit,
+        twrr, benchmark: bench, sectors, holdings: list,
+        holdingsTotal: round2(list.reduce((n, h)=>n + (h.value || 0), 0))}};
+  }
+  function ametra(pages){
+    if(!pages.some(p=>/AMETRA INVESTMENT MANAGERS/i.test(textOf(p)))) return null;
+    const rows = pages.map(ametraPage).filter(Boolean);
+    if(!rows.length) return null;
+    const notes = ['Read as the Ametra PMS factsheet: ' + rows.length + ' account' + (rows.length === 1 ? '' : 's') + ' ('
+      + rows.map(r=>r.security_name + ' ' + (r.identifier || '')).join(', ') + '), each with what was put in, what it is worth and its holdings'];
+    rows.forEach(r=>{
+      const h = r.extra.holdings;
+      if(h.length && h.some(x=>x.value === null)) notes.push(r.identifier + ': ' + h.filter(x=>x.value === null).length + ' holding(s) without a value');
+    });
+    if(rows[0].as_of) notes.push('as on ' + fmtDate(rows[0].as_of));
+    return {id: 'ametra_pms', label: 'Ametra PMS factsheet', rows, notes};
+  }
+
+  /* ---- PhillipCapital Cosmos: one advisory account ---- */
+  function philip(pages){
+    const all = pages.map(textOf).join('\n');
+    if(!/PhillipCapital|Phillip\s*Capital/i.test(all) || !/Current Strategy Value/i.test(all)) return null;
+    const p1 = pages.find(p=>/Current Strategy Value/i.test(textOf(p)));
+    const f = re => { const c = cellAfter(p1, re); return c ? c.text : ''; };
+    const amt = re => { const c = cellAfter(p1, re, {numeric: true}); return c ? num(c.text) : null; };
+    const name = f(/^Name\s*:?\s*(.*)$/i).replace(/\*+/g, '').trim();
+    const accountNo = f(/^Number\s*:?\s*(.*)$/i).replace(/\*+/g, '').trim();
+    const initial = amt(/^Initial\s*:?$/i), additions = amt(/^Additions\s*:?$/i), withdrawals = amt(/^Withdrawals\s*:?$/i);
+    const net = amt(/^Net\s*:?$/i);
+    const value = amt(/^Current Strategy Value/i), gainStated = amt(/^Total Gain\s*\/\s*Loss/i);
+    const invested = net !== null ? net : (initial !== null ? round2(initial + (additions || 0) - (withdrawals || 0)) : null);
+    const pctAfter = re => { const c = cellAfter(p1, re); return c ? num(String(c.text).replace(/\*/g, '')) : null; };
+    const holdings = [];
+    pages.forEach(p=>p.lines.forEach(l=>{
+      const iIsin = l.findIndex(c=>/^IN[A-Z0-9]{10}$/.test(c.text));
+      if(iIsin < 1) return;
+      const before = l.slice(0, iIsin).map(c=>c.text), after = l.slice(iIsin + 1).map(c=>c.text).filter(isNum);
+      if(after.length < 2) return;
+      let sr = null, symbol = '', scrip = '';
+      if(before.length >= 3){ sr = before[0]; symbol = before[1]; scrip = before.slice(2).join(' '); }
+      else if(before.length === 2){ const m = /^(\d+)\s+(\S+)$/.exec(before[0]); if(m){ sr = m[1]; symbol = m[2]; } else symbol = before[0]; scrip = before[1]; }
+      else scrip = before[0];
+      holdings.push({sr: Number(sr) || null, symbol, scrip, isin: l[iIsin].text, qty: num(after[0]),
+        rate: after.length >= 3 ? num(after[after.length - 2]) : null, value: num(after[after.length - 1])});
+    }));
+    if(!name && !accountNo) return null;
+    const gain = value !== null && invested !== null ? round2(value - invested) : gainStated;
+    const row = {client_name: name, client_id: accountNo || null, security_name: 'COSMOS Investment Advisory', identifier: accountNo || null,
+      category: 'Advisory portfolio', asset_class: 'Equity', invested, current_value: value, gain_loss: gain,
+      return_pct: invested ? round2(gain / invested * 100) : null, xirr: null,
+      start_date: date(f(/^Activation Date\s*:?$/i)), as_of: date(f(/^Report Date\b\s*:?$/i)),
+      extra: {format: 'philip_cosmos', platformClientCode: accountNo, plan: f(/^Plan\s*:?$/i), initial, additions, withdrawals, net,
+        stocksValue: amt(/^Valuation of Stocks$/i), debtValue: amt(/^Value of Debt Instrument$/i), cash: amt(/^Cash$/i),
+        dividend: amt(/^Dividend$/i), gainStated, twrr: pctAfter(/^Portfolio Performance/i),
+        benchmark: f(/^Benchmark\s*:$/i), benchmarkTwrr: pctAfter(/^Benchmark Performance/i), holdings,
+        holdingsTotal: round2(holdings.reduce((n, h)=>n + (h.value || 0), 0))}};
+    const notes = ['Read as the PhillipCapital COSMOS Investment Advisory report for ' + (name || accountNo) + ' (' + accountNo + '): '
+      + money(invested || 0) + ' invested, ' + money(value || 0) + ' current strategy value — ' + holdings.length + ' stocks plus debt, cash and dividends'];
+    if(row.extra.stocksValue !== null && Math.abs(row.extra.holdingsTotal - row.extra.stocksValue) > 1)
+      notes.push('the stock lines add up to ' + money(row.extra.holdingsTotal) + ', not the ' + money(row.extra.stocksValue) + ' the report gives');
+    if(gainStated !== null && gain !== null && Math.abs(gainStated - gain) > 1)
+      notes.push('the report states a gain of ' + money(gainStated) + '; value less net invested is ' + money(gain));
+    if(row.as_of) notes.push('as on ' + fmtDate(row.as_of));
+    return {id: 'philip_cosmos', label: 'PhillipCapital COSMOS report', rows: [row], notes};
+  }
+
+  async function read(buffer, password){
+    const pages = await MaExtract.pdfPages(buffer, password);
+    return ametra(pages) || philip(pages);
+  }
+  return {read};
+})();
 
 /* =====================================================================
    THE PLATFORMS, THE UPLOADS AND THEIR ROWS
@@ -2057,6 +2316,17 @@ async function maReadFile(file, kind, password, strict){
     if(!(h[0] === 0x25 && h[1] === 0x50 && h[2] === 0x44 && h[3] === 0x46)) throw new Error('This does not look like a real .pdf file.');
   }
   let rows = [], notes = [], status;
+  /* A statement whose layout is known is read that way (MaStatements). */
+  if(format === 'pdf' && !strict){
+    let st = null;
+    try { st = await MaStatements.read(buffer.slice(0), password); }
+    catch(e){
+      if(e && e.name === 'PasswordException')
+        throw new Error(password ? 'The PDF password is incorrect.' : 'This PDF is password protected. Enter the PDF password and upload again.');
+      st = null;
+    }
+    if(st) return {buffer, format, rows: st.rows, notes: st.notes, layout: st.id, status: st.rows.length ? 'Processed' : 'Nothing found'};
+  }
   if(format !== 'pdf' && !strict){
     const known = await maKnownLayout(file, kind);
     if(known) return {buffer, format, rows: known.rows, notes: known.notes, layout: known.fmt.id, detailsOnly: !!known.detailsOnly,

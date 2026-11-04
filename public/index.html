@@ -66771,9 +66771,11 @@ function impSheetTable(s){
   if(!pick) return null;
   const band = impBandAt(s.rows, pick.headerAt);
   const headerAt = band ? band.at : pick.headerAt;
-  const rows = s.rows.slice(band ? band.skip : headerAt + 1)
+  let raw = band ? band.headers : (s.rows[headerAt] || []).map(x=>String(x == null ? '' : x).trim());
+  const subs = band ? null : impSubHeadings(raw, s.rows[headerAt + 1]);
+  if(subs) raw = subs;
+  const rows = s.rows.slice(band ? band.skip : headerAt + (subs ? 2 : 1))
     .filter(r=>r.some(x=>String(x == null ? '' : x).trim()));
-  const raw = band ? band.headers : (s.rows[headerAt] || []).map(x=>String(x == null ? '' : x).trim());
   const width = Math.max(raw.length, ...rows.map(r=>r.length), 0);
   while(raw.length < width) raw.push('');
   return {name: s.name, headers: impNameHeaders(raw, rows), rows, headerAt, band: !!band};
@@ -66829,9 +66831,11 @@ async function impReadFile(file){
   const s = pick.s;
   const band = impBandAt(s.rows, pick.headerAt);
   const headerAt = band ? band.at : pick.headerAt;
-  const rows = s.rows.slice(band ? band.skip : headerAt + 1)
+  let raw = band ? band.headers : (s.rows[headerAt] || []).map(x=>String(x==null?'':x).trim());
+  const subs = band ? null : impSubHeadings(raw, s.rows[headerAt + 1]);
+  if(subs) raw = subs;
+  const rows = s.rows.slice(band ? band.skip : headerAt + (subs ? 2 : 1))
     .filter(r=>r.some(x=>String(x==null?'':x).trim()));
-  const raw = band ? band.headers : (s.rows[headerAt] || []).map(x=>String(x==null?'':x).trim());
   /* Pad the header out to the widest row: a column the heading row left
      blank is still a column, and has to be nameable to be mapped. */
   const width = Math.max(raw.length, ...rows.map(r=>r.length), 0);
@@ -66849,16 +66853,48 @@ async function impReadFile(file){
    above the heading are read for one, and it is carried through to the
    snapshot. Nothing is guessed: no "as on" in the file, no date. */
 function impReportAsOn(lines){
-  const re = /as\s*on\s*[:\-]?\s*\(?\s*(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\s\-][A-Za-z]{3,}[\s\-]\d{2,4})/i;
-  for(const row of (lines || [])){
-    for(const cell of (row || [])){
-      const m = String(cell == null ? '' : cell).match(re);
+  /* The ways the firm's platforms write it, strongest first: "As on
+     12-10-2026" (NJ), "Report Date: 30-10-2026" (Finowise), "Since
+     inception to 28-09-2026" (Anand Rathi) and "For the period 27-Sep-2026
+     To 27-Sep-2026" (Omni Science) — the last two are as true as their end
+     date. */
+  const D = '(\\d{1,2}[\\/.\\-]\\d{1,2}[\\/.\\-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[\\s\\-][A-Za-z]{3,}[\\s\\-]\\d{2,4})';
+  const res = [new RegExp('as\\s*on\\s*[:\\-]?\\s*\\(?\\s*' + D, 'i'),
+               new RegExp('(?:report|statement|valuation)\\s*date\\s*[:\\-]?\\s*' + D, 'i'),
+               new RegExp('(?:inception|period[^\\n]*?)\\s+to\\s*[:\\-]?\\s*' + D, 'i')];
+  const cells = [];
+  (lines || []).forEach(row=>(row || []).forEach(cell=>cells.push(String(cell == null ? '' : cell))));
+  for(const re of res){
+    for(const cell of cells){
+      const m = cell.match(re);
       if(!m) continue;
       const d = impDate(m[1]);
       if(d) return d;
     }
   }
   return '';
+}
+/* A heading with a row of sub-headings under it — Omni Science's "Initial
+   Investment" over Cash · Stock · Total, three times across — names each
+   sub-column for both, "Initial Investment Total", so it can be mapped.
+   Only a row made wholly of short labels like those counts, and it is then
+   not read as data. */
+const IMP_SUBHEADS = /^(cash|stock|stocks|total|units?|value|amount|qty|quantity|nav|%|percent|count)$/i;
+function impSubHeadings(raw, next){
+  const cells = (next || []).map(x=>String(x == null ? '' : x).trim());
+  const filled = cells.filter(Boolean);
+  if(filled.filter(x=>IMP_SUBHEADS.test(x)).length < 3) return null;
+  if(filled.some(x=>/\d/.test(x) && !/[A-Za-z]/.test(x))) return null;
+  const out = raw.slice();
+  let parent = '';
+  for(let i = 0; i < Math.max(raw.length, cells.length); i++){
+    const top = String(raw[i] == null ? '' : raw[i]).trim(), sub = cells[i] || '';
+    if(top) parent = top;
+    if(!sub) continue;
+    if(IMP_SUBHEADS.test(sub)) out[i] = (top || parent) ? (top || parent) + ' ' + sub : sub;
+    else if(!top) out[i] = sub;
+  }
+  return out;
 }
 /* =====================================================================
    THE FIVE REPORTS, AND WHERE EVERY COLUMN GOES
@@ -67064,7 +67100,9 @@ const IMPORT_FORMATS = [
 },
 {
   id:'omni_pms', platform:'omni', report:'AUM', label:'Omni Science — PMS Fund Activity Report',
-  note:'One row per client account: the strategy, when it started, and the closing value (AUM).',
+  note:'One row per client account: the strategy, when it started, the money in and out over the '
+     + 'report\u2019s period, and the closing value (AUM). The period is usually a day or a month, so '
+     + 'Capital In is not the amount invested since inception and is not used as it.',
   cols:[
     {src:'OFIN Code',          to:'aum.platformClientCode', t:'text'},
     {src:'Client Name',        to:'client.cmsName',         t:'text', req:1, identity:'name'},
@@ -67073,6 +67111,10 @@ const IMPORT_FORMATS = [
     {src:'Date of Investment', to:'aum.investmentDate',     t:'date'},
     {src:'Distributor',        to:'aum.distributor',        t:'text'},
     {src:'Opening NAV',        to:'aum.openingValue',       t:'money'},
+    {src:'Initial Investment Total',    to:'aum.periodInitial',    t:'money'},
+    {src:'Additional Investment Total', to:'aum.periodAdditional', t:'money'},
+    {src:'Grand Total',                 to:'aum.periodCapitalIn',  t:'money'},
+    {src:'Capital Withdrawal Total',    to:'aum.periodCapitalOut', t:'money'},
     {src:'Closing NAV',        to:'aum.current',            t:'money'},
   ],
 },
