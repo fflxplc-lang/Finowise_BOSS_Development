@@ -3985,8 +3985,37 @@ app.post('/api/public/website-lead', (req, res) => {
     points: Number.isFinite(Number(a && a.points)) ? Number(a.points) : null,
   }));
   if (!answers.length) wrong.push('The FQ answers are missing.');
+  /* Up to three times the client would like to be called, as the LMS's own
+     FQ page takes them: "YYYY-MM-DDTHH:MM" in India time. None is fine —
+     they would rather the RM offered one. */
+  const rawSlots = Array.isArray(b.slots) ? b.slots : [];
+  const slots = [];
+  rawSlots.slice(0, 10).forEach((v) => {
+    const t = String(v || '').trim();
+    if (t && !slots.includes(t)) slots.push(t);
+  });
+  if (slots.length > 3) wrong.push('Please give at most 3 times.');
+  if (slots.some((t) => !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(t) || isNaN(new Date(t + ':00+05:30'))))
+    wrong.push('One of the times is not a complete date and time.');
+  else if (slots.some((t) => new Date(t + ':00+05:30').getTime() <= Date.now()))
+    wrong.push('One of the times has already passed. Please pick times still to come.');
   if (wrong.length) return res.status(400).json({ ok: false, message: wrong.join(' ') });
+  const slotText = (t) => new Date(t + ':00+05:30').toLocaleString('en-IN', { timeZone: 'Asia/Kolkata',
+    weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const timesLine = slots.length ? 'Times they offered: ' + slots.map(slotText).join(' · ')
+    : 'They gave no times — they would like you to offer one.';
 
+  // The website asks the BOSS assessment itself (one bank per age group), so
+  // the result is stored in the same fields an FQ link fills: points of the
+  // maximum, the percentage the client was shown, the category and the
+  // index-wise breakdown.
+  const FQ_STAGE_KEYS = ['FQ_YOUNG', 'FQ_YOUNGMARRIED', 'FQ_MARRIEDCHILD', 'FQ_GOLDEN'];
+  const stageKey = FQ_STAGE_KEYS.includes(String(fq.stage || '')) ? String(fq.stage) : '';
+  const points = Number(fq.points), maxPoints = Number(fq.max);
+  const hasPoints = Number.isFinite(points) && Number.isFinite(maxPoints) && maxPoints > 0 && points >= 0 && points <= maxPoints;
+  const sections = (Array.isArray(fq.sections) ? fq.sections : []).slice(0, 10)
+    .map((x) => ({ name: wlText(x && x.name, 40), score: Number(x && x.score), max: Number(x && x.max) }))
+    .filter((x) => x.name && Number.isFinite(x.score) && Number.isFinite(x.max) && x.max > 0);
   const pillars = {};
   Object.entries(fq.pillars && typeof fq.pillars === 'object' ? fq.pillars : {}).slice(0, 10)
     .forEach(([k, v]) => { if (Number.isFinite(Number(v))) pillars[wlText(k, 40)] = Number(v); });
@@ -3994,16 +4023,30 @@ app.post('/api/public/website-lead', (req, res) => {
   const completed = new Date(fq.completedAt);
   const fqTest = {
     score, band: wlText(fq.band, 40), pillars, answers,
+    stage: stageKey, stageLabel: wlText(fq.stageLabel, 40),
+    points: hasPoints ? points : null, maxPoints: hasPoints ? maxPoints : null, sections,
     completedAt: isNaN(completed) ? now : completed.toISOString(),
     receivedAt: now, consentToConnect: true, consentAt: now,
     referralName, occupation, city,
   };
   const when = new Date(fqTest.completedAt).toLocaleString('en-IN', { timeZone: BUSINESS_TZ });
-  const summary = 'Website FQ Test — score ' + score + '/100' + (fqTest.band ? ' (' + fqTest.band + ')' : '')
+  const summary = 'Website FQ Test — score ' + score + '/100' + (hasPoints ? ' · ' + points + ' of ' + maxPoints + ' points' : '')
+    + (fqTest.band ? ' (' + fqTest.band + ')' : '') + (fqTest.stageLabel ? ' · ' + fqTest.stageLabel : '')
     + ', completed ' + when + '.\nReferral: ' + (referralName || '—') + ' · Occupation: ' + (occupation || '—')
-    + ' · City: ' + city + '\nClient consented to connect with the team.\n'
+    + ' · City: ' + city + '\nClient consented to connect with the team. ' + timesLine + '\n'
     + answers.map((a) => a.no + '. [' + a.pillar + '] ' + a.question + ' → ' + (a.option ? a.option + ') ' : '') + a.answer).join('\n');
 
+  const fqFields = {
+    fqScore: hasPoints ? points : score,
+    fqMaxScore: hasPoints ? maxPoints : 100,
+    fqPercent: score,
+    fqCategory: fqTest.band,
+    fqBand: fqTest.band,
+    fqTestDate: fqTest.completedAt.slice(0, 10),
+    fqAnsweredAt: fqTest.completedAt,
+  };
+  if (sections.length) fqFields.fqSections = sections;
+  if (stageKey) fqFields.fqFormType = stageKey;
   const leads = storeList('leads');
   const existing = leads.find((l) => l && !l.deletedAt
     && String(l.mobile || '').replace(/\D/g, '').slice(-10) === mobile);
@@ -4016,8 +4059,7 @@ app.post('/api/public/website-lead', (req, res) => {
     if (occupation) lead.occupation = occupation;
     if (!lead.branch) lead.branch = websiteLeadBranch(city);
     if (!lead.assignedTo) lead.assignedTo = websiteLeadRm(lead.branch, leads);
-    lead.fqScore = score;
-    lead.fqBand = fqTest.band;
+    Object.assign(lead, fqFields);
     lead.fqTest = fqTest;
     lead.fqHistory = (Array.isArray(lead.fqHistory) ? lead.fqHistory : []).concat([fqTest]).slice(-10);
     lead.consentToConnect = true;
@@ -4034,16 +4076,29 @@ app.post('/api/public/website-lead', (req, res) => {
       source: 'Website', callType: 'Inbound',
       referralName, occupation,
       assignedTo: websiteLeadRm(branch, leads),
-      fqScore: score, fqBand: fqTest.band, fqTest, fqHistory: [fqTest],
+      fqTest, fqHistory: [fqTest],
       consentToConnect: true,
       description: summary,
       status: 'created',
       blueprintHistory: [{ state: 'created', at: now, by: 'Website' }],
       createdAt: now, createdBy: 'Website',
     };
+    Object.assign(lead, fqFields);
     leads.push(lead);
   }
+  lead.meetingRequest = { at: now, slots, note: '', status: 'Open', source: 'Website FQ Test', timesOffered: slots.length };
   putList('leads', leads);
+
+  // The same task the LMS raises when a client asks to meet from their FQ page.
+  if (lead.assignedTo) {
+    const tasks = storeList('tasks');
+    tasks.push({ id: 'DST-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+      taskType: 'Client Meeting Request', leadId: lead.id, assignTo: lead.assignedTo,
+      assignedDate: now.slice(0, 10), dueDate: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+      urgencyLevel: 'High', overallStatus: 'Not Started',
+      description: 'Wants to meet (website FQ test, score ' + score + '/100). ' + timesLine });
+    putList('tasks', tasks);
+  }
 
   const audit = storeList('auditLog');
   audit.push({ id: 'AUD-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
@@ -4057,7 +4112,7 @@ app.post('/api/public/website-lead', (req, res) => {
       id: 'NTF-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
       at: now, userId: lead.assignedTo,
       title: (created ? 'New website lead: ' : 'Website lead took the FQ test again: ') + name,
-      body: 'FQ score ' + score + '/100 · ' + city + (lead.branch ? ' · ' + lead.branch + ' branch' : '') + '. They asked to talk to the team.',
+      body: 'FQ score ' + score + '/100 · ' + city + (lead.branch ? ' · ' + lead.branch + ' branch' : '') + '. They asked to talk to the team. ' + timesLine,
       view: 'lms', arg: lead.id, kind: 'submission', by: 'Website',
     });
     putList('notifications', list);
