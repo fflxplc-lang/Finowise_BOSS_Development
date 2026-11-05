@@ -5303,11 +5303,11 @@ const LMS_FIELDS = [
   {k:'operationsMember',l:'Operations Team Member Name',t:'team'},
   {k:'nextFollowup',l:'Next Follow-up',t:'date'},
   // Filled by the website's FQ test when the client asks to connect
-  // (POST /api/public/website-lead). The full answers are in fqTest and
-  // written out in the notes below.
+  // (POST /api/public/website-lead). The score goes into the usual FQ fields
+  // (fqScore, fqPercent, fqCategory, fqSections); the full answers are in
+  // fqTest and written out in the notes below.
   {k:'referralName',l:'Referral Name',t:'text'},
   {k:'occupation',l:'Occupation',t:'text'},
-  {k:'fqScore',l:'FQ Score (Website)',t:'number',min:0,max:100},
   {k:'description',l:'Description / Notes',t:'textarea'},
 ];
 // Quick-add asks for who the lead is, where they came from, and who owns them.
