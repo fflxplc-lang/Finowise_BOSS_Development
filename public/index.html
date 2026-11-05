@@ -11026,10 +11026,18 @@ function blueprintWidget(module, record, opts){
 /* An inbound call has already happened by the time anyone opens the CRM, so
    "Schedule Warm Up Call" is the wrong thing to offer — it is logged instead. */
 function isInboundWarmCall(module, record, transitionId){
-  return module==='LMS' && transitionId==='fwd_warmUpCallScheduled' && record && record.callType==='Inbound';
+  return module==='LMS' && transitionId==='fwd_warmUpCallScheduled' && record && record.callType==='Inbound'
+    && !isWebsiteLead(record);
+}
+/* A lead from the website's FQ test filled in a form; nobody has spoken to
+   them. They are marked Inbound because they came to us, but there is no
+   call to log — the RM schedules one, and the journey goes on from there. */
+function isWebsiteLead(record){
+  return !!record && /^website$/i.test(String(record.source || '').trim());
 }
 function transitionLabel(module, record, t){
   if(isInboundWarmCall(module, record, t.id)) return 'Log a Call';
+  if(module==='LMS' && t.id==='fwd_warmUpCallScheduled' && isWebsiteLead(record)) return 'Schedule Call';
   return t.label;
 }
 /* Once the client has approved the plan, that version is final: the ways back
@@ -11616,6 +11624,26 @@ async function resendIseqFromStage(leadId){
 function qualifyFqPanelHtml(record, editable){
   const has = record.fqScore!==undefined && record.fqScore!==null;
   const sent = !!record.fqSentAt;
+  /* A score already on the lead — from the website's FQ test, or answered
+     before — is the result qualification waits for, so no assessment is
+     sent again: Qualify is open straight away. Only a lead with no score
+     still needs the test. */
+  if(has && !sent){
+    const from = isWebsiteLead(record) || (record.fqTest && record.fqTest.consentToConnect) ? 'the website\u2019s FQ test' : 'an FQ test already on file';
+    const on = record.fqTestDate || String(record.fqAnsweredAt || '').slice(0, 10);
+    return `<div class="stage-panel" id="fqOnFilePanel">
+      <div class="stage-panel-head"><b>FQ Assessment</b>
+        <span class="badge ok">${esc(record.fqCategory||'Scored')} · ${esc(fqScoreText(record))}</span></div>
+      <div class="fq-score-line"><span class="lbl">FQ Score</span>
+        <b>${esc(fqScoreText(record))}</b>
+        <span class="small-note" style="margin:0">${esc(fqPointsText(record))}</span>
+        <a href="javascript:void(0)" class="cell-link" onclick="openFqDetails('${esc(record.id)}')">More Details \u2192</a></div>
+      <div class="small-note" style="margin:8px 0 0">Already answered through ${from}${on ? ' on ' + esc(fmtDate(on)) : ''}, so
+        there is no assessment to send. Qualify when you are ready \u2014 or Not Qualify.</div>
+      ${editable ? `<div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn sm ghost" onclick="openSendFqModal('LMS','${record.id}','')" title="Only if the answers should be taken again">Send a fresh assessment</button></div>` : ''}
+    </div>`;
+  }
   return `<div class="stage-panel">
     <div class="stage-panel-head"><b>FQ Assessment</b>
       ${has ? `<span class="badge ok">${esc(record.fqCategory||'Scored')} · ${esc(fqScoreText(record))}</span>`
@@ -11651,6 +11679,28 @@ function meetingRequestCard(record, module){
   if(meetingBookedSince(record, m.at)) return '';
   const slots = m.slots || [];
   const when = v => { const d=new Date(v); return isNaN(d.getTime())? v : fmtDate(v)+' · '+clockLabel(String(v).slice(11,16)); };
+  /* A website lead whose call has not been scheduled yet offered times to be
+     called: each one schedules that call, and the journey moves with it. */
+  const asCall = module==='LMS' && isWebsiteLead(record) && stateOf('LMS', record)==='created';
+  if(asCall) return `<div class="card" id="callRequestCard" style="margin-bottom:14px;border-left:4px solid var(--gold)">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
+      <div>
+        <div class="section-title" style="margin-top:0">They asked to be called</div>
+        <div class="small-note" style="margin-top:0">Sent with their FQ result from the website on ${fmtDate(m.at)}. ${
+          slots.length? 'These are the times they offered.' : 'They gave no times \u2014 pick one that suits.'}</div>
+      </div>
+      <button class="btn sm ghost" onclick="dismissMeetingRequest('${esc(record.id)}','${esc(module)}')">Handled elsewhere</button>
+    </div>
+    <div style="display:grid;gap:8px;margin-top:10px">
+      ${slots.map((v,i)=>`<div class="row" style="justify-content:space-between;align-items:center;gap:10px;
+        border:1px solid var(--line);border-radius:10px;padding:9px 12px">
+        <div><b>${esc(when(v))}</b></div>
+        <button class="btn sm primary" onclick="scheduleCallFromRequest('${esc(record.id)}',${i})">Schedule this call</button>
+      </div>`).join('') || `<div class="row" style="justify-content:flex-start;gap:10px">
+        <button class="btn sm primary" onclick="scheduleCallFromRequest('${esc(record.id)}',-1)">Schedule Call</button>
+      </div>`}
+    </div>
+  </div>`;
   return `<div class="card" style="margin-bottom:14px;border-left:4px solid var(--gold)">
     <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
       <div>
@@ -11689,6 +11739,12 @@ function meetingScheduleTransitionFor(module, record){
 }
 /* Picking one of their times opens the ordinary meeting scheduler with that
    date and time already in it — the rest of scheduling is unchanged. */
+function scheduleCallFromRequest(recordId, i){
+  const rec = DB.leads.find(l=>l.id===recordId);
+  const m = rec && rec.meetingRequest; if(!m) return;
+  window._callPrefill = i < 0 ? '' : String((m.slots||[])[i]||'').slice(0,16);
+  openScheduleWarmCallModal('LMS', recordId, 'fwd_warmUpCallScheduled');
+}
 function scheduleFromRequest(recordId, module, i){
   const rec = module==='LMS' ? DB.leads.find(l=>l.id===recordId) : DB.clients.find(c=>c.id===recordId);
   const m = rec && rec.meetingRequest; if(!m) return;
@@ -11716,12 +11772,12 @@ function meetingBookedSince(record, askedAt){
 /* Booking a meeting is an answer to the ask, so the ask is closed with it
    and the chase-up task comes off the tracker. Called wherever a meeting is
    created, rather than only where one of their own times was picked. */
-async function closeMeetingRequestOnBooking(module, record){
+async function closeMeetingRequestOnBooking(module, record, via){
   if(!record || !record.meetingRequest || record.meetingRequest.status !== 'Open') return;
   record.meetingRequest.status = 'Handled';
   record.meetingRequest.handledAt = new Date().toISOString();
   record.meetingRequest.handledBy = currentUser;
-  record.meetingRequest.handledVia = 'A meeting was scheduled';
+  record.meetingRequest.handledVia = via || 'A meeting was scheduled';
   await save(module==='LMS' ? 'leads' : 'clients');
   if(module==='LMS') await completeLeadDST(record.id, FQ_MEET_TASK);
   else if(module==='CMS') await completeClientDST(record.id, FQ_MEET_TASK);
@@ -14109,13 +14165,20 @@ function openScheduleWarmCallModal(module, recordId, transitionId){
   if(!record) return;
   const who = ((record.firstName||'')+' '+(record.lastName||'')).trim();
   const cats = cfgLabels('calls.categories');
-  openModal('Schedule Warm Up Call', `
-    <p style="color:var(--muted);font-size:13px;margin-top:0">With <b>${esc(who)}</b>. This is logged in <b>Call Logs</b>, not Meetings.</p>
+  /* A time picked from the ones a website lead offered comes in filled. */
+  const pre = String(window._callPrefill || ''); window._callPrefill = '';
+  const web = isWebsiteLead(record);
+  const types = cfgLabels('calls.types');
+  // The RM rings a website lead, so it is an outgoing call.
+  const typeSel = web && types.indexOf('Outbound') >= 0 ? 'Outbound' : record.callType;
+  openModal(web ? 'Schedule Call' : 'Schedule Warm Up Call', `
+    <p style="color:var(--muted);font-size:13px;margin-top:0">With <b>${esc(who)}</b>. This is logged in <b>Call Logs</b>, not Meetings.${
+      web ? ' They came in through the website\u2019s FQ test' + (record.fqScore!==undefined && record.fqScore!==null ? ' (FQ ' + esc(fqScoreText(record)) + ')' : '') + '.' : ''}</p>
     <div class="field-grid">
-      <div class="field"><label>Date <span class="req">*</span></label><input type="date" id="f_wcDate" value="${esc(record.meetingDate||new Date().toISOString().slice(0,10))}"></div>
-      <div class="field"><label>Start Time <span class="req">*</span></label><input type="time" id="f_wcTime"></div>
+      <div class="field"><label>Date <span class="req">*</span></label><input type="date" id="f_wcDate" value="${esc(pre ? pre.slice(0,10) : (record.meetingDate||new Date().toISOString().slice(0,10)))}"></div>
+      <div class="field"><label>Start Time <span class="req">*</span></label><input type="time" id="f_wcTime" value="${esc(pre ? pre.slice(11,16) : '')}"></div>
       <div class="field"><label>Call Type</label>
-        <select id="f_wcType">${cfgLabels('calls.types').map(t=>`<option value="${esc(t)}" ${record.callType===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>
+        <select id="f_wcType">${types.map(t=>`<option value="${esc(t)}" ${typeSel===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>
       <div class="field"><label>Call Category</label>
         <select id="f_wcCategory">${cats.map(t=>`<option value="${esc(t)}" ${t===WARM_CALL_CATEGORY?'selected':''}>${esc(t)}</option>`).join('')}</select></div>
     </div>
@@ -14154,6 +14217,9 @@ async function submitScheduleWarmCall(recordId, transitionId){
   // Nothing is emailed: a warm-up call is a call the adviser makes, and an
   // invitation to it only confuses the person who is about to be rung.
   closeModal();
+  /* A website lead asked to be called: a call in the diary answers that,
+     so the request closes and its chase-up task comes off the tracker. */
+  if(isWebsiteLead(record)) await closeMeetingRequestOnBooking('LMS', record, 'A call was scheduled');
   await doTransition('LMS', recordId, transitionId);
 }
 /* Completing the call updates the same entry rather than writing a second one.
