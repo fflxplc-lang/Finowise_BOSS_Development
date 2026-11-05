@@ -55,29 +55,68 @@ suite(async t => {
     return 'Schedule Call on the stage bar and the Move link · two offered times, each "Schedule this call"';
   });
 
-  await t.step('picking one of their times schedules that call, and the lead moves to Warm Up Call Scheduled', async () => {
+  await t.step('picking one of their times opens the full scheduler, and the lead moves to Warm Up Call Scheduled', async () => {
     const r = await t.eval(async a => {
       const b = Array.from(document.querySelectorAll('#callRequestCard .btn')).filter(x => /Schedule this call/.test(x.textContent))[0];
-      b.click(); await new Promise(r => setTimeout(r, 200));
+      b.click(); await new Promise(r => setTimeout(r, 300));
       const title = (document.querySelector('.modal-head, .modal h3, .modal-title') || {}).textContent || '';
-      const form = {title: title.trim(), date: document.getElementById('f_wcDate').value, time: document.getElementById('f_wcTime').value,
-        type: document.getElementById('f_wcType').value};
-      await submitScheduleWarmCall(a.id, 'fwd_warmUpCallScheduled');
-      await new Promise(r => setTimeout(r, 200));
+      const plat = document.getElementById('f_schedPlatform');
+      const offline = Array.from(plat.options).map(o => o.value).find(v => meetingIsOffline(v));
+      plat.value = offline; plat.dispatchEvent(new Event('change'));
+      document.getElementById('f_sendEmail').checked = false;
+      document.getElementById('f_schedAgenda').value = 'Go over the FQ result';
+      const form = {title: title.trim(), when: document.getElementById('f_schedWhen').value, type: document.getElementById('f_schedMeetingType').value,
+        fields: ['f_schedPlatform', 'f_schedWhen', 'f_schedAgenda', 'f_schedAttendee'].every(id => !!document.getElementById(id))};
+      await submitScheduleMeeting('LMS', a.id, 'fwd_warmUpCallScheduled');
+      await new Promise(r => setTimeout(r, 300));
       const lead = DB.leads.find(l => l.id === a.id);
       const call = (DB.callEntries || []).find(c => c.leadId === a.id && !c.deletedAt);
+      const mtg = (DB.meetings || []).find(m => m.linkedRecordId === a.id && !m.deletedAt);
       return {form, stage: stateOf('LMS', lead), request: lead.meetingRequest && lead.meetingRequest.status,
-        via: lead.meetingRequest && lead.meetingRequest.handledVia, call: call && {date: call.callDate, time: call.startTime, type: call.callType}};
+        via: lead.meetingRequest && lead.meetingRequest.handledVia, call: call && {date: call.callDate, time: call.startTime, type: call.callType, meetingId: call.meetingId},
+        mtg: mtg && {id: mtg.id, status: mtg.status, agenda: mtg.agenda}};
     }, {id: ids.one});
-    if(!/Schedule Call/.test(r.form.title)) throw new Error('the box is "' + r.form.title + '"');
-    if(r.form.date + 'T' + r.form.time !== slotA) throw new Error('not filled with their time: ' + JSON.stringify(r.form) + ' vs ' + slotA);
-    if(r.form.type !== 'Outbound') throw new Error('call type ' + r.form.type);
+    if(!/^Schedule: Call\b/.test(r.form.title)) throw new Error('the box is "' + r.form.title + '"');
+    if(!r.form.fields) throw new Error('not the full scheduler');
+    if(r.form.when !== slotA) throw new Error('not filled with their time: ' + r.form.when + ' vs ' + slotA);
+    if(!/^Warm Up Call with ZZ Website One$/.test(r.form.type)) throw new Error('meeting type ' + r.form.type);
     if(r.stage !== 'warmUpCallScheduled') throw new Error('the lead stands at ' + r.stage);
-    if(!r.call || r.call.date + 'T' + r.call.time !== slotA) throw new Error('call logged as ' + JSON.stringify(r.call));
+    if(!r.call || r.call.date + 'T' + r.call.time !== slotA || r.call.type !== 'Outbound') throw new Error('call logged as ' + JSON.stringify(r.call));
+    if(!r.mtg || r.call.meetingId !== r.mtg.id || r.mtg.agenda !== 'Go over the FQ result') throw new Error('meeting ' + JSON.stringify(r.mtg));
     if(r.request !== 'Handled' || r.via !== 'A call was scheduled') throw new Error('request ' + r.request + ' / ' + r.via);
     const s = await stageButtons(ids.one);
     if(s.card) throw new Error('the request card is still up');
-    return 'the call at ' + slotA.replace('T', ' ') + ' (outgoing) in Call Logs · lead at Warm Up Call Scheduled · request closed';
+    return '"Schedule: Call" with platform, agenda, attendees · the call at ' + slotA.replace('T', ' ') + ' in Call Logs and Meetings · request closed';
+  });
+
+  await t.step('completing the call closes its meeting and goes straight on to booking the warm-up meeting', async () => {
+    const r = await t.eval(async id => {
+      openCompleteWarmCallModal('LMS', id, 'fwd_warmUpCallDone');
+      await new Promise(r => setTimeout(r, 200));
+      document.getElementById('f_wcdDescription').value = 'Spoke about their goals';
+      await submitCompleteWarmCall(id, 'fwd_warmUpCallDone');
+      await new Promise(r => setTimeout(r, 300));
+      const call = DB.callEntries.find(c => c.leadId === id && !c.deletedAt);
+      const mtg = DB.meetings.find(m => m.id === call.meetingId);
+      const box = (document.querySelector('.modal') || {}).innerText || '';
+      const out = {after: stateOf('LMS', DB.leads.find(l => l.id === id)), calls: DB.callEntries.filter(c => c.leadId === id && !c.deletedAt).length,
+        mtg: mtg && mtg.status, box: box.split('\n')[0], when: !!document.getElementById('f_schedWhen')};
+      if(out.when){
+        const ist = new Date(Date.now() + 3 * 86400000 + 5.5 * 3600e3).toISOString().slice(0, 11) + '15:00';
+        document.getElementById('f_schedWhen').value = ist;
+        const plat = document.getElementById('f_schedPlatform');
+        plat.value = Array.from(plat.options).map(o => o.value).find(v => meetingIsOffline(v)); plat.dispatchEvent(new Event('change'));
+        document.getElementById('f_sendEmail').checked = false;
+        await submitScheduleMeeting('LMS', id, 'fwd_warmUpMeetingScheduled');
+        await new Promise(r => setTimeout(r, 300));
+      }
+      out.final = stateOf('LMS', DB.leads.find(l => l.id === id));
+      return out;
+    }, ids.one);
+    if(r.after !== 'warmUpCallDone' || r.calls !== 1 || r.mtg !== 'Completed') throw new Error(JSON.stringify(r));
+    if(!r.when || !/Schedule: Warm Up Meeting/.test(r.box)) throw new Error('the meeting scheduler did not open: ' + r.box);
+    if(r.final !== 'warmUpMeetingScheduled') throw new Error('after booking, the lead stands at ' + r.final);
+    return 'call done (its meeting Completed) → "' + r.box + '" opens → Warm Up Meeting Scheduled';
   });
 
   await t.step('Schedule Call on the stage bar opens the call scheduler too', async () => {
@@ -87,12 +126,12 @@ suite(async t => {
       navigate('lms', id); await new Promise(r => setTimeout(r, 250));
       const b = Array.from(document.querySelectorAll('#content .btn')).find(x => x.textContent.trim() === 'Schedule Call');
       b.click(); await new Promise(r => setTimeout(r, 200));
-      const box = !!document.getElementById('f_wcDate'), logBox = /Log/.test(((document.querySelector('.modal') || {}).innerText || '').split('\n')[0]);
+      const box = !!document.getElementById('f_schedWhen') && /Schedule: Call/.test((document.querySelector('.modal') || {}).innerText || ''), logBox = /Log a Call/.test(((document.querySelector('.modal') || {}).innerText || '').split('\n')[0]);
       closeModal();
       return {box, logBox};
     }, ids.two);
     if(!s.box || s.logBox) throw new Error(JSON.stringify(s));
-    return 'Schedule Call → the call scheduler';
+    return 'Schedule Call → "Schedule: Call", the full scheduler';
   });
 
   await t.step('an inbound phone lead still logs its call, as before', async () => {
@@ -111,7 +150,7 @@ suite(async t => {
 
   await t.step('at qualification the score is on file, no assessment is asked for, and Qualify moves the lead on', async () => {
     await t.eval(async id => {
-      for(const tid of ['fwd_warmUpCallDone', 'fwd_warmUpMeetingScheduled', 'fwd_warmUpMeetingDone', 'fwd_readyToQualify']){
+      for(const tid of ['fwd_warmUpMeetingDone', 'fwd_readyToQualify']){
         await doTransition('LMS', id, tid); closeModal();
       }
     }, ids.one);

@@ -13723,14 +13723,17 @@ function openScheduleMeetingModal(module, recordId, transitionId){
   if(!record) return;
   const t = getBlueprint(module).transitions.find(x=>x.id===transitionId);
   const who = module==='LMS' ? ((record.firstName||'')+' '+(record.lastName||'')).trim() : clientName(record.clientId);
-  const autoType = autoMeetingType(module, record, transitionId);
+  const autoType = (module==='LMS' && transitionId==='fwd_warmUpCallScheduled' && isWebsiteLead(record))
+    ? 'Warm Up Call' + (((record.firstName||'')+' '+(record.lastName||'')).trim() ? ' with ' + ((record.firstName||'')+' '+(record.lastName||'')).trim() : '')
+    : autoMeetingType(module, record, transitionId);
   const defaultPlatform = defaultMeetingPlatform(record);
   const email = module==='LMS' ? (record.email||'') : ((DB.clients.find(c=>c.id===record.clientId)||{}).email||'');
   // Whoever was named at Mode of Meeting is coming, so they are invited.
   const colleagues = module==='RMS' ? rmsMeetingWith(record) : [];
   const colleagueEmails = colleagues
     .map(id=>((DB.team.find(t=>t.id===id)||{}).email||'').trim()).filter(Boolean).join(', ');
-  openModal('Schedule: '+meetingKindLabel(module, record, transitionId), `
+  const webCall = module==='LMS' && transitionId==='fwd_warmUpCallScheduled' && isWebsiteLead(record);
+  openModal('Schedule: '+(webCall ? 'Call' : meetingKindLabel(module, record, transitionId)), `
     <p style="color:var(--muted);font-size:13px;margin-top:0">With <b>${esc(who)}</b></p>
     <div class="field"><label>Meeting Type</label><input type="text" id="f_schedMeetingType" value="${esc(autoType)}" placeholder="e.g. Portfolio Review, Onboarding Discussion"></div>
     <div class="field"><label>Platform</label>
@@ -13857,8 +13860,27 @@ async function submitScheduleMeeting(module, recordId, transitionId){
   }
   DB.meetings.push(meeting);
   await save('meetings');
+  /* The warm-up call booked on this form is a call too: it goes in Call Logs
+     with the meeting beside it, and completing the call closes both. */
+  if(module==='LMS' && transitionId==='fwd_warmUpCallScheduled'){
+    const existing = warmCallEntryFor(recordId);
+    const types = cfgLabels('calls.types');
+    const data = {subject: 'Warm Up Call \u2014 ' + (who || ''), leadId: recordId, clientId: null,
+      callType: types.indexOf('Outbound') >= 0 ? 'Outbound' : (record.callType || ''), callCategory: WARM_CALL_CATEGORY,
+      status: callScheduledStatus(), callDate: date, startTime: time, duration: '',
+      description: [agenda, notes].filter(Boolean).join('\n'), branch: record.branch || '', sourceModule: 'LMS', sourceRecordId: recordId,
+      sourceTransition: 'fwd_warmUpCallScheduled', meetingId: meeting.id, platform, meetingLink};
+    if(existing) Object.assign(existing, data, {updatedAt: new Date().toISOString()});
+    else DB.callEntries.push(Object.assign({id: uid('CALL'), createdAt: new Date().toISOString(), loggedBy: currentUser}, data));
+    await save('callEntries');
+    meeting.callEntryId = (existing || DB.callEntries[DB.callEntries.length - 1]).id;
+    await save('meetings');
+    await logAudit('LMS', recordId, 'Warm Call Scheduled', [
+      {field:'When', oldValue:'', newValue: fmtDate(date) + ' ' + time}, {field:'Platform', oldValue:'', newValue: platform},
+      {field:'Logged in', oldValue:'', newValue:'Call Logs and Meetings'}]);
+  }
   // Whatever they asked for, they have now been given a time.
-  await closeMeetingRequestOnBooking(module, record);
+  await closeMeetingRequestOnBooking(module, record, transitionId==='fwd_warmUpCallScheduled' ? 'A call was scheduled' : undefined);
   dwtPointAt(date);   // the planner opens on the week this meeting is in
   if(channels.length){
     await logAudit(module, recordId, 'Meeting Invitation Requested', [
@@ -14163,6 +14185,14 @@ async function submitLogWarmCall(recordId, transitionId){
 function openScheduleWarmCallModal(module, recordId, transitionId){
   const record = DB.leads.find(r=>r.id===recordId);
   if(!record) return;
+  /* A website lead's call is booked on the full scheduler — platform and
+     its link, date and time, agenda, attendees and the invitation — the
+     same form meetings use. Saving it also writes the Call Logs entry, so
+     Complete Warm Up Call finds the call as it always has. */
+  if(isWebsiteLead(record)){
+    window._meetingPrefill = String(window._callPrefill || ''); window._callPrefill = '';
+    return openScheduleMeetingModal('LMS', recordId, transitionId);
+  }
   const who = ((record.firstName||'')+' '+(record.lastName||'')).trim();
   const cats = cfgLabels('calls.categories');
   /* A time picked from the ones a website lead offered comes in filled. */
@@ -14302,6 +14332,13 @@ async function submitCompleteWarmCall(recordId, transitionId){
   }
   Object.assign(entry, {status:done, duration, description, callType, recording, updatedAt:new Date().toISOString()});
   record.callType = callType;
+  /* A call booked on the meeting scheduler has its meeting beside it, and
+     the call being done is the meeting being done. */
+  const callMeeting = entry.meetingId && (DB.meetings || []).find(m=>m.id===entry.meetingId && !m.deletedAt);
+  if(callMeeting && callMeeting.status !== 'Completed'){
+    callMeeting.status = 'Completed'; callMeeting.updatedAt = new Date().toISOString(); callMeeting.updatedBy = currentUser;
+    await save('meetings');
+  }
   if(ageRaw!=='') record.age = age;
   await save('callEntries'); await save('leads');
   await logAudit('LMS', recordId, 'Warm Call Completed', [
@@ -14310,6 +14347,13 @@ async function submitCompleteWarmCall(recordId, transitionId){
     {field:'Evidence', oldValue:'', newValue: recording? 'Voice recording' : 'Description'}]);
   closeModal();
   await doTransition('LMS', recordId, transitionId);
+  /* A website lead goes from the call straight on to booking the warm-up
+     meeting: the scheduler opens at once, and saving it moves the lead to
+     Warm Up Meeting Scheduled. Closed instead, the lead waits at Warm Up
+     Call Completed with Schedule and Skip, as any other lead does. */
+  if(isWebsiteLead(record) && stateOf('LMS', record)==='warmUpCallDone'
+     && availableTransitions('LMS', 'warmUpCallDone', 'forward', record).some(x=>x.id==='fwd_warmUpMeetingScheduled'))
+    openScheduleMeetingModal('LMS', recordId, 'fwd_warmUpMeetingScheduled');
 }
 /* One-time move of warm calls that were written as meetings before this
    change. Each becomes a call entry carrying the same date, time, owner and
