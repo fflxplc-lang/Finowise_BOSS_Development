@@ -3868,6 +3868,204 @@ app.post('/api/public/mail', (req, res) => {
   sendMailRequest(req.body || {}, res, publicMailTargets(scope));
 });
 
+/* =====================================================================
+   WEBSITE FQ LEADS — the public "Know Your FQ Score" test on the
+   Finowise website.
+
+   The client takes the test on the website and is asked, after seeing
+   their score, whether they want to talk to the team. Only on "Yes"
+   does the website post here. One lead per client: the mobile number is
+   the key, so a client who takes the test twice updates the lead they
+   already have instead of making a second one.
+
+   Where it lands:
+     branch  the client's city, matched (ignoring case) against the
+             branches in Settings › Branches, or against an explicit
+             city → branch table in config.websiteLeadCityBranches
+             ({"Navi Mumbai":"Mumbai", ...}). A city that matches neither
+             goes to config.websiteLeadDefaultBranch, or no branch.
+     RM      an active team member in that branch whose role or
+             designation reads as a Relationship Manager; of those, the
+             one holding the fewest open leads. No RM in the branch → the
+             lead is left unassigned and shows in the branch's
+             "unowned leads" count.
+
+   The browser posting here is a stranger, so: the origin is checked
+   against WEBSITE_LEAD_ORIGINS (comma-separated; unset = any origin),
+   every field is trimmed and bounded, and one address may post only a
+   handful of times a minute.
+   ===================================================================== */
+const WEBSITE_LEAD_ORIGINS = String(process.env.WEBSITE_LEAD_ORIGINS || '')
+  .split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean);
+const websiteLeadHits = new Map();
+function websiteLeadCors(req, res) {
+  const origin = String(req.headers.origin || '').replace(/\/+$/, '');
+  const allowed = !WEBSITE_LEAD_ORIGINS.length || (origin && WEBSITE_LEAD_ORIGINS.includes(origin));
+  if (origin && allowed) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.set('Access-Control-Max-Age', '600');
+  }
+  return allowed;
+}
+function websiteLeadThrottled(req) {
+  const ip = callerIp(req), now = Date.now();
+  const hits = (websiteLeadHits.get(ip) || []).filter((t) => now - t < 60 * 1000);
+  hits.push(now);
+  websiteLeadHits.set(ip, hits);
+  if (websiteLeadHits.size > 5000) websiteLeadHits.clear();
+  return hits.length > 6;
+}
+function wlText(v, max) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max || 120); }
+function websiteLeadBranch(city) {
+  const cfg = storeValue('config', {}) || {};
+  const c = wlText(city).toLowerCase();
+  const branches = Array.isArray(cfg.branches) ? cfg.branches : [];
+  if (c) {
+    const map = cfg.websiteLeadCityBranches && typeof cfg.websiteLeadCityBranches === 'object' ? cfg.websiteLeadCityBranches : {};
+    const mapped = Object.keys(map).find((k) => k.trim().toLowerCase() === c);
+    if (mapped && map[mapped]) return String(map[mapped]);
+    const same = branches.find((b) => String(b).trim().toLowerCase() === c);
+    if (same) return same;
+  }
+  return cfg.websiteLeadDefaultBranch ? String(cfg.websiteLeadDefaultBranch) : '';
+}
+const WEBSITE_RM_RE = /relationship|\brm\b|wealth manager|advis[eo]r/i;
+function websiteLeadRm(branch, leads) {
+  if (!branch) return '';
+  const b = branch.toLowerCase();
+  const rms = storeList('team').filter((t) => t && t.id && !t.deletedAt
+    && !/inactive|left|disabled|deactivated/i.test(String(t.status || 'Active'))
+    && String(t.branch || '').trim().toLowerCase() === b
+    && WEBSITE_RM_RE.test(String(t.role || '') + ' ' + String(t.designation || '')));
+  if (!rms.length) return '';
+  const open = (id) => leads.filter((l) => l && l.assignedTo === id && !l.deletedAt && !l.convertedToClientId).length;
+  rms.sort((x, y) => open(x.id) - open(y.id) || String(x.id).localeCompare(String(y.id)));
+  return rms[0].id;
+}
+function websiteLeadId() {
+  return 'LMS-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4);
+}
+
+app.options('/api/public/website-lead', (req, res) => {
+  if (!websiteLeadCors(req, res)) return res.status(403).end();
+  res.status(204).end();
+});
+app.post('/api/public/website-lead', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!websiteLeadCors(req, res)) return res.status(403).json({ ok: false, message: 'This website is not allowed to send leads.' });
+  if (websiteLeadThrottled(req)) return res.status(429).json({ ok: false, message: 'Too many requests. Please try again in a minute.' });
+  const b = req.body || {};
+  if (b.consent !== true) return res.status(400).json({ ok: false, message: 'Consent to connect is required.' });
+
+  const name = wlText(b.name, 80);
+  const digits = String(b.mobile || '').replace(/\D/g, '');
+  const mobile = digits.slice(-10);
+  const email = wlText(b.email, 120);
+  const city = wlText(b.city, 60);
+  const referralName = wlText(b.referralName, 80);
+  const occupation = wlText(b.occupation, 60);
+  const wrong = [];
+  if (name.length < 2) wrong.push('Please enter your full name.');
+  if (!/^[6-9]\d{9}$/.test(mobile)) wrong.push('Please enter a valid 10-digit mobile number.');
+  if (email && !ADDRESS_RE.test(email)) wrong.push('Please enter a valid email.');
+  if (!city) wrong.push('Please enter your city.');
+
+  const fq = b.fq && typeof b.fq === 'object' ? b.fq : {};
+  const score = Number(fq.score);
+  if (!Number.isFinite(score) || score < 0 || score > 100) wrong.push('The FQ score is missing.');
+  const answers = (Array.isArray(fq.answers) ? fq.answers : []).slice(0, 50).map((a, i) => ({
+    no: i + 1,
+    pillar: wlText(a && a.pillar, 40),
+    question: wlText(a && a.question, 300),
+    answer: wlText(a && a.answer, 300),
+    option: wlText(a && a.option, 2),
+    points: Number.isFinite(Number(a && a.points)) ? Number(a.points) : null,
+  }));
+  if (!answers.length) wrong.push('The FQ answers are missing.');
+  if (wrong.length) return res.status(400).json({ ok: false, message: wrong.join(' ') });
+
+  const pillars = {};
+  Object.entries(fq.pillars && typeof fq.pillars === 'object' ? fq.pillars : {}).slice(0, 10)
+    .forEach(([k, v]) => { if (Number.isFinite(Number(v))) pillars[wlText(k, 40)] = Number(v); });
+  const now = new Date().toISOString();
+  const completed = new Date(fq.completedAt);
+  const fqTest = {
+    score, band: wlText(fq.band, 40), pillars, answers,
+    completedAt: isNaN(completed) ? now : completed.toISOString(),
+    receivedAt: now, consentToConnect: true, consentAt: now,
+    referralName, occupation, city,
+  };
+  const when = new Date(fqTest.completedAt).toLocaleString('en-IN', { timeZone: BUSINESS_TZ });
+  const summary = 'Website FQ Test — score ' + score + '/100' + (fqTest.band ? ' (' + fqTest.band + ')' : '')
+    + ', completed ' + when + '.\nReferral: ' + (referralName || '—') + ' · Occupation: ' + (occupation || '—')
+    + ' · City: ' + city + '\nClient consented to connect with the team.\n'
+    + answers.map((a) => a.no + '. [' + a.pillar + '] ' + a.question + ' → ' + (a.option ? a.option + ') ' : '') + a.answer).join('\n');
+
+  const leads = storeList('leads');
+  const existing = leads.find((l) => l && !l.deletedAt
+    && String(l.mobile || '').replace(/\D/g, '').slice(-10) === mobile);
+  let lead, created = false;
+  if (existing) {
+    lead = existing;
+    if (!lead.email && email) lead.email = email;
+    if (!lead.city) lead.city = city;
+    if (referralName) lead.referralName = referralName;
+    if (occupation) lead.occupation = occupation;
+    if (!lead.branch) lead.branch = websiteLeadBranch(city);
+    if (!lead.assignedTo) lead.assignedTo = websiteLeadRm(lead.branch, leads);
+    lead.fqScore = score;
+    lead.fqBand = fqTest.band;
+    lead.fqTest = fqTest;
+    lead.fqHistory = (Array.isArray(lead.fqHistory) ? lead.fqHistory : []).concat([fqTest]).slice(-10);
+    lead.consentToConnect = true;
+    lead.description = (lead.description ? lead.description + '\n\n' : '') + summary;
+    lead.updatedAt = now;
+  } else {
+    created = true;
+    const parts = name.split(' ');
+    const branch = websiteLeadBranch(city);
+    lead = {
+      id: websiteLeadId(),
+      firstName: parts[0], lastName: parts.slice(1).join(' '),
+      mobile, email, city, branch,
+      source: 'Website', callType: 'Inbound',
+      referralName, occupation,
+      assignedTo: websiteLeadRm(branch, leads),
+      fqScore: score, fqBand: fqTest.band, fqTest, fqHistory: [fqTest],
+      consentToConnect: true,
+      description: summary,
+      status: 'created',
+      blueprintHistory: [{ state: 'created', at: now, by: 'Website' }],
+      createdAt: now, createdBy: 'Website',
+    };
+    leads.push(lead);
+  }
+  putList('leads', leads);
+
+  const audit = storeList('auditLog');
+  audit.push({ id: 'AUD-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+    at: now, by: 'Website', module: 'LMS', recordId: lead.id, action: created ? 'Create' : 'Edit',
+    details: [{ field: 'FQ Score (website)', oldValue: '', newValue: String(score) }] });
+  putList('auditLog', audit);
+
+  if (lead.assignedTo) {
+    const list = storeList('notifications');
+    list.push({
+      id: 'NTF-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+      at: now, userId: lead.assignedTo,
+      title: (created ? 'New website lead: ' : 'Website lead took the FQ test again: ') + name,
+      body: 'FQ score ' + score + '/100 · ' + city + (lead.branch ? ' · ' + lead.branch + ' branch' : '') + '. They asked to talk to the team.',
+      view: 'lms', arg: lead.id, kind: 'submission', by: 'Website',
+    });
+    putList('notifications', list);
+  }
+  writeToDisk();
+  res.json({ ok: true, created, message: 'Thank you! Our team will get in touch with you shortly.' });
+});
+
 app.get('/config.js', (req, res) => {
   const user = signedInUser(req);
   // A client's form page loads this too. It gets nothing: no API key, no
