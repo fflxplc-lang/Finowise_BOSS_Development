@@ -4002,8 +4002,9 @@ app.post('/api/public/website-lead', (req, res) => {
   if (wrong.length) return res.status(400).json({ ok: false, message: wrong.join(' ') });
   const slotText = (t) => new Date(t + ':00+05:30').toLocaleString('en-IN', { timeZone: 'Asia/Kolkata',
     weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-  const timesLine = slots.length ? 'Times they offered: ' + slots.map(slotText).join(' · ')
-    : 'They gave no times — they would like you to offer one.';
+  const meetNote = String(b.note == null ? '' : b.note).trim().slice(0, 500);
+  const timesLine = (slots.length ? 'Times they offered: ' + slots.map(slotText).join(' · ')
+    : 'They gave no times — they would like you to offer one.') + (meetNote ? ' Their note: "' + meetNote + '"' : '');
 
   // The website asks the BOSS assessment itself (one bank per age group), so
   // the result is stored in the same fields an FQ link fills: points of the
@@ -4086,7 +4087,7 @@ app.post('/api/public/website-lead', (req, res) => {
     Object.assign(lead, fqFields);
     leads.push(lead);
   }
-  lead.meetingRequest = { at: now, slots, note: '', status: 'Open', source: 'Website FQ Test', timesOffered: slots.length };
+  lead.meetingRequest = { at: now, slots, note: meetNote, status: 'Open', source: 'Website FQ Test', timesOffered: slots.length };
   putList('leads', leads);
 
   // The same task the LMS raises when a client asks to meet from their FQ page.
