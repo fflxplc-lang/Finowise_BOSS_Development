@@ -1747,9 +1747,9 @@ function viewAssetUpload(){
         <div class="field"><label>Data as of <span class="small-note">(optional)</span></label>
           <input type="date" id="maSnapDate" value="${esc(MA.snapDate)}" onchange="MA.snapDate=this.value">
           <div class="small-note" style="margin:4px 0 0">Leave blank to use the date in each file, or today.</div></div>
-        <div class="field"><label>PDF password <span class="small-note">(only for locked PDFs)</span></label>
+        <div class="field"><label>File password <span class="small-note">(only for locked PDF or Excel files)</span></label>
           <input type="password" id="maPdfPassword" autocomplete="off" placeholder="Optional">
-          <div class="small-note" style="margin:4px 0 0">Used to open the file in this browser, never stored.</div></div>
+          <div class="small-note" style="margin:4px 0 0">Used to open the file in this browser, never sent or stored.</div></div>
       </div>
       <div class="ma-opts" style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap">
         <label class="row" style="gap:6px"><input type="checkbox" id="maCreateClients" ${MA.createClients ? 'checked' : ''} onchange="MA.createClients=this.checked; render()">
@@ -2528,6 +2528,21 @@ function maDownloadTemplate(pid, kind, layout){
 }
 const MA_FORMATS = {'.xlsx': 'xlsx', '.xls': 'xls', '.csv': 'xlsx', '.pdf': 'pdf'};
 async function maReadFile(file, kind, password, strict){
+  /* An Excel file locked with a password is opened here, with the password
+     given on the upload page, and read as the workbook it is. */
+  if(/\.(xlsx|xls|xlsm)$/i.test(String(file.name)) && file.size && file.size <= MA_MAX_BYTES && typeof officeEncryption === 'function'){
+    const raw = await file.arrayBuffer();
+    if(officeEncryption(raw)){
+      if(!password) throw new Error('This Excel file is locked with a password. Enter it under File password and upload again.');
+      let plain;
+      try { plain = await officeDecrypt(raw, password); }
+      catch(e){ throw new Error(e && e.wrongPassword ? 'The password for this Excel file is incorrect.' : 'BOSS could not open this locked Excel file: ' + ((e && e.message) || e)); }
+      const r = await maReadFile(new File([plain], String(file.name).replace(/\.xls$/i, '.xlsx')), kind, '', strict);
+      r.buffer = raw;      // the file as uploaded is what is kept, and what a repeat is recognised by
+      r.notes = ['opened with its password'].concat(r.notes || []);
+      return r;
+    }
+  }
   const ext = (String(file.name).match(/\.[^.]+$/) || [''])[0].toLowerCase();
   const format = MA_FORMATS[ext];
   if(!format) throw new Error('only Excel (.xlsx, .xls, .csv) or PDF files can be uploaded.');

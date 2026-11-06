@@ -66397,6 +66397,110 @@ function oleRead(buf){
     },
   };
 }
+/* ---- a workbook locked with a password -----------------------------
+   "Encrypt with Password" in Excel does not lock a sheet, it encrypts the
+   whole file: what is saved is a Compound File holding EncryptionInfo (how
+   the key is made from the password) and EncryptedPackage (the .xlsx,
+   encrypted). This makes the key from the password and decrypts the
+   package back into the .xlsx it was, all in the browser — the password
+   is not sent anywhere and not kept.
+
+   Two schemes are read (MS-OFFCRYPTO): Agile, which every Excel since 2010
+   writes (AES with SHA-512 and 100,000 rounds, set out in XML), and
+   Standard, which Excel 2007 wrote (AES-128 with SHA-1). The old RC4 lock
+   on a 97–2003 .xls is not; the message says to save it as .xlsx. */
+function officeEncryption(buf){
+  const u = new Uint8Array(buf);
+  const sig = [0xD0,0xCF,0x11,0xE0,0xA1,0xB1,0x1A,0xE1];
+  if(u.length < 512 || !sig.every((b, i)=>u[i] === b)) return null;
+  let ole = null;
+  try { ole = oleRead(buf); } catch(e){ return null; }
+  if(!ole) return null;
+  const info = ole.stream('EncryptionInfo'), pkg = ole.stream('EncryptedPackage');
+  return info && pkg ? {info, pkg} : null;
+}
+function officeWrongPassword(){ const e = new Error('The password is incorrect.'); e.wrongPassword = true; return e; }
+async function officeDecrypt(buf, password){
+  const enc = officeEncryption(buf);
+  if(!enc) throw new Error('This is not a password-protected Office file.');
+  const cat = (...parts) => { const n = parts.reduce((s, p)=>s + p.length, 0), o = new Uint8Array(n); let at = 0; parts.forEach(p=>{ o.set(p, at); at += p.length; }); return o; };
+  const u32 = n => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n, true); return b; };
+  const pwd = (()=>{ const s = String(password || ''), b = new Uint8Array(s.length * 2); for(let i = 0; i < s.length; i++){ b[i*2] = s.charCodeAt(i) & 255; b[i*2+1] = s.charCodeAt(i) >> 8; } return b; })();
+  const b64 = s => Uint8Array.from(atob(s), c=>c.charCodeAt(0));
+  const digest = async (alg, data) => new Uint8Array(await crypto.subtle.digest(alg, data));
+  const same = (a, b) => a.length === b.length && a.every((x, i)=>x === b[i]);
+  /* AES-CBC without padding, which is how Office encrypts: WebCrypto insists
+     on padding, so a block that decrypts to a full block of padding is
+     made from the last ciphertext block and added on the end. */
+  const cbcRaw = async (keyBytes, iv, data) => {
+    const key = await crypto.subtle.importKey('raw', keyBytes, {name: 'AES-CBC'}, false, ['encrypt', 'decrypt']);
+    const last = data.length >= 16 ? data.subarray(data.length - 16) : iv;
+    const pad = new Uint8Array(await crypto.subtle.encrypt({name: 'AES-CBC', iv: last}, key, new Uint8Array(16).fill(16))).subarray(0, 16);
+    return new Uint8Array(await crypto.subtle.decrypt({name: 'AES-CBC', iv}, key, cat(data, pad)));
+  };
+  const info = enc.info, dv = new DataView(info.buffer, info.byteOffset, info.byteLength);
+  const major = dv.getUint16(0, true), minor = dv.getUint16(2, true);
+  const pkg = enc.pkg, size = Number(new DataView(pkg.buffer, pkg.byteOffset, 8).getBigUint64(0, true));
+  const body = pkg.subarray(8);
+
+  if(major === 4 && minor === 4){
+    // ---- Agile ----
+    const xml = new DOMParser().parseFromString(new TextDecoder('utf-8').decode(info.subarray(8)), 'application/xml');
+    const kd = xml.getElementsByTagName('keyData')[0];
+    const ek = Array.from(xml.getElementsByTagName('*')).find(n=>n.localName === 'encryptedKey' && n.getAttribute('spinCount'));
+    if(!kd || !ek) throw new Error('its encryption details could not be read.');
+    const algOf = n => ({SHA1: 'SHA-1', 'SHA-1': 'SHA-1', SHA256: 'SHA-256', SHA384: 'SHA-384', SHA512: 'SHA-512'})[String(n.getAttribute('hashAlgorithm') || '').toUpperCase().replace('-', '')]
+      || ({SHA1: 'SHA-1'})[String(n.getAttribute('hashAlgorithm') || '').toUpperCase()];
+    const hAlg = algOf(ek), kdAlg = algOf(kd);
+    if(!hAlg || !kdAlg) throw new Error('it uses a hash BOSS does not know (' + ek.getAttribute('hashAlgorithm') + ').');
+    if(!/AES/i.test(ek.getAttribute('cipherAlgorithm') || 'AES')) throw new Error('it uses a cipher other than AES.');
+    const spins = Number(ek.getAttribute('spinCount')), keyLen = Number(ek.getAttribute('keyBits')) / 8;
+    const salt = b64(ek.getAttribute('saltValue'));
+    let h = await digest(hAlg, cat(salt, pwd));
+    for(let i = 0; i < spins; i++) h = await digest(hAlg, cat(u32(i), h));
+    const keyFor = async block => { const f = await digest(hAlg, cat(h, block)); const k = new Uint8Array(keyLen).fill(0x36); k.set(f.subarray(0, keyLen)); return k; };
+    const BK = s => Uint8Array.from(s.match(/../g), x=>parseInt(x, 16));
+    const ivFor = s => { const v = new Uint8Array(16).fill(0x36); v.set(s.subarray(0, 16)); return v; };
+    const vIn = await cbcRaw(await keyFor(BK('fea7d2763b4b9e79')), ivFor(salt), b64(ek.getAttribute('encryptedVerifierHashInput')));
+    const vHash = await cbcRaw(await keyFor(BK('d7aa0f6d3061344e')), ivFor(salt), b64(ek.getAttribute('encryptedVerifierHashValue')));
+    const want = await digest(hAlg, vIn.subarray(0, salt.length));
+    if(!same(want, vHash.subarray(0, want.length))) throw officeWrongPassword();
+    const secret = (await cbcRaw(await keyFor(BK('146e0be7abacd0d6')), ivFor(salt), b64(ek.getAttribute('encryptedKeyValue')))).subarray(0, Number(kd.getAttribute('keyBits')) / 8);
+    const kdSalt = b64(kd.getAttribute('saltValue')), bs = Number(kd.getAttribute('blockSize')) || 16;
+    const out = new Uint8Array(body.length);
+    for(let seg = 0, at = 0; at < body.length; seg++, at += 4096){
+      const chunk = body.subarray(at, Math.min(body.length, at + 4096));
+      const iv = (await digest(kdAlg, cat(kdSalt, u32(seg)))).subarray(0, bs);
+      out.set(await cbcRaw(secret, iv, chunk.subarray(0, chunk.length - chunk.length % 16)), at);
+    }
+    return out.slice(0, size).buffer;
+  }
+  if((major === 3 || major === 4) && minor === 2){
+    // ---- Standard ----
+    const hdrSize = dv.getUint32(8, true), hdr = 12;
+    const keyBits = dv.getUint32(hdr + 16, true) || 128;
+    const v = hdr + hdrSize;
+    const saltSize = dv.getUint32(v, true), salt = info.slice(v + 4, v + 4 + saltSize);
+    const eVerifier = info.slice(v + 4 + saltSize, v + 20 + saltSize);
+    const eHash = info.slice(v + 24 + saltSize, v + 56 + saltSize);
+    let h = await digest('SHA-1', cat(salt, pwd));
+    for(let i = 0; i < 50000; i++) h = await digest('SHA-1', cat(u32(i), h));
+    const f = await digest('SHA-1', cat(h, u32(0)));
+    const x = n => { const b = new Uint8Array(64).fill(n); f.forEach((c, i)=>{ b[i] ^= c; }); return b; };
+    const key = cat(await digest('SHA-1', x(0x36)), await digest('SHA-1', x(0x5c))).slice(0, keyBits / 8);
+    /* ECB from CBC: each block decrypted under a zero IV, then each one
+       after the first freed of the block before it. */
+    const ecb = async data => {
+      const p = await cbcRaw(key, new Uint8Array(16), data);
+      for(let i = 16; i < p.length; i++) p[i] ^= data[i - 16];
+      return p;
+    };
+    const verifier = await ecb(eVerifier), hash = await ecb(eHash);
+    if(!same(await digest('SHA-1', verifier), hash.subarray(0, 20))) throw officeWrongPassword();
+    return (await ecb(body.subarray(0, body.length - body.length % 16))).slice(0, size).buffer;
+  }
+  throw new Error('it is locked in a way BOSS cannot open (version ' + major + '.' + minor + ').');
+}
 /* ---- the sheet inside it -------------------------------------------
    BIFF8: a flat run of records, each a two-byte type, a two-byte
    length and that many bytes. A record longer than 8224 bytes is split
@@ -66760,6 +66864,10 @@ async function workbookSheets(file){
     return {kind: what.kind, sheets: await xlsxSheets(buf)};
   }
   if(what.kind === 'xls'){
+    /* Locked with a password, reached here without one: say so, rather than
+       "no sheet inside that .xls". */
+    if(officeEncryption(buf))
+      throw new Error('"' + (file.name || 'That file') + '" is locked with a password. Enter the password and upload it again.');
     const s = xlsSheets(buf);
     if(!s || !s.length) throw new Error('BOSS could not find a sheet inside that .xls.');
     return {kind: what.kind, sheets: s};
