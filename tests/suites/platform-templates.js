@@ -102,4 +102,26 @@ suite(async t => {
     if(!/factsheet \(PDF\) is read as it is/.test(r)) throw new Error('the Ametra guide does not say the PDF is read as it is');
     return name + ' — and its guide says the PDF factsheet can go up as it is';
   });
+
+  await t.step('a template filled in without the strategy name still uploads, filed under the platform', async () => {
+    const r = await t.eval(async () => {
+      /* As the firm filled the NJ PMS template: client and current value, the
+         strategy and the amount invested left blank, two columns of its own added. */
+      const rows = [['NJ PMS Holdings Report | As on 04-11-2026'],
+        ['Client Name', 'PAN', 'Account No', 'Strategy Name', 'Inception Date', 'Invested Amount', 'Current Value', 'XIRR', 'Group', 'Partner/Employee'],
+        ['ZZ Pms One', '', '', '', '', '', 4535855, '', 'ZZ Group', 'ZZ Partner'],
+        ['ZZ Pms Two', '', '', '', '', '', 3983763, '', 'ZZ Group', 'ZZ Partner']];
+      const file = new File([xlsxWrite([{name: 'AUM data', rows}])], 'NJ_PMS_AUM.xlsx');
+      MA.picked = {'pms-nj:aum': file}; MA.result = null; MA.uploadType = 'platform'; MA.createClients = true;
+      await maUploadAll();
+      const res = MA.result.results.find(x => !x.job.auto) || {};
+      maInvalidate();
+      const held = maState().holdings.filter(h => /^ZZ Pms/.test(h._c.name)).map(h => h._c.name + ' · ' + h.security_name + ' · ' + h.current_value);
+      closeModal();
+      return {ok: !!res.ok, error: res.error || '', notes: (res.created && res.created.notes) || (MA.result.results[0] || {}).note || '', held};
+    });
+    if(!r.ok) throw new Error('upload: ' + r.error);
+    if(r.held.join(' / ') !== 'ZZ Pms One · NJ PMS · 4535855 / ZZ Pms Two · NJ PMS · 3983763') throw new Error('held: ' + r.held.join(' / '));
+    return r.held.join(' / ');
+  });
 });

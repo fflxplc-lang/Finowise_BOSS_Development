@@ -2222,10 +2222,13 @@ const ReviewPage = (() => {
     },
     statsOf({ inv, cur, ret, xirr, sip }) {
       const g = cur - inv;
+      // Nothing invested on file (a report that gives only the value) is no
+      // gain to show: the whole value is not profit.
+      const known = !!inv || !cur;
       return `<div class="cv-stats">
-        <div><span>Invested</span><b>${fmt.money(inv)}</b></div>
+        <div><span>Invested</span><b>${known ? fmt.money(inv) : "–"}</b></div>
         <div><span>Current value</span><b>${fmt.money(cur)}</b></div>
-        <div class="${g < 0 ? "cv-down" : "cv-up"}"><span>Gain</span><b>${fmt.money(g)}</b></div>
+        <div class="${known ? (g < 0 ? "cv-down" : "cv-up") : ""}"><span>Gain</span><b>${known ? fmt.money(g) : "–"}</b></div>
         <div><span>Abs. return</span><b>${ret || "–"}</b></div>
         <div><span>XIRR</span><b>${xirr || "–"}</b></div>
         <div><span>Live SIP</span><b>${fmt.money(sip)}</b></div>
@@ -2673,11 +2676,12 @@ const ReviewPage = (() => {
     if (!el) return;
     const f = Review.prepare(data, clean(edits)).current;
     const gain = f.value - f.invested;
+    const known = !!f.invested || !f.value;   // a value with nothing invested on file is not all gain
     const chip = (label, v, cls = "") => `<div class="xl-kpi ${cls}"><span>${label}</span><b>${v}</b></div>`;
     // XIRR as the review sheet works it out (value-weighted, on DETAILED PORTFOLIO's total row).
     const xirr = wb && grandRow ? wb.value(DETAILED, grandRow, 11) : null;
     el.innerHTML = chip("Invested", fmt.money(f.invested), "k-inv") + chip("Current value", fmt.money(f.value), "k-cur")
-      + chip("Gain", fmt.money(gain), gain < 0 ? "xl-down" : "xl-up")
+      + chip("Gain", known ? fmt.money(gain) : "–", known ? (gain < 0 ? "xl-down" : "xl-up") : "")
       + chip("Abs. return", fmt.pct(f.invested ? (gain / f.invested) * 100 : null), "k-ret")
       + chip("XIRR", typeof xirr === "number" ? fmt.pct(xirr) : "–", "k-xirr")
       + chip("Live SIP", fmt.money(f.sip), "k-sip");

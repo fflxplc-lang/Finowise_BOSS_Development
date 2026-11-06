@@ -391,7 +391,15 @@ const MaExtract = (function(){
         if(!rec.client_name || row.some(c=>typeof c === 'string' && TOTAL_ROW.test(c.trim()))) continue;
         rec.level = 'summary'; rec.security_name = SUMMARY_LABEL;
       }
-      const label = rec.security_name || rec.identifier || rec.isin || '';
+      let label = rec.security_name || rec.identifier || rec.isin || '';
+      /* A client and an amount with the scheme or strategy left blank is
+         still that client's money: it is kept, under a placeholder the
+         upload renames to the platform and category ("NJ PMS"). Dropping it
+         reported "no holdings" for a file full of them. */
+      if(!label && P === PROFILES.aum && rec.client_name && !TOTAL_ROW.test(String(rec.client_name))
+         && (rec.current_value !== null || rec.invested !== null)){
+        rec.security_name = label = MA_UNNAMED_HOLDING;
+      }
       if(!label || TOTAL_ROW.test(label) || P.synonyms.security_name.indexOf(norm(label)) >= 0) continue;
       if(!P.requiredAny.some(f=>rec[f] !== null)) continue;
       if(!rec.client_name && ctx.client){
@@ -1940,6 +1948,8 @@ function maLooseHead(h){ return String(h == null ? '' : h).toLowerCase().replace
    who each investor is, so it fills in the client records and nothing
    else. */
 const MA_DETAILS_ONLY = 'Client details only';
+/* A holding whose file left its scheme / strategy name blank. */
+const MA_UNNAMED_HOLDING = '(not named in the file)';
 function maSpecialLayout(read, heads, kind){
   const has = h => heads.has(maLooseHead(h));
   if(kind === 'aum' && has('Group') && has('Partner/Employee') && !has('Investor') && (has('TOTAL') || has('EQUITY')))
@@ -2586,6 +2596,18 @@ async function maUploadAll(){
       const m = document.getElementById('maUploadMsg'); if(m) m.textContent = MA.msg;
       try {
         const r = await maReadFile(job.file, job.kind, password, !!job.auto);
+        /* Holdings the file did not name take the platform and category. */
+        const unnamed = r.rows.filter(h=>h.security_name === MA_UNNAMED_HOLDING);
+        if(unnamed.length){
+          const as = job.platform.name + ' ' + (job.platform.product === 'MF' ? 'Mutual Funds' : job.platform.product);
+          unnamed.forEach(h=>{ h.security_name = as; });
+          r.notes.push(unnamed.length + ' row' + (unnamed.length === 1 ? '' : 's') + ' had no scheme or strategy name, so '
+            + (unnamed.length === 1 ? 'it is' : 'they are') + ' filed as \u201c' + as + '\u201d \u2014 fill the name in and upload again to show it');
+        }
+        const noCost = r.rows.filter(h=>h.level !== 'details' && h.current_value !== null && h.current_value !== undefined
+          && (h.invested === null || h.invested === undefined));
+        if(job.kind === 'aum' && noCost.length && noCost.length === r.rows.length)
+          r.notes.push('no Invested Amount is given, so no gain can be worked out for these holdings');
         if(job.auto && !r.rows.length){ continue; }
         if(r.layout === 'nj_group' || r.layout === 'branch_summary'){ results.push({job, refused: true, error: r.notes.join('; ')}); continue; }
         /* The client record first: details filled in, new clients added,
