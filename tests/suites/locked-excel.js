@@ -10,8 +10,12 @@
        than "no sheet inside that .xls";
      · the File password box on the upload page is what is used.
 
+   And a 97–2003 .xls locked with a password (RC4), which used to fail with
+   "Cannot read properties of undefined (reading '0')".
+
    The fixtures hold made-up clients, password boss1234: one made by
-   msoffcrypto-tool (Agile), one saved by LibreOffice (Standard). */
+   msoffcrypto-tool (Agile), one saved by LibreOffice (Standard), and an
+   .xls saved by LibreOffice (RC4). */
 const {suite} = require('../lib/harness');
 const fs = require('fs');
 const path = require('path');
@@ -19,6 +23,9 @@ const path = require('path');
 const FIX = path.join(__dirname, '..', 'fixtures');
 const AGILE = path.join(FIX, 'locked_agile_boss1234.xlsx');
 const STANDARD = path.join(FIX, 'locked_standard_boss1234.xlsx');
+/* A 97–2003 .xls saved with a password by LibreOffice: RC4, "Office 97/2000
+   compatible", Excel's own default for an .xls. */
+const XLS = path.join(FIX, 'locked_xls_rc4_boss1234.xls');
 
 suite(async t => {
   await t.home();
@@ -47,6 +54,15 @@ suite(async t => {
     if(r.error) throw new Error(r.error);
     if(r.rows.join(' / ') !== WANT) throw new Error(JSON.stringify(r));
     return '2 clients · opened in ' + r.ms + ' ms';
+  });
+
+  await t.step('a 97–2003 .xls locked with a password (RC4): read with it, and named when it is missing or wrong', async () => {
+    const r = await read(XLS, 'boss1234');
+    if(r.error) throw new Error(r.error);
+    if(r.rows.join(' / ') !== WANT || r.asOf !== '2026-11-04') throw new Error(JSON.stringify(r));
+    const none = await read(XLS, ''), wrong = await read(XLS, 'not-it');
+    if(!/locked with a password/.test(none.error || '') || !/incorrect/.test(wrong.error || '')) throw new Error(JSON.stringify([none, wrong]));
+    return '2 clients, as on 4 Nov, in ' + r.ms + ' ms · "' + none.error + '" · "' + wrong.error + '"';
   });
 
   await t.step('without the password, and with the wrong one, it says so', async () => {

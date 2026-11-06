@@ -66417,12 +66417,21 @@ function officeEncryption(buf){
   try { ole = oleRead(buf); } catch(e){ return null; }
   if(!ole) return null;
   const info = ole.stream('EncryptionInfo'), pkg = ole.stream('EncryptedPackage');
-  return info && pkg ? {info, pkg} : null;
+  if(info && pkg) return {info, pkg};
+  const wb = ole.stream('Workbook') || ole.stream('Book');
+  return wb && biffFilepass(wb) ? {biff: true} : null;
 }
 function officeWrongPassword(){ const e = new Error('The password is incorrect.'); e.wrongPassword = true; return e; }
 async function officeDecrypt(buf, password){
   const enc = officeEncryption(buf);
   if(!enc) throw new Error('This is not a password-protected Office file.');
+  /* A locked 97–2003 .xls: its sheets are read with the password and handed
+     back as an .xlsx, so it goes the same way as every other workbook. */
+  if(enc.biff){
+    const sheets = xlsSheets(buf, password) || [];
+    const by = xlsxWrite(sheets.map(sh=>({name: sh.name, rows: sh.rows, bold: false})));
+    return by.buffer.slice(by.byteOffset, by.byteOffset + by.byteLength);
+  }
   const cat = (...parts) => { const n = parts.reduce((s, p)=>s + p.length, 0), o = new Uint8Array(n); let at = 0; parts.forEach(p=>{ o.set(p, at); at += p.length; }); return o; };
   const u32 = n => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n, true); return b; };
   const pwd = (()=>{ const s = String(password || ''), b = new Uint8Array(s.length * 2); for(let i = 0; i < s.length; i++){ b[i*2] = s.charCodeAt(i) & 255; b[i*2+1] = s.charCodeAt(i) >> 8; } return b; })();
@@ -66589,13 +66598,153 @@ function biffIsDateCode(code){
   return /[dy]/i.test(c) || /m{3,}/i.test(c);
 }
 
+/* ---- a 97–2003 .xls locked with a password --------------------------
+   An .xls locked in Excel keeps its records but encrypts their contents
+   with RC4, from the FILEPASS record on (MS-OFFCRYPTO 2.3.6 and 2.3.5):
+   the record headers stay readable, the bodies do not, so reading it as an
+   ordinary .xls ran off the end of a scrambled record. Excel's default lock
+   ("Office 97/2000 compatible": RC4 keyed through MD5) and the CryptoAPI
+   lock (RC4 keyed through SHA-1) are both opened here, synchronously, from
+   the password; the records come back as they were before locking. */
+function biffMd5(bytes){
+  const K = new Int32Array(64), S = [7,12,17,22,5,9,14,20,4,11,16,23,6,10,15,21];
+  for(let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296) | 0;
+  const n = bytes.length, total = ((n + 8) >> 6) + 1, w = new Int32Array(total * 16);
+  for(let i = 0; i < n; i++) w[i >> 2] |= bytes[i] << ((i % 4) * 8);
+  w[n >> 2] |= 0x80 << ((n % 4) * 8);
+  w[total * 16 - 2] = (n * 8) | 0; w[total * 16 - 1] = Math.floor(n / 536870912);
+  let a = 0x67452301, b = 0xefcdab89 | 0, c = 0x98badcfe | 0, d = 0x10325476;
+  for(let blk = 0; blk < total * 16; blk += 16){
+    let A = a, B = b, C = c, D = d;
+    for(let i = 0; i < 64; i++){
+      let f, g;
+      if(i < 16){ f = (B & C) | (~B & D); g = i; }
+      else if(i < 32){ f = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
+      else if(i < 48){ f = B ^ C ^ D; g = (3 * i + 5) % 16; }
+      else { f = C ^ (B | ~D); g = (7 * i) % 16; }
+      const tmp = D; D = C; C = B;
+      const x = (A + f + K[i] + w[blk + g]) | 0, s = S[(i >> 4) * 4 + (i % 4)];
+      B = (B + ((x << s) | (x >>> (32 - s)))) | 0; A = tmp;
+    }
+    a = (a + A) | 0; b = (b + B) | 0; c = (c + C) | 0; d = (d + D) | 0;
+  }
+  const out = new Uint8Array(16);
+  [a, b, c, d].forEach((v, i)=>{ for(let k = 0; k < 4; k++) out[i * 4 + k] = (v >>> (k * 8)) & 255; });
+  return out;
+}
+function biffSha1(bytes){
+  const n = bytes.length, total = ((n + 8) >> 6) + 1, w = new Int32Array(total * 16);
+  for(let i = 0; i < n; i++) w[i >> 2] |= bytes[i] << (24 - (i % 4) * 8);
+  w[n >> 2] |= 0x80 << (24 - (n % 4) * 8);
+  w[total * 16 - 1] = (n * 8) | 0; w[total * 16 - 2] = Math.floor(n / 536870912);
+  let h0 = 0x67452301, h1 = 0xefcdab89 | 0, h2 = 0x98badcfe | 0, h3 = 0x10325476, h4 = 0xc3d2e1f0 | 0;
+  const W = new Int32Array(80);
+  for(let blk = 0; blk < total * 16; blk += 16){
+    for(let i = 0; i < 16; i++) W[i] = w[blk + i];
+    for(let i = 16; i < 80; i++){ const x = W[i-3] ^ W[i-8] ^ W[i-14] ^ W[i-16]; W[i] = (x << 1) | (x >>> 31); }
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    for(let i = 0; i < 80; i++){
+      const f = i < 20 ? ((b & c) | (~b & d)) + 0x5a827999 : i < 40 ? (b ^ c ^ d) + 0x6ed9eba1
+              : i < 60 ? ((b & c) | (b & d) | (c & d)) - 0x70e44324 : (b ^ c ^ d) - 0x359d3e2a;
+      const t = (((a << 5) | (a >>> 27)) + f + e + W[i]) | 0;
+      e = d; d = c; c = (b << 30) | (b >>> 2); b = a; a = t;
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0; h4 = (h4 + e) | 0;
+  }
+  const out = new Uint8Array(20);
+  [h0, h1, h2, h3, h4].forEach((v, i)=>{ for(let k = 0; k < 4; k++) out[i * 4 + k] = (v >>> (24 - k * 8)) & 255; });
+  return out;
+}
+function biffRc4(key){
+  const s = new Uint8Array(256); for(let i = 0; i < 256; i++) s[i] = i;
+  for(let i = 0, j = 0; i < 256; i++){ j = (j + s[i] + key[i % key.length]) & 255; const t = s[i]; s[i] = s[j]; s[j] = t; }
+  let i = 0, j = 0;
+  return n => { const o = new Uint8Array(n); for(let k = 0; k < n; k++){ i = (i + 1) & 255; j = (j + s[i]) & 255; const t = s[i]; s[i] = s[j]; s[j] = t; o[k] = s[(s[i] + s[j]) & 255]; } return o; };
+}
+/* The FILEPASS record of a Workbook stream, if it is locked. */
+function biffFilepass(wb){
+  const dv = new DataView(wb.buffer, wb.byteOffset, wb.byteLength);
+  for(let p = 0; p + 4 <= wb.length;){
+    const type = dv.getUint16(p, true), len = dv.getUint16(p + 2, true);
+    if(type === 0x002F) return {at: p, body: wb.subarray(p + 4, p + 4 + len)};
+    if(type === 0x000A && p > 0) break;          // past the globals
+    p += 4 + len;
+  }
+  return null;
+}
+function biffDecrypt(wb, password){
+  const fp = biffFilepass(wb);
+  if(!fp) return wb;
+  const b = fp.body, bdv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if(bdv.getUint16(0, true) !== 1) throw new Error('it uses the old XOR lock, which BOSS cannot open.');
+  const vMajor = bdv.getUint16(2, true);
+  const pwd = (()=>{ const s = String(password || ''), o = new Uint8Array(s.length * 2); for(let i = 0; i < s.length; i++){ o[i*2] = s.charCodeAt(i) & 255; o[i*2+1] = s.charCodeAt(i) >> 8; } return o; })();
+  const cat = (...p) => { const o = new Uint8Array(p.reduce((n, x)=>n + x.length, 0)); let at = 0; p.forEach(x=>{ o.set(x, at); at += x.length; }); return o; };
+  const u32 = n => { const o = new Uint8Array(4); new DataView(o.buffer).setUint32(0, n, true); return o; };
+  const same = (x, y) => x.length === y.length && x.every((v, i)=>v === y[i]);
+  let keyFor;
+  if(vMajor === 1){
+    // Office 97/2000 compatible: MD5, 40-bit truncation, 16-byte RC4 key per 1024-byte block.
+    const salt = b.subarray(6, 22), eVer = b.subarray(22, 38), eHash = b.subarray(38, 54);
+    const t0 = biffMd5(pwd).subarray(0, 5);
+    const buf = new Uint8Array(21 * 16); for(let i = 0; i < 16; i++){ buf.set(t0, i * 21); buf.set(salt, i * 21 + 5); }
+    const t1 = biffMd5(buf).subarray(0, 5);
+    keyFor = blk => biffMd5(cat(t1, u32(blk)));
+    const ks = biffRc4(keyFor(0))(32);
+    const ver = eVer.map((x, i)=>x ^ ks[i]), hash = eHash.map((x, i)=>x ^ ks[16 + i]);
+    if(!same(biffMd5(ver), hash)) throw officeWrongPassword();
+  } else if(vMajor >= 2 && vMajor <= 4){
+    // CryptoAPI: SHA-1, keySize bits (40 → padded to 128 with zeros).
+    const hdrSize = bdv.getUint32(10, true), h = 14, keyBits = bdv.getUint32(h + 16, true) || 40;
+    const v = h + hdrSize, saltSize = bdv.getUint32(v, true);
+    const salt = b.subarray(v + 4, v + 4 + saltSize), eVer = b.subarray(v + 4 + saltSize, v + 20 + saltSize);
+    const hashSize = bdv.getUint32(v + 20 + saltSize, true), eHash = b.subarray(v + 24 + saltSize, v + 24 + saltSize + hashSize);
+    const h0 = biffSha1(cat(salt, pwd));
+    keyFor = blk => { const k = biffSha1(cat(h0, u32(blk))).subarray(0, keyBits / 8); if(keyBits !== 40) return k; const o = new Uint8Array(16); o.set(k); return o; };
+    const ks = biffRc4(keyFor(0))(16 + hashSize);
+    const ver = eVer.map((x, i)=>x ^ ks[i]), hash = eHash.map((x, i)=>x ^ ks[16 + i]);
+    if(!same(biffSha1(ver), hash.subarray(0, 20))) throw officeWrongPassword();
+  } else throw new Error('it is locked in a way BOSS cannot open (version ' + vMajor + ').');
+  /* The keystream runs over the whole stream in 1024-byte blocks, a fresh
+     key for each; headers take keystream but are not encrypted, and so do
+     the few records Excel leaves plain (BOF, FILEPASS, INTERFACEHDR and the
+     sheet offsets in BOUNDSHEET). FILEPASS is dropped from what comes back. */
+  const out = new Uint8Array(wb.length), ksBlocks = new Map();
+  const ksAt = pos => { const blk = Math.floor(pos / 1024); if(!ksBlocks.has(blk)) ksBlocks.set(blk, biffRc4(keyFor(blk))(1024)); return ksBlocks.get(blk)[pos % 1024]; };
+  const PLAIN = new Set([0x0809, 0x002F, 0x0194, 0x0195, 0x00E1, 0x0196, 0x0138]);
+  const dv = new DataView(wb.buffer, wb.byteOffset, wb.byteLength);
+  let o = 0;
+  for(let p = 0; p + 4 <= wb.length;){
+    const type = dv.getUint16(p, true), len = dv.getUint16(p + 2, true);
+    if(p + 4 + len > wb.length) break;
+    const rec = wb.slice(p, p + 4 + len);
+    if(type === 0x002F){ p += 4 + len; continue; }
+    if(!PLAIN.has(type)){
+      for(let k = (type === 0x0085 ? 4 : 0); k < len; k++) rec[4 + k] ^= ksAt(p + 4 + k);
+    }
+    /* Removing FILEPASS shifts what follows; a BOUNDSHEET points at its
+       sheet by stream offset, so the shift is taken off it. */
+    out.set(rec, o); o += rec.length; p += 4 + len;
+  }
+  const res = out.slice(0, o), shift = 4 + fp.body.length, rdv = new DataView(res.buffer);
+  for(let p = 0; p + 4 <= res.length;){
+    const type = rdv.getUint16(p, true), len = rdv.getUint16(p + 2, true);
+    if(type === 0x0085){ const pos = rdv.getUint32(p + 4, true); if(pos > fp.at) rdv.setUint32(p + 4, pos - shift, true); }
+    p += 4 + len;
+  }
+  return res;
+}
 /* Every sheet of a .xls, as a grid of strings — the same shape
    xlsxSheets() returns, so everything above this reads one file. */
-function xlsSheets(buf){
+function xlsSheets(buf, password){
   const ole = oleRead(buf);
   if(!ole) return null;
-  const wb = ole.stream('Workbook') || ole.stream('Book');
+  let wb = ole.stream('Workbook') || ole.stream('Book');
   if(!wb) throw new Error('That .xls has no workbook inside it.');
+  if(biffFilepass(wb)){
+    if(!password){ const e = new Error('This .xls is locked with a password. Enter it and upload again.'); e.locked = true; throw e; }
+    wb = biffDecrypt(wb, password);
+  }
   const recs = biffRecords(wb);
 
   /* ---- the globals: sheet names, shared strings, number formats ---- */
