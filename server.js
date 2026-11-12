@@ -4534,18 +4534,24 @@ async function insuranceRenewalReminders(now) {
     : (cfg.mailTemplatesOff || {}).insRenewalReminder ? 'The renewal reminder template is switched off' : '';
   const tpl = Object.assign({}, INS_REMINDER_DEFAULT, (cfg.mailTemplates || {}).insRenewalReminder || {});
   const firm = (cfg.company || {}).name || '';
+  /* The reminders come from the policies the Life, Health and General
+     Insurance modules hold — one per policy in force — and never from the
+     client record, so a client is not reminded twice for one premium. */
   const clients = storeList('clients');
+  const policies = storeList('insPolicies');
   let touched = false;
-  for (const c of clients) {
-    if (!c || c.deletedAt || c.cmsStage !== 'insActive' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.insNextDueDate || ''))) continue;
-    const due = c.insNextDueDate, left = dayDiff(now.date, due);
+  for (const p of policies) {
+    if (!p || p.deletedAt || p.status !== 'Active' || !/^\d{4}-\d{2}-\d{2}$/.test(String(p.insNextDueDate || ''))) continue;
+    const c = clients.find((x) => x && x.id === p.clientId && !x.deletedAt);
+    if (!c) continue;
+    const due = p.insNextDueDate, left = dayDiff(now.date, due);
     const step = insReminderStep(left);
     if (step === null) continue;
     // Kept until a month past the due date, so a step is never sent twice.
-    if (!claim('ins-renewal:' + c.id + ':' + (c.insPolicyNo || '') + ':' + due + ':' + step, addDays(due, 40))) continue;
-    const company = c.insCompany === 'Other' ? (c.insCompanyOther || '') : (c.insCompany || '');
-    const vars = { ClientName: c.cmsName || '', Name: c.cmsName || '', PolicyNo: c.insPolicyNo || '', Company: company,
-      Plan: c.insPlanName || '', Premium: inr(c.insPremium), DueDate: fmtDay(due), FirmName: firm, Signature: firm };
+    if (!claim('ins-renewal:' + c.id + ':' + (p.insPolicyNo || p.id) + ':' + due + ':' + step, addDays(due, 40))) continue;
+    const company = p.insCompany === 'Other' ? (p.insCompanyOther || '') : (p.insCompany || '');
+    const vars = { ClientName: c.cmsName || '', Name: c.cmsName || '', PolicyNo: p.insPolicyNo || '', Company: company,
+      Plan: p.insPlanName || '', Premium: inr(p.insPremium), DueDate: fmtDay(due), FirmName: firm, Signature: firm };
     const fill = (t) => String(t || '').replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
     const subject = fill(tpl.subject), body = fill(tpl.body);
     const address = ADDRESS_RE.test(String(c.email || '')) ? String(c.email).trim() : '';
@@ -4561,18 +4567,18 @@ async function insuranceRenewalReminders(now) {
       status: r.ok ? 'Sent' : r.held ? 'Held' : 'Not Sent', statusNote: r.message || '', subject, body, address,
       at: new Date().toISOString(), by: 'server', module: 'CMS', recordId: c.id, label: 'Insurance Renewal Reminder (automatic)' });
     store.communications = JSON.stringify(comms);
-    c.insHistory = (Array.isArray(c.insHistory) ? c.insHistory : []).concat([{ at: new Date().toISOString(), by: 'server', step: 'insRenewalAuto',
+    p.history = (Array.isArray(p.history) ? p.history : []).concat([{ at: new Date().toISOString(), by: 'server', step: 'insRenewalAuto',
       label: 'Renewal reminder (' + when + ')', note: (r.ok ? 'Emailed to ' + address : 'Not sent: ' + (r.message || '')) + ' — premium due ' + fmtDay(due) }]);
     touched = true;
     if (step === INS_REMINDER_DAYS[0] && c.rmName) {
-      notifyInApp(c.rmName, { title: 'Renewal premium due in 30 days', kind: 'insurance-renewal', view: 'cms', arg: c.id,
-        body: (c.cmsName || 'A client') + ' — policy ' + (c.insPolicyNo || '') + ', ' + inr(c.insPremium) + ' due ' + fmtDay(due) + '.' });
+      notifyInApp(c.rmName, { title: 'Renewal premium due in 30 days', kind: 'insurance-renewal', view: p.module || 'inslife', arg: p.id,
+        body: (c.cmsName || 'A client') + ' — policy ' + (p.insPolicyNo || '') + ', ' + inr(p.insPremium) + ' due ' + fmtDay(due) + '.' });
     }
   }
   if (touched) {
-    store.clients = JSON.stringify(clients);
+    store.insPolicies = JSON.stringify(policies);
     writeToDisk();
-    publishChange(['clients', 'communications'], 'server');
+    publishChange(['insPolicies', 'communications'], 'server');
   }
 }
 

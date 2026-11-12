@@ -4868,6 +4868,12 @@ function settingDefs(){
     {key:'cms.docsVerifyChecklist', module:'CMS', label:'Documents Verification Checklist', type:'list', group:'Onboarding',
      desc:'What is checked between the CIF and KYC. Every line is answered Yes, No or Not Applicable on the Documents Verification stage, and the stage will not pass to KYC until each has an answer and every No carries a remark. Reword, add or retire a line here and the stage follows.',
      itemLabel:'Check', def:CMS_DOCS_VERIFY_CHECKS.map(c=>listItem(c.label, {code:c.code, hint:c.hint}))},
+    {key:'cms.insDocsVerifyChecklist', module:'CMS', label:'Documents Verification — Insurance Checks', type:'list', group:'Onboarding',
+     desc:'Checked as well as the Documents Verification Checklist on the insurance route, after the client sends the CIF.',
+     itemLabel:'Check', def:[
+       listItem('Health', {code:'insHealth', hint:'Do the health and medical history disclosures on the CIF match the documents and reports?'}),
+       listItem('Income', {code:'insIncome', hint:'Do the income documents (ITR, salary slips, bank statements) support the declared annual income and the cover asked for?'}),
+       listItem('Existing Policy', {code:'insExisting', hint:'Are the client\u2019s existing life / health policies declared, with their insurers and sums assured?'})]},
     {key:'cms.docChecklist', module:'CMS', label:'Document Checklist', type:'list', group:'Documents',
      desc:'The documents a client file is expected to carry. Each one shows as a chip on the Documents tab and ticks itself once a matching attachment is uploaded.',
      itemLabel:'Document',
@@ -5372,6 +5378,10 @@ function cmsNomineeFields(){
 }
 /* The insurance choices, as the firm's process flow draws them. */
 const INS_CATEGORIES = ['Life Insurance','General Insurance'];
+/* "Policy Approved" is the clean acceptance (the insurers' "Standard");
+   every other outcome is terms the client has to agree to and pay for. */
+const INS_UW_APPROVED = 'Policy Approved';
+const INS_UW_OUTCOMES = [INS_UW_APPROVED, 'Accepted with loading', 'Accepted with exclusion', 'Counter-offer accepted'];
 const INS_LIFE_TYPES = ['Term Insurance','ULIP','Traditional Plan','Whole Life'];
 const INS_GENERAL_CATEGORIES = ['Health','Marine','Travel','Business'];
 const INS_HEALTH_TYPES = ['Individual','Family','Group Medical'];
@@ -5566,6 +5576,11 @@ const CMS_FIELDS = {
     {k:'insPremiumPaidOn',l:'First Premium Paid On',t:'date'},
     {k:'insPaymentMode',l:'Payment Mode',t:'select',opts:['Cheque','NEFT/RTGS','UPI','Card','Auto-debit','Cash']},
     {k:'insPaymentRef',l:'Payment Reference',t:'text'},
+    {k:'insMedicalTeamNote',l:'What to Follow Up with the Medical Team',t:'textarea',transient:1},
+    {k:'insUwClientApprovedOn',l:'Client Approved the Terms On',t:'date'},
+    {k:'insUwExtraPremium',l:'Additional / Revised Premium (₹)',t:'number',money:1},
+    {k:'insUwPaidOn',l:'Paid On',t:'date'},
+    {k:'insEndorsementNote',l:'Endorsement Required',t:'textarea',transient:1},
     {k:'insScrubDisclosureOk',l:'Medical answers on the proposal match the CIF disclosures',t:'select',opts:['Yes','No']},
     {k:'insScrubDocsOk',l:'Identity and financial documents complete for underwriting',t:'select',opts:['Yes','No']},
     {k:'insDocsNote',l:'Missing Documents or Corrections',t:'textarea',transient:1},
@@ -5576,7 +5591,7 @@ const CMS_FIELDS = {
     {k:'insMedicalReportsUploaded',l:'Reports uploaded to the insurer portal',t:'select',opts:['Yes','No']},
     {k:'insMedicalNote',l:'Pending Medical Requirement',t:'textarea',transient:1},
     {k:'insUwNote',l:"Underwriter's Query (counter-offer, loading, exclusion)",t:'textarea',transient:1},
-    {k:'insUwOutcome',l:'Underwriting Outcome',t:'select',opts:['Standard','Accepted with loading','Accepted with exclusion','Counter-offer accepted']},
+    {k:'insUwOutcome',l:'Underwriting Outcome',t:'select',opts:INS_UW_OUTCOMES},
     {k:'insUwTerms',l:'Loading / Exclusion / Counter-offer Details',t:'text',show:{field:'insUwOutcome',values:['Accepted with loading','Accepted with exclusion','Counter-offer accepted']}},
     {k:'insUwDecisionOn',l:'Underwriting Decision On',t:'date'},
     {k:'insRejectionReason',l:'Reason for Rejection',t:'textarea'},
@@ -10237,18 +10252,30 @@ const BLUEPRINT_CMS = {
        standing on it simply finds the first stage of the new journey. */
     {id:'insurancePending', label:'Insurance — Category & Plan'},
     {id:'insIllustration', label:'Insurance — Illustration with Client'},
-    {id:'insProposal', label:'Insurance — Proposal Form Submission'},
+    /* After the illustration the CIF goes to the client; their submitting it
+       is what moves the stage on to Documents Verification, which is the
+       check of what they sent. The proposal is signed and updated after
+       that, and the premium taken as a step of its own. */
     {id:'insCif', label:'Insurance — Client Information Form (CIF)'},
     {id:'insDocsCheck', label:'Insurance — Documents Verification'},
-    {id:'insKyc', label:'Insurance — KYC Status'},
-    {id:'insProposalUpdate', label:'Insurance — Proposal Update & Premium Payment'},
-    {id:'insDocsVerification', label:'Insurance — Pre-Underwriting Scrub'},
+    {id:'insProposal', label:'Insurance — Proposal Form Submission'},
+    {id:'insProposalUpdate', label:'Insurance — Proposal Update'},
+    {id:'insPremiumPayment', label:'Insurance — Premium Payment'},
     {id:'insMedical', label:'Insurance — Medical Required?'},
     {id:'insMedicalCheckup', label:'Insurance — Medical Checkup'},
+    {id:'insDocsVerification', label:'Insurance — Pre-Underwriting Scrub'},
     {id:'insUnderwriting', label:'Insurance — Underwriting'},
+    /* An underwriter's terms (loading, exclusion, counter-offer) go to the
+       client to approve, then to payment, then back to the underwriter,
+       whose answer decides what comes next. */
+    {id:'insUwClientApproval', label:'Insurance — Client Approval of Underwriting Terms'},
+    {id:'insUwPayment', label:'Insurance — Payment for Revised Terms'},
     {id:'insPolicyIssuance', label:'Insurance — Policy Generation & Data Entry'},
     {id:'insPolicyDelivery', label:'Insurance — Original Policy & Client Confirmation'},
-    {id:'insActive', label:'Insurance — Policy In Force (Renewals)'},
+    /* The CMS journey ends with the client confirming the policy. From here
+       the policy is worked from its insurance module (Life, Health or
+       General), and the client from RMS. */
+    {id:'insCompleted', label:'Insurance — Journey Completed (Policy Delivered)', terminal:true, color:'ok'},
     {id:'insClosed', label:'Insurance — Closed', terminal:true, color:'danger'},
     {id:'cifStage', label:'CIF Stage'},
     {id:'cifReceived', label:'Awaiting for CIF'},
@@ -10286,48 +10313,53 @@ const BLUEPRINT_CMS = {
     // Phase 1 — Inquiry & Classification: category, type, company, plan, then the illustration.
     {id:'insIllustrationSentT', from:'insurancePending', to:'insIllustration', label:'Send Illustration to Client', kind:'forward'},
     // Phase 2 — Client Response & Decision.
-    {id:'insIllustrationAccepted', from:'insIllustration', to:'insProposal', label:'Illustration Accepted', kind:'forward', color:'ok'},
+    {id:'insIllustrationAccepted', from:'insIllustration', to:'insCif', label:'Illustration Accepted', kind:'forward', color:'ok'},
     {id:'insIllustrationRevised', from:'insIllustration', to:'insIllustration', label:'Not Accepted — Send Revised Illustration', kind:'forward', color:'warn'},
     {id:'insBackToPlan', from:'insIllustration', to:'insurancePending', label:'Back', kind:'back'},
-    {id:'insProposalSubmitted', from:'insProposal', to:'insCif', label:'Proposal Form Submitted', kind:'forward'},
-    {id:'insBackToIllustration', from:'insProposal', to:'insIllustration', label:'Back', kind:'back'},
+    // The CIF: sent from here, and the client's submitting it moves the stage (insCifReceivedT is not a button).
     {id:'insCifSend', from:'insCif', to:'insCif', label:'Request CIF from Client', kind:'forward'},
-    {id:'insCifValidated', from:'insCif', to:'insDocsCheck', label:'CIF Received & Validated', kind:'forward', color:'ok'},
-    {id:'insBackToProposalForm', from:'insCif', to:'insProposal', label:'Back', kind:'back'},
-    /* The same documents checklist and KYC check the investment route walks
-       after its CIF, before the proposal is updated and the premium taken. */
-    {id:'insDocsCheckedT', from:'insDocsCheck', to:'insKyc', label:'Verification Complete — Proceed to KYC', kind:'forward', color:'ok'},
+    {id:'insCifReceivedT', from:'insCif', to:'insDocsCheck', label:'CIF Received from the Client', kind:'forward', color:'ok', notOffered:true},
+    {id:'insBackToIllustration', from:'insCif', to:'insIllustration', label:'Back', kind:'back'},
+    // Documents Verification, then straight on to the proposal form — there is no KYC stage on this route.
+    {id:'insDocsCheckedT', from:'insDocsCheck', to:'insProposal', label:'Verification Complete — Proceed', kind:'forward', color:'ok'},
     {id:'insBackToCifFromDocs', from:'insDocsCheck', to:'insCif', label:'Back', kind:'back'},
-    {id:'insKycRegistered', from:'insKyc', to:'insKyc', label:'KYC Registered', kind:'forward'},
-    {id:'insKycNotRegistered', from:'insKyc', to:'insKyc', label:'KYC Not Registered', kind:'forward'},
-    {id:'insKycOnHold', from:'insKyc', to:'insKyc', label:'KYC On Hold', kind:'forward'},
-    {id:'insKycValidated', from:'insKyc', to:'insProposalUpdate', label:'KYC Validated — Proceed', kind:'forward', color:'ok'},
-    {id:'insBackToDocsCheck', from:'insKyc', to:'insDocsCheck', label:'Back', kind:'back'},
-    {id:'insProposalDone', from:'insProposalUpdate', to:'insDocsVerification', label:'Proposal Updated & Premium Paid (Sales Completed)', kind:'forward', color:'ok'},
-    {id:'insBackToCif', from:'insProposalUpdate', to:'insKyc', label:'Back', kind:'back'},
-    // Documents, then Phase 3 — Medical & Underwriting.
-    {id:'insDocsVerified', from:'insDocsVerification', to:'insMedical', label:'Scrub Complete — Proceed', kind:'forward', color:'ok'},
-    {id:'insDocsMissing', from:'insDocsVerification', to:'insDocsVerification', label:'Request Missing Documents or Corrections', kind:'forward', color:'warn'},
-    {id:'insBackToProposal', from:'insDocsVerification', to:'insProposalUpdate', label:'Back', kind:'back'},
-    {id:'insMedicalYes', from:'insMedical', to:'insMedicalCheckup', label:'Yes — Coordinate Medical Checkup', kind:'forward'},
-    {id:'insMedicalNo', from:'insMedical', to:'insUnderwriting', label:'No — Underwriter Coordination', kind:'forward'},
-    {id:'insBackToDocs', from:'insMedical', to:'insDocsVerification', label:'Back', kind:'back'},
-    {id:'insMedicalDone', from:'insMedicalCheckup', to:'insUnderwriting', label:'Medical Completed', kind:'forward', color:'ok'},
+    {id:'insProposalSubmitted', from:'insProposal', to:'insProposalUpdate', label:'Proposal Form Submitted', kind:'forward'},
+    {id:'insBackToDocsCheck', from:'insProposal', to:'insDocsCheck', label:'Back', kind:'back'},
+    {id:'insProposalUpdated', from:'insProposalUpdate', to:'insPremiumPayment', label:'Proposal Updated', kind:'forward', color:'ok'},
+    {id:'insBackToProposal', from:'insProposalUpdate', to:'insProposal', label:'Back', kind:'back'},
+    {id:'insPremiumPaid', from:'insPremiumPayment', to:'insMedical', label:'Premium Paid (Sales Completed)', kind:'forward', color:'ok'},
+    {id:'insBackToProposalUpdate', from:'insPremiumPayment', to:'insProposalUpdate', label:'Back', kind:'back'},
+    // Medical first, then the pre-underwriting scrub.
+    {id:'insMedicalYes', from:'insMedical', to:'insMedicalCheckup', label:'Medical Required', kind:'forward'},
+    {id:'insMedicalNo', from:'insMedical', to:'insDocsVerification', label:'Medical not Required', kind:'forward'},
+    {id:'insBackToPremium', from:'insMedical', to:'insPremiumPayment', label:'Back', kind:'back'},
+    {id:'insMedicalDone', from:'insMedicalCheckup', to:'insDocsVerification', label:'Medical Completed', kind:'forward', color:'ok'},
     {id:'insMedicalPending', from:'insMedicalCheckup', to:'insMedicalCheckup', label:'Pending Medical Requirement', kind:'forward', color:'warn'},
     {id:'insBackToMedical', from:'insMedicalCheckup', to:'insMedical', label:'Back', kind:'back'},
-    {id:'insUwApproved', from:'insUnderwriting', to:'insPolicyIssuance', label:'Underwriting Completed — Approved', kind:'forward', color:'ok'},
+    {id:'insDocsVerified', from:'insDocsVerification', to:'insUnderwriting', label:'Scrub Complete — Proceed', kind:'forward', color:'ok'},
+    {id:'insDocsMissing', from:'insDocsVerification', to:'insDocsVerification', label:'Request Missing Documents or Corrections', kind:'forward', color:'warn'},
+    {id:'insMedicalFollowUp', from:'insDocsVerification', to:'insDocsVerification', label:'Follow up with Medical Team', kind:'forward', color:'warn'},
+    {id:'insBackToMedicalQ', from:'insDocsVerification', to:'insMedical', label:'Back', kind:'back'},
+    /* Underwriting Completed records the outcome: Policy Approved goes on to
+       the policy; any other outcome goes to the client (insUwTermsT, taken
+       by the outcome rather than offered as a button). */
+    {id:'insUwApproved', from:'insUnderwriting', to:'insPolicyIssuance', label:'Underwriting Completed', kind:'forward', color:'ok'},
+    {id:'insUwTermsT', from:'insUnderwriting', to:'insUwClientApproval', label:'Underwriting Terms — to the Client', kind:'forward', color:'warn', notOffered:true},
     {id:'insUwMore', from:'insUnderwriting', to:'insUnderwriting', label:'Underwriter Query', kind:'forward', color:'warn'},
     {id:'insUwRejected', from:'insUnderwriting', to:'insClosed', label:'Rejected — Close Application', kind:'forward', color:'danger'},
-    {id:'insBackToMedicalQ', from:'insUnderwriting', to:'insMedical', label:'Back', kind:'back'},
-    // Phase 4 — Policy Issuance & Onboarding.
+    {id:'insBackToScrub', from:'insUnderwriting', to:'insDocsVerification', label:'Back', kind:'back'},
+    {id:'insUwClientApproved', from:'insUwClientApproval', to:'insUwPayment', label:'Client Approved the Terms', kind:'forward', color:'ok'},
+    {id:'insUwClientDeclined', from:'insUwClientApproval', to:'insClosed', label:'Client Declined — Close Application', kind:'forward', color:'danger'},
+    {id:'insBackToUwFromTerms', from:'insUwClientApproval', to:'insUnderwriting', label:'Back', kind:'back'},
+    {id:'insUwPaymentDone', from:'insUwPayment', to:'insUnderwriting', label:'Payment Confirmed — Back to Underwriter', kind:'forward', color:'ok'},
+    {id:'insBackToClientApproval', from:'insUwPayment', to:'insUwClientApproval', label:'Back', kind:'back'},
+    // Policy issuance, delivery, and the end of the CMS journey.
     {id:'insPolicyEntered', from:'insPolicyIssuance', to:'insPolicyDelivery', label:'Policy Generated — Data Entered', kind:'forward'},
     {id:'insBackToUw', from:'insPolicyIssuance', to:'insUnderwriting', label:'Back', kind:'back'},
-    {id:'insPolicyConfirmed', from:'insPolicyDelivery', to:'insActive', label:'Original Received & Client Confirmed', kind:'forward', color:'ok'},
+    {id:'insPolicyConfirmed', from:'insPolicyDelivery', to:'insCompleted', label:'Original Received & Client Confirmed', kind:'forward', color:'ok'},
+    {id:'insEndorsement', from:'insPolicyDelivery', to:'insPolicyDelivery', label:'Endorsement Requirement', kind:'forward', color:'warn'},
     {id:'insBackToIssuance', from:'insPolicyDelivery', to:'insPolicyIssuance', label:'Back', kind:'back'},
-    // Phase 5 — Post-Renewal: follow-ups and payments hold the stage; it ends only when the policy does.
-    {id:'insRenewalFollowUp', from:'insActive', to:'insActive', label:'Renewal Follow-up Done', kind:'forward'},
-    {id:'insRenewalPaid', from:'insActive', to:'insActive', label:'Renewal Payment Confirmed', kind:'forward', color:'ok'},
-    {id:'insPolicyEnded', from:'insActive', to:'insClosed', label:'Policy Closed (Lapsed / Matured / Surrendered)', kind:'forward', color:'danger'},
+    {id:'insNewApplication', from:'insCompleted', to:'insurancePending', label:'Start Another Insurance Application', kind:'back'},
     {id:'insReopen', from:'insClosed', to:'insurancePending', label:'Start a New Insurance Application', kind:'back'},
     {id:'backToCreated', from:'cifStage', to:'clientCreated', label:'Back', kind:'back'},
     // Stage 2 — Send CIF to Client, then wait for it to come back. The client
@@ -10648,13 +10680,18 @@ const BLUEPRINT_ADDED_TRANSITIONS = {CMS:['insuranceBackT']};
 /* The insurance journey replaced a single parked stage. A firm's edited copy
    gets its stages and steps too, beside whatever else it changed. */
 function blueprintAddInsurance(own){
-  if(own._insMerged === 2) return;
+  if(own._insMerged === 3) return;
   const f = BLUEPRINTS.CMS;
   own.states = own.states || []; own.transitions = own.transitions || [];
   const pend = own.states.find(st=>st.id==='insurancePending');
   if(pend && /Not Yet Defined/.test(pend.label || '')){ const fs = f.states.find(st=>st.id==='insurancePending'); pend.label = fs.label; delete pend.terminal; delete pend.color; }
+  /* The insurance stages are the SOP's: they are laid in again in the
+     factory's order, so a re-ordered journey (CIF before the proposal, a
+     stage for the premium, KYC and the renewals stage gone) reaches an
+     edited copy as well. */
+  own.states = own.states.filter(st=>!/^ins[A-Z]/.test(st.id));
   const at = own.states.findIndex(st=>st.id==='insurancePending');
-  const add = f.states.filter(st=>/^ins[A-Z]/.test(st.id) && !own.states.some(x=>x.id===st.id)).map(st=>Object.assign({}, st));
+  const add = f.states.filter(st=>/^ins[A-Z]/.test(st.id)).map(st=>Object.assign({}, st));
   if(add.length){ if(at >= 0) own.states.splice(at + 1, 0, ...add); else own.states.push(...add); }
   /* The ins* stages and steps are the SOP's, so the factory's copy of them
      wins: an edited copy made before the SOP changed them follows it. */
@@ -10663,7 +10700,7 @@ function blueprintAddInsurance(own){
   f.transitions.filter(t=>/^ins[A-Z]/.test(t.id)).forEach(t=>{
     if(own.states.some(st=>st.id===t.from) && own.states.some(st=>st.id===t.to)) own.transitions.push(Object.assign({}, t));
   });
-  own._insMerged = 2;
+  own._insMerged = 3;
 }
 function getBlueprint(module){
   const own = DB.config && DB.config.blueprints && DB.config.blueprints[module];
@@ -12311,7 +12348,12 @@ function rmsInternalTabHtml(record){
    the audit trail — this is the record that the documents were actually
    looked at.
    ===================================================================== */
-function docsVerifyItems(){ return cfgList('cms.docsVerifyChecklist'); }
+function docsVerifyItems(record){
+  const base = cfgList('cms.docsVerifyChecklist');
+  /* On the insurance route the CIF's health, income and existing-policy
+     disclosures are checked too — they are what underwriting reads. */
+  return record && insIsStage(stateOf('CMS', record)) ? base.concat(cfgList('cms.insDocsVerifyChecklist')) : base;
+}
 function docsVerifyState(record){
   return (record && record.docsVerify) || {answers:{}, status:'Not started'};
 }
@@ -12322,7 +12364,7 @@ function docsVerifyAnswer(record, itemId){
    nothing said about it. Returned as sentences, because that is what the
    adviser is shown when they try to move on. */
 function docsVerifyOutstanding(record){
-  const items = docsVerifyItems();
+  const items = docsVerifyItems(record);
   const out = [];
   items.forEach(i=>{
     const a = docsVerifyAnswer(record, i.id);
@@ -12333,7 +12375,7 @@ function docsVerifyOutstanding(record){
   return out;
 }
 function docsVerifyComplete(record){
-  return docsVerifyItems().length ? !docsVerifyOutstanding(record).length : true;
+  return docsVerifyItems(record).length ? !docsVerifyOutstanding(record).length : true;
 }
 function docsVerifySubmitted(record){ return docsVerifyState(record).status === 'Submitted'; }
 async function setDocsVerifyAnswer(clientId, itemId, field, value){
@@ -12368,7 +12410,7 @@ async function submitDocsVerify(clientId){
   c.docsVerify.submittedAt = new Date().toISOString();
   c.docsVerify.submittedBy = currentUser;
   await save('clients');
-  const items = docsVerifyItems();
+  const items = docsVerifyItems(c);
   /* A line answered No is a document that does not match and a correction
      somebody has to chase. Both halves were typed here and then stayed
      here — the remark said what is wrong, the action said what is being
@@ -12391,7 +12433,7 @@ async function submitDocsVerify(clientId){
    and an open one is updated rather than duplicated. */
 const DOCS_VERIFY_TASK = 'Documents Verification — Correction';
 async function raiseDocsVerifyTasks(client, items){
-  const failed = (items||docsVerifyItems()).filter(i=>{
+  const failed = (items||docsVerifyItems(client)).filter(i=>{
     const a = docsVerifyAnswer(client, i.id);
     return String(a.v||'').toLowerCase() === 'no';
   });
@@ -12467,7 +12509,7 @@ function docsVerifyKnownHtml(record){
   </div>`;
 }
 function docsVerificationPanelHtml(record, editable){
-  const items = docsVerifyItems();
+  const items = docsVerifyItems(record);
   const st = docsVerifyState(record);
   const answered = items.filter(i=>docsVerifyAnswer(record, i.id).v).length;
   const submitted = docsVerifySubmitted(record);
@@ -13128,10 +13170,10 @@ async function doTransition(module, recordId, transitionId){
       return;
     }
   }
-  // The insurance CIF gate: no proposal update or premium before the CIF is in.
-  if(module==='CMS' && t.id==='insCifValidated'){
-    const g = insCifGate(record);
-    if(g){ alert(g); return; }
+  // An open endorsement holds the delivery confirmation, from any button.
+  if(module==='CMS' && t.id==='insPolicyConfirmed' && insOpenTask(record, INS_ENDORSE_TASK)){
+    alert('An endorsement is still open on this policy.\n\nResolve the “' + INS_ENDORSE_TASK + '” task first, then confirm the original and the client.');
+    return;
   }
   // KYC is shut until the documents have actually been looked at. Enforced
   // here as well as on the button, so the profile's "Move to" link and a
@@ -14394,6 +14436,12 @@ const LMS_RETIRED_STATES = {
    to follow it, and gets the message sent now rather than never. */
 const CMS_RETIRED_STATES = {
   welcomeMessage: 'familyMapping',
+  /* The insurance route has no KYC stage now: Documents Verification goes
+     straight on to the proposal form. */
+  insKyc: 'insProposal',
+  /* A policy in force is worked from its insurance module, not CMS
+     (migrateInsuranceToModules moves the policy first). */
+  insActive: 'insCompleted',
 };
 async function migrateRetiredStages(module, retired){
   const dbKey = RECORD_DB[module];
@@ -28818,19 +28866,22 @@ function INS_STEPS_ASK(){
     insProposalSubmitted: {title:'Proposal Form Submitted',
       note:'The proposal form signed by the client. Upload it on the Documents tab.',
       ask:['insProposalNo','insProposalDate'], req:['insProposalDate'], today:['insProposalDate']},
-    insCifValidated: {title:'CIF Validated',
-      note:'The CIF validation gate: never take the premium before the Client Information Form is in and checked.',
-      ask:['insCifIncomeOk','insCifKycOk'], req:['insCifIncomeOk','insCifKycOk'], mustBe:{insCifIncomeOk:'Yes', insCifKycOk:'Yes'}},
-    insProposalDone: {title:'Proposal Update & Premium Payment',
-      note:'Update the proposal with the verified CIF details, then collect the first premium. This closes the sale.',
-      ask:['insProposalNo','insProposalUpdatedOn','insPremiumPaidOn','insPaymentMode','insPaymentRef'],
-      req:['insProposalNo','insProposalUpdatedOn','insPremiumPaidOn','insPaymentMode'], today:['insProposalUpdatedOn','insPremiumPaidOn']},
+    insProposalUpdated: {title:'Proposal Updated',
+      note:'Update the proposal with the verified CIF and documents.',
+      ask:['insProposalNo','insProposalUpdatedOn'], req:['insProposalNo','insProposalUpdatedOn'], today:['insProposalUpdatedOn']},
+    insPremiumPaid: {title:'Premium Paid',
+      note:'The first premium, collected on the updated proposal. This closes the sale.',
+      ask:['insPremium','insPremiumPaidOn','insPaymentMode','insPaymentRef'],
+      req:['insPremiumPaidOn','insPaymentMode'], today:['insPremiumPaidOn']},
+    insMedicalFollowUp: {title:'Follow up with Medical Team',
+      note:'A task goes to the RM to chase the medical team; the stage stays on the scrub.',
+      ask:['insMedicalTeamNote'], req:['insMedicalTeamNote']},
     insDocsVerified: {title:'Pre-Underwriting Scrub',
       note:'Audit the medical answers on the updated proposal against the CIF disclosures, so nothing is disputed at underwriting or claim.',
       ask:['insScrubDisclosureOk','insScrubDocsOk'], req:['insScrubDisclosureOk','insScrubDocsOk'], mustBe:{insScrubDisclosureOk:'Yes', insScrubDocsOk:'Yes'}},
     insDocsMissing: {title:'Request Missing Documents or Corrections',
       ask:['insDocsNote'], req:['insDocsNote']},
-    insMedicalYes: {title:'Coordinate Medical Checkup',
+    insMedicalYes: {title:'Medical Required — Coordinate the Checkup',
       ask:['insMedicalType','insMedicalDate','insMedicalCentre'], req:['insMedicalType','insMedicalDate']},
     insMedicalDone: {title:'Medical Completed',
       ask:['insMedicalCompletedOn','insMedicalReportsUploaded'], req:['insMedicalCompletedOn','insMedicalReportsUploaded'],
@@ -28838,7 +28889,15 @@ function INS_STEPS_ASK(){
     insMedicalPending: {title:'Pending Medical Requirement',
       ask:['insMedicalNote','insMedicalDate'], req:['insMedicalNote']},
     insUwApproved: {title:'Underwriting Completed',
-      ask:['insUwOutcome','insUwTerms','insUwDecisionOn'], req:['insUwOutcome','insUwDecisionOn'], today:['insUwDecisionOn']},
+      note:'Policy Approved goes on to the policy. Any other outcome goes to the client to approve, then to payment, then back to the underwriter.',
+      ask:['insUwOutcome','insUwTerms','insUwDecisionOn'], req:['insUwOutcome','insUwTerms','insUwDecisionOn'], today:['insUwDecisionOn'], fresh:['insUwOutcome','insUwTerms']},
+    insUwClientApproved: {title:'Client Approved the Terms',
+      ask:['insUwClientApprovedOn'], req:['insUwClientApprovedOn'], today:['insUwClientApprovedOn'], fresh:['insUwClientApprovedOn']},
+    insUwClientDeclined: {title:'Client Declined the Terms — Close Application',
+      ask:['insRejectionReason'], req:['insRejectionReason']},
+    insUwPaymentDone: {title:'Payment for the Revised Terms',
+      note:'Once paid, the case goes back to the underwriter; their answer decides the next step.',
+      ask:['insUwExtraPremium','insUwPaidOn','insPaymentMode','insPaymentRef'], req:['insUwPaidOn','insPaymentMode'], today:['insUwPaidOn'], fresh:['insUwPaidOn','insUwExtraPremium']},
     insUwMore: {title:'Underwriter Query (counter-offer, loading or exclusion)',
       ask:['insUwNote'], req:['insUwNote']},
     insUwRejected: {title:'Close Application — Rejected',
@@ -28851,7 +28910,11 @@ function INS_STEPS_ASK(){
            'insFinalPremiumDate','insFinalPremiumCheck','insMaturityDate','insNomineeName'],
       twice:{insPolicyNoCheck:'insPolicyNo', insCommencementCheck:'insCommencementDate', insFinalPremiumCheck:'insFinalPremiumDate'},
       mail:{template:'insPolicyIssued', label:'Insurance Policy Issued', attach:1, what:'The policy letter'}},
+    insEndorsement: {title:'Endorsement Requirement',
+      note:'A task goes to the RM for the endorsement. Original Received & Client Confirmed waits until it is resolved.',
+      ask:['insEndorsementNote'], req:['insEndorsementNote']},
     insPolicyConfirmed: {title:'Original Policy & Client Confirmation',
+      note:'This completes the CMS journey: the policy moves to its insurance module for renewals, and the client to RMS for regular reviews.',
       ask:['insOriginalPolicyOn','insClientConfirmedOn'], req:['insOriginalPolicyOn','insClientConfirmedOn'],
       today:['insOriginalPolicyOn','insClientConfirmedOn']},
     insRenewalFollowUp: {title:'Renewal Premium Follow-up',
@@ -28866,6 +28929,14 @@ function INS_STEPS_ASK(){
   };
 }
 const INS_RENEWAL_TASK = 'Renewal Premium Follow-up';
+const INS_MEDICAL_TEAM_TASK = 'Follow up with Medical Team';
+const INS_UW_APPROVAL_TASK = 'Client Approval of Underwriting Terms';
+const INS_UW_PAYMENT_TASK = 'Collect Payment for Revised Terms';
+const INS_ENDORSE_TASK = 'Insurance Endorsement Requirement';
+function insOpenTask(r, taskType){
+  return (DB.tasks || []).find(x=>x && !x.deletedAt && x.clientId===r.id && x.taskType===taskType
+    && x.overallStatus!=='Completed' && x.overallStatus!=='Cancelled') || null;
+}
 function insIsStage(id){ return id==='insurancePending' || /^ins[A-Z]/.test(String(id||'')); }
 function insField(k){ return (CMS_FIELDS['Insurance Policy'] || []).find(f=>f.k===k); }
 function insCompanyName(r){ return r.insCompany==='Other' ? (r.insCompanyOther || 'Other') : (r.insCompany || ''); }
@@ -28931,16 +29002,21 @@ function insMailBoxHtml(r, st){
 function openInsuranceStepModal(module, recordId, stepId){
   const r = DB.clients.find(c=>c.id===recordId); if(!r) return;
   const st = INS_STEPS_ASK()[stepId]; if(!st) return doTransition('CMS', recordId, stepId);
-  if(stepId==='insCifValidated' && insCifGate(r)){ alert(insCifGate(r)); return; }
+  if(stepId==='insPolicyConfirmed' && insOpenTask(r, INS_ENDORSE_TASK)){
+    alert('An endorsement is still open on this policy.\n\nResolve the “' + INS_ENDORSE_TASK + '” task first, then confirm the original and the client.');
+    return;
+  }
   const today = hrToday();
   const val = f => {
     if(f.transient || (st.fresh||[]).indexOf(f.k) >= 0) return (st.today||[]).indexOf(f.k) >= 0 ? today : '';
     return r[f.k] || ((st.today||[]).indexOf(f.k) >= 0 ? today : '');
   };
   if(st.mail && st.mail.attach && typeof resetComposeAttachments === 'function') resetComposeAttachments();
+  window._insPdfClient = null;
   openModal(st.title,
     `<div class="small-note" style="margin:0 0 10px">${esc(r.cmsName || '')}${insPlanLine(r) ? ' · ' + esc(insPlanLine(r)) : ''}</div>`
     + (st.note ? `<div class="small-note" style="margin:0 0 10px">${esc(st.note)}</div>` : '')
+    + (stepId==='insPolicyEntered' ? (maLoadPdfJs().catch(()=>{}), insPolicyPdfBoxHtml(recordId)) : '')
     + `<div id="insStepForm">${insFieldsFor(stepId).map(f=>fieldInput(f, val(f))).join('')}</div>`
     + insMailBoxHtml(r, st),
     `<button class="btn" onclick="closeModal()">Cancel</button>
@@ -28986,6 +29062,7 @@ async function submitInsuranceStep(recordId, stepId){
     if(blank(v)) delete r[f.k]; else r[f.k] = v;
   });
   if(mailTo && mailTo !== r.email) r.email = mailTo;
+  if(stepId==='insPolicyEntered') await insApplyPdfClientDetails(r);
   await save('clients');
   await logAudit('CMS', r.id, 'Edit (insurance step)', diffFields(before, r, fields.filter(f=>!f.transient)));
   if(wantsMail){
@@ -29003,7 +29080,10 @@ async function submitInsuranceStep(recordId, stepId){
   }
   window._insNoted = noted;
   closeModal();
-  await doTransition('CMS', recordId, stepId);
+  /* The underwriter's outcome decides the step: Policy Approved goes on to
+     the policy, any other outcome to the client for approval. */
+  const go = stepId==='insUwApproved' && r.insUwOutcome && r.insUwOutcome !== INS_UW_APPROVED ? 'insUwTermsT' : stepId;
+  await doTransition('CMS', recordId, go);
   if(window._insMailNote){
     const note = window._insMailNote; window._insMailNote = '';
     alert(note + '\n\nThe step has moved on anyway. The letter is in the mail log, so you can send it by hand or again once email is working.');
@@ -29035,7 +29115,7 @@ async function insuranceAfterStep(r, id){
   }
   if(id==='insProposalSubmitted') line.note = 'Proposal ' + (r.insProposalNo || '') + ' signed ' + fmtDate(r.insProposalDate || today);
   if(id==='insCifSend'){ r.insCifRequestedAt = now; line.note = 'CIF requested' + (r.cifFormName ? ' (' + r.cifFormName + ')' : ''); }
-  if(id==='insCifValidated') line.note = 'CIF received ' + (r.cifSubmittedAt ? fmtDate(r.cifSubmittedAt) : '') + ' and validated';
+  if(id==='insCifReceivedT') line.note = 'CIF received ' + (r.cifSubmittedAt ? fmtDate(r.cifSubmittedAt) : '') + (r.cifReceivedOnPaper ? ' (on paper)' : ' from the client');
   if(id==='insDocsCheckedT') line.note = 'Documents checklist submitted' + (r.docsVerify && r.docsVerify.submittedAt ? ' ' + fmtDate(r.docsVerify.submittedAt) : '');
   /* KYC as the investment route records it: the status on the client, and
      the task each answer calls for. */
@@ -29047,9 +29127,31 @@ async function insuranceAfterStep(r, id){
     for(const k of ['Validate KYC', 'Create KYC', 'Prepare Physical KYC Documents']) await completeClientDST(r.id, k);
   }
   if(/^insKyc/.test(id)) line.note = 'KYC ' + r.kycStatus;
-  if(id==='insProposalDone'){ r.insuranceStatus = 'Applied'; line.note = 'Premium ' + insMoney(r.insPremium) + ' paid ' + fmtDate(r.insPremiumPaidOn || today) + (r.insPaymentMode ? ' by ' + r.insPaymentMode : ''); }
+  if(id==='insProposalUpdated') line.note = 'Proposal ' + (r.insProposalNo || '') + ' updated ' + fmtDate(r.insProposalUpdatedOn || today);
+  if(id==='insPremiumPaid'){ r.insuranceStatus = 'Applied'; line.note = 'Premium ' + insMoney(r.insPremium) + ' paid ' + fmtDate(r.insPremiumPaidOn || today) + (r.insPaymentMode ? ' by ' + r.insPaymentMode : ''); }
+  if(id==='insMedicalFollowUp'){ line.note = noted.insMedicalTeamNote || ''; await createClientDST(r, INS_MEDICAL_TEAM_TASK, 1, 'Follow up with the medical team for ' + r.cmsName + ': ' + (noted.insMedicalTeamNote || '')); }
+  if(id==='insUwTermsT'){
+    line.note = (r.insUwOutcome || '') + (r.insUwTerms ? ' — ' + r.insUwTerms : '') + '; to the client for approval';
+    await createClientDST(r, INS_UW_APPROVAL_TASK, 2, 'Get ' + r.cmsName + '\u2019s approval of the underwriting terms: ' + (r.insUwOutcome || '') + (r.insUwTerms ? ' — ' + r.insUwTerms : ''));
+  }
+  if(id==='insUwClientApproved'){
+    line.note = 'Approved ' + fmtDate(r.insUwClientApprovedOn || today);
+    await completeClientDST(r.id, INS_UW_APPROVAL_TASK);
+    await createClientDST(r, INS_UW_PAYMENT_TASK, 2, 'Collect the payment for the revised terms from ' + r.cmsName + (r.insUwTerms ? ' (' + r.insUwTerms + ')' : ''));
+  }
+  if(id==='insUwClientDeclined'){
+    r.insuranceStatus = 'Declined'; line.note = r.insRejectionReason || '';
+    await completeClientDST(r.id, INS_UW_APPROVAL_TASK);
+  }
+  if(id==='insUwPaymentDone'){
+    line.note = (r.insUwExtraPremium ? insMoney(r.insUwExtraPremium) + ' ' : '') + 'paid ' + fmtDate(r.insUwPaidOn || today) + (r.insPaymentMode ? ' by ' + r.insPaymentMode : '') + '; back to the underwriter';
+    await completeClientDST(r.id, INS_UW_PAYMENT_TASK);
+    r.insUwRounds = (r.insUwRounds || []).concat([{outcome: r.insUwOutcome || '', terms: r.insUwTerms || '', approvedOn: r.insUwClientApprovedOn || '',
+      paid: r.insUwExtraPremium || '', paidOn: r.insUwPaidOn || '', at: now}]);
+  }
+  if(id==='insEndorsement'){ line.note = noted.insEndorsementNote || ''; await createClientDST(r, INS_ENDORSE_TASK, 3, 'Endorsement on policy ' + (r.insPolicyNo || '') + ' for ' + r.cmsName + ': ' + (noted.insEndorsementNote || '')); }
   if(id==='insDocsMissing') await createClientDST(r, 'Collect Missing Insurance Documents', 2, note);
-  if(id==='insDocsVerified') await completeClientDST(r.id, 'Collect Missing Insurance Documents');
+  if(id==='insDocsVerified'){ await completeClientDST(r.id, 'Collect Missing Insurance Documents'); await completeClientDST(r.id, INS_MEDICAL_TEAM_TASK); }
   if(id==='insMedicalYes'){
     const days = Math.max(0, insDaysUntil(r.insMedicalDate) || 0);
     line.note = (r.insMedicalType || 'Medical') + ' on ' + fmtDate(r.insMedicalDate) + (r.insMedicalCentre ? ' at ' + r.insMedicalCentre : '');
@@ -29068,8 +29170,12 @@ async function insuranceAfterStep(r, id){
     line.note = 'Policy ' + r.insPolicyNo + ' from ' + fmtDate(r.insCommencementDate) + (next ? '; next premium ' + fmtDate(next) : '');
   }
   if(id==='insPolicyConfirmed'){
-    r.insuranceStatus = 'Active';
-    await insRaiseRenewalTask(r);
+    /* The CMS journey ends here: the policy moves to its insurance module
+       and the client to RMS. */
+    const done = await insCloseCmsJourney(r);
+    line.note = 'Journey completed — policy ' + (r.insPolicyNo || '') + ' filed under ' + ((INS_MODULES[done.policy.module] || {}).label || 'Insurance')
+      + '; next review ' + fmtDate(done.rms.date) + (done.rms.created ? ' (RMS review created)' : ' (RMS review on file)')
+      + (noted.insClosureNote ? ' — ' + noted.insClosureNote : '');
   }
   if(id==='insRenewalPaid'){
     const paidFor = r.insNextDueDate || '';
@@ -29089,7 +29195,7 @@ async function insuranceAfterStep(r, id){
     await completeClientDST(r.id, INS_RENEWAL_TASK);
     line.note = (r.insClosureReason || '') + (note ? ' — ' + note : '');
   }
-  if(id==='insReopen'){
+  if(id==='insReopen' || id==='insNewApplication'){
     /* A new application on the same client: what the last one chose is
        kept as a starting point; the policy it ended in is history. */
     if(r.insPolicyNo) r.insPastPolicies = (r.insPastPolicies || []).concat([{policyNo: r.insPolicyNo, plan: insPlanLine(r),
@@ -29114,6 +29220,185 @@ async function insRaiseRenewalTask(r){
   await createClientDST(r, INS_RENEWAL_TASK, days,
     'Premium of ' + insMoney(r.insPremium) + ' on policy ' + (r.insPolicyNo || '') + ' (' + insCompanyName(r) + ') is due on ' + fmtDate(r.insNextDueDate) + '.');
 }
+/* =====================================================================
+   POLICY DATA ENTRY FROM THE POLICY PDF
+
+   The insurer's policy schedule is uploaded on the Policy Data Entry box and
+   read for what it says: policy number, dates, premium, sum assured, mode,
+   nominee, plan, and who the policy holder is. An empty box is filled; a box
+   that already holds something different is listed for the adviser to
+   choose, never overwritten; the client's own verified details (name, PAN,
+   date of birth) change only when ticked and confirmed at Save. The "type
+   it again" boxes are left to be typed from the document, which is what
+   they are for.
+   ===================================================================== */
+const INS_MONTHS = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+const INS_DATE_RE = '(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}(?:st|nd|rd|th)?[\\s\\/\\-.]+(?:\\d{1,2}|[A-Za-z]{3,9})[\\s\\/\\-.,]+\\d{2,4}|[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
+function insPdfDate(s){
+  s = String(s || '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if(m) return s;
+  const two = n => String(n).padStart(2, '0');
+  const year = y => { y = Number(y); return y < 100 ? y + 2000 : y; };
+  m = /^(\d{1,2})(?:st|nd|rd|th)?[\s\/\-.]+(\d{1,2}|[A-Za-z]{3,9})[\s\/\-.,]+(\d{2,4})$/.exec(s);
+  if(m){
+    const mon = /\d/.test(m[2]) ? Number(m[2]) : INS_MONTHS[m[2].slice(0, 3).toLowerCase()];
+    if(mon >= 1 && mon <= 12 && Number(m[1]) >= 1 && Number(m[1]) <= 31) return year(m[3]) + '-' + two(mon) + '-' + two(m[1]);
+  }
+  m = /^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/.exec(s);
+  if(m && INS_MONTHS[m[1].slice(0, 3).toLowerCase()]) return m[3] + '-' + two(INS_MONTHS[m[1].slice(0, 3).toLowerCase()]) + '-' + two(m[2]);
+  return '';
+}
+function insPdfAmount(s){ const n = Number(String(s || '').replace(/[,\s]/g, '')); return isFinite(n) && n > 0 ? String(Math.round(n * 100) / 100) : ''; }
+/* What a policy schedule says, by the labels insurers print. Each label is
+   tried line by line, so a value never runs on into the next line's label. */
+function insParsePolicyText(text){
+  const lines = String(text || '').split(/\n/).map(l=>l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const sep = '\\s*(?:[:\\-–]|\\bis\\b)?\\s*';
+  const money = '(?:Rs\\.?|INR|₹)?\\s*([\\d,]+(?:\\.\\d{1,2})?)';
+  const find = (labels, value, clean) => {
+    for(const l of lines){
+      for(const lab of labels){
+        const m = new RegExp('(?:^|\\b)' + lab + sep + value, 'i').exec(l);
+        if(m){ const v = clean ? clean(m[1]) : m[1].trim(); if(v) return v; }
+      }
+    }
+    return '';
+  };
+  const DATE = INS_DATE_RE;
+  const out = {
+    insPolicyNo: find(['Policy\\s*(?:No\\.?|Number|#)', 'Certificate\\s*(?:No\\.?|Number)'], '([A-Z0-9][A-Z0-9\\/\\-]{4,})', v=>/\d/.test(v) ? v : ''),
+    insCommencementDate: find(['Date of Commencement(?: of (?:the )?(?:Policy|Risk))?', '(?:Risk |Policy )?Commencement Date', 'Policy Start Date',
+      'Start Date', 'Period of Insurance\\s*(?:From)?', 'Date of Issue'], DATE, insPdfDate),
+    insFinalPremiumDate: find(['Date of Last Premium(?: Payment| Due)?', 'Last Premium Due Date', 'Due Date of (?:the )?Last (?:Instal?l?ment|Premium)',
+      'Last Instal?l?ment (?:Premium )?(?:Due )?Date', 'Premium Paying Term End Date', 'Last Premium Date'], DATE, insPdfDate),
+    insMaturityDate: find(['Maturity Date', 'Date of Maturity', 'Policy End Date', 'Expiry Date', 'Date of Expiry', 'Period of Insurance.*?\\bTo'], DATE, insPdfDate),
+    insPremium: find(['Total Instal?l?ment Premium(?: \\(.*?\\))?', 'Instal?l?ment Premium(?: \\(.*?\\))?', 'Modal Premium', 'Total Premium(?: Payable)?(?: \\(.*?\\))?',
+      'Premium Amount', 'Renewal Premium', 'Premium(?: \\(.*?\\))?'], money, insPdfAmount),
+    insSumAssured: find(['Basic Sum Assured', 'Sum Assured(?: on Death)?(?: \\(.*?\\))?', 'Sum Insured(?: \\(.*?\\))?', 'Cover Amount'], money, insPdfAmount),
+    insPremiumFrequency: find(['Premium (?:Payment )?(?:Mode|Frequency)', 'Mode of (?:Premium )?Payment', 'Payment (?:Mode|Frequency)', 'Mode'],
+      '(Monthly|Quarterly|Half[\\s-]?Yearly|Semi[\\s-]?Annual(?:ly)?|Yearly|Annual(?:ly)?|Single(?: Premium)?)', v=>{
+        v = v.toLowerCase();
+        return /month/.test(v) ? 'Monthly' : /quarter/.test(v) ? 'Quarterly' : /half|semi/.test(v) ? 'Half-Yearly' : /single/.test(v) ? 'Single' : 'Yearly';
+      }),
+    insNomineeName: find(['Nominee(?:\\(s\\))?(?:\'s)? Name', 'Name of (?:the )?Nominee(?:\\(s\\))?', 'Nominee(?:\\(s\\))?'],
+      '([A-Za-z][A-Za-z .]{2,50}?)(?=\\s+(?:Relation(?:ship)?|Age|Share|DOB|Date)\\b|\\s*$|\\s*[,(])'),
+    insNomineeRelation: find(['Relation(?:ship)?(?: with (?:the )?(?:Life Assured|Proposer|Policy ?holder|Insured))?', 'Nominee Relation(?:ship)?'],
+      '(Spouse|Wife|Husband|Son|Daughter|Father|Mother|Brother|Sister|Grand ?(?:son|daughter|father|mother)|Child|Parent|Other)', v=>{
+        v = v.toLowerCase(); return /wife|husband|spouse/.test(v) ? 'Spouse' : v.charAt(0).toUpperCase() + v.slice(1);
+      }),
+    insPlanName: find(['Plan Name', 'Name of (?:the )?Plan', 'Product Name', 'Name of (?:the )?Product', 'Plan'], '([A-Za-z0-9][^:]{2,60}?)(?=\\s+(?:UIN|Plan No|Policy)\\b|\\s*$)'),
+    holderName: find(['Name of (?:the )?(?:Policy ?holder|Proposer|Life Assured|Life to be Assured|Insured)', 'Policy ?holder(?:\'s)? Name',
+      'Proposer(?:\'s)? Name', 'Life Assured(?:\'s)? Name', 'Insured(?: Person)?(?:\'s)? Name'],
+      '((?:Mr|Mrs|Ms|Miss|Dr)?\\.?\\s*[A-Za-z][A-Za-z .]{2,60}?)(?=\\s+(?:Age|DOB|Date|Gender|PAN|Address|Policy)\\b|\\s*$|\\s*,)'),
+    pan: find(['PAN(?: No\\.?| Number)?(?: of (?:the )?(?:Policy ?holder|Proposer))?'], '([A-Z]{5}\\d{4}[A-Z])'),
+    dob: find(['Date of Birth(?: of (?:the )?(?:Life Assured|Proposer|Policy ?holder))?', 'DOB'], DATE, insPdfDate),
+  };
+  if(!out.pan){ const m = /\b([A-Z]{5}\d{4}[A-Z])\b/.exec(String(text || '')); if(m) out.pan = m[1]; }
+  Object.keys(out).forEach(k=>{ if(!out[k]) delete out[k]; });
+  return out;
+}
+async function insPolicyPdfText(file, password){
+  /* The reader's first document on a freshly started worker can sit
+     unanswered; asking again a few seconds later gets it read. */
+  let pages = null;
+  for(let i = 0; i < 3 && !pages; i++){
+    const buf = await file.arrayBuffer();
+    pages = await Promise.race([MaExtract.pdfPages(buf, password), new Promise(r=>setTimeout(()=>r(null), 4000 + i * 4000))]);
+  }
+  if(!pages) throw new Error('the PDF reader did not answer');
+  return pages.map(p=>p.lines.map(l=>l.map(c=>c.text).join(' ')).join('\n')).join('\n');
+}
+const INS_PDF_CLIENT_FIELDS = [['holderName', 'cmsName', 'Client name'], ['pan', 'pan', 'PAN'], ['dob', 'dob', 'Date of birth']];
+function insPolicyPdfBoxHtml(recordId){
+  return `<div class="card" id="insPolicyPdfBox" style="margin:0 0 12px;padding:12px 14px">
+    <b>Fill from the policy PDF</b>
+    <div class="small-note" style="margin:4px 0 8px">Upload the insurer’s policy schedule. Empty boxes are filled from it; anything that differs from what is already here is listed for you to choose. Correct anything it read wrongly before saving. The “type it again” boxes are left for you to type from the document.</div>
+    <input type="file" id="insPolicyPdf" accept="application/pdf,.pdf" onchange="insReadPolicyPdf(this, '${esc(recordId)}')">
+    <div id="insPolicyPdfResult" class="small-note" style="margin:8px 0 0"></div>
+  </div>`;
+}
+async function insReadPolicyPdf(input, recordId, password){
+  const file = input && input.files && input.files[0]; if(!file) return;
+  const out = document.getElementById('insPolicyPdfResult');
+  if(out) out.textContent = 'Reading ' + file.name + '…';
+  let text = '';
+  try { text = await insPolicyPdfText(file, password); }
+  catch(e){
+    if(e && /password/i.test(String(e.name || '') + ' ' + String(e.message || ''))){
+      const pw = prompt('This PDF is protected with a password. Enter it to read the policy:');
+      if(pw) return insReadPolicyPdf(input, recordId, pw);
+    }
+    if(out) out.textContent = 'This PDF could not be read: ' + ((e && e.message) || e) + '. Type the policy in by hand.';
+    return;
+  }
+  /* The PDF also goes with the policy letter, when the letter is sent. */
+  try {
+    if(typeof composeAttachments !== 'undefined' && Array.isArray(composeAttachments)){
+      const b = new Uint8Array(await file.arrayBuffer()); let bin = '';
+      for(let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+      for(let i = composeAttachments.length - 1; i >= 0; i--) if(composeAttachments[i] && composeAttachments[i]._fromPolicyPdf) composeAttachments.splice(i, 1);
+      composeAttachments.push({filename: file.name, contentType: 'application/pdf', content: btoa(bin), bytes: file.size, _fromPolicyPdf: true});
+      refreshComposeAttachments();
+    }
+  } catch(e){}
+  insApplyPolicyPdf(recordId, insParsePolicyText(text), file.name);
+}
+/* Fill what is empty, list what differs. Returns what it did, for the
+   adviser and for the tests. */
+function insApplyPolicyPdf(recordId, found, fileName){
+  const r = DB.clients.find(c=>c.id===recordId) || {};
+  const filled = [], differs = [], client = [];
+  const label = k => (insField(k) || {}).l || k;
+  Object.keys(found).forEach(k=>{
+    const el = document.getElementById('f_' + k);
+    if(!el) return;
+    const have = String(el.value || '').trim(), want = String(found[k]);
+    const num = x => String(x).replace(/[,\s₹]/g, '');
+    if(have && /^[\d.]+$/.test(num(want)) && Number(num(have)) === Number(num(want))) return;
+    if(!have){ el.value = want; el.dispatchEvent(new Event('change', {bubbles: true})); filled.push(k); }
+    else if(have.toLowerCase() !== want.toLowerCase()) differs.push({k, have, want});
+  });
+  INS_PDF_CLIENT_FIELDS.forEach(([src, k, l])=>{
+    const want = found[src]; if(!want) return;
+    const have = String(r[k] || '').trim();
+    const same = k==='cmsName' ? have.toLowerCase().replace(/^(mr|mrs|ms|miss|dr)\.?\s+/, '') === want.toLowerCase().replace(/^(mr|mrs|ms|miss|dr)\.?\s+/, '') : have.toUpperCase() === want.toUpperCase();
+    if(!same) client.push({k, l, have, want});
+  });
+  window._insPdfClient = {recordId, diffs: client};
+  const out = document.getElementById('insPolicyPdfResult');
+  if(out){
+    out.innerHTML = (filled.length || differs.length || client.length || Object.keys(found).length
+      ? `Read ${esc(fileName || 'the PDF')}: ${filled.length ? 'filled ' + filled.map(k=>esc(label(k))).join(', ') + '.' : 'nothing new to fill.'}`
+      : `Nothing recognisable was found in ${esc(fileName || 'the PDF')} (a scanned image has no text to read). Type the policy in by hand.`)
+      + (differs.length ? `<div id="insPdfDiffers" style="margin-top:6px"><b>Different on the policy</b> — tick the ones to take from it:
+          ${differs.map(d=>`<label style="display:block"><input type="checkbox" data-k="${esc(d.k)}" data-v="${esc(d.want)}"> ${esc(label(d.k))}: here “${esc(d.have)}”, on the policy “${esc(d.want)}”</label>`).join('')}
+          <button class="btn sm" style="margin-top:4px" onclick="insUsePdfValues()">Use the ticked values</button></div>` : '')
+      + (client.length ? `<div id="insPdfClient" style="margin-top:6px"><b>The client’s details differ from the policy</b> — the verified record is kept unless you tick a line; ticked lines are confirmed again at Save:
+          ${client.map(d=>`<label style="display:block"><input type="checkbox" data-k="${esc(d.k)}"> ${esc(d.l)}: on file “${esc(d.have || '—')}”, on the policy “${esc(d.want)}”</label>`).join('')}</div>` : '');
+  }
+  return {filled, differs, client};
+}
+function insUsePdfValues(){
+  document.querySelectorAll('#insPdfDiffers input[type=checkbox]:checked').forEach(cb=>{
+    const el = document.getElementById('f_' + cb.dataset.k);
+    if(el){ el.value = cb.dataset.v; el.dispatchEvent(new Event('change', {bubbles: true})); }
+    cb.closest('label').remove();
+  });
+}
+/* At Save: the client details ticked from the policy, confirmed once more. */
+async function insApplyPdfClientDetails(r){
+  const pend = window._insPdfClient;
+  if(!pend || pend.recordId !== r.id) return true;
+  const ticked = pend.diffs.filter(d=>{ const cb = document.querySelector('#insPdfClient input[data-k="' + d.k + '"]'); return cb && cb.checked; });
+  if(!ticked.length) return true;
+  if(!confirm('Update the client’s verified record from the policy?\n\n' + ticked.map(d=>d.l + ': “' + (d.have || '—') + '” → “' + d.want + '”').join('\n')
+    + '\n\nCancel keeps the client record as it is and saves the policy.')) return true;
+  const before = Object.assign({}, r);
+  ticked.forEach(d=>{ r[d.k] = d.want; });
+  await logAudit('CMS', r.id, 'Client details updated from the policy PDF', ticked.map(d=>({field:d.l, oldValue:before[d.k] || '', newValue:d.want})));
+  return true;
+}
 /* The CIF gate holds here as well as on the button. */
 function insCifGate(r){
   if(r.cifSubmittedAt) return '';
@@ -29126,26 +29411,29 @@ async function insRecordPaperCif(clientId){
   if(!confirm('Record the CIF as received on paper?')) return;
   r.cifSubmittedAt = new Date().toISOString();
   r.cifReceivedOnPaper = true;
-  r.insHistory = (r.insHistory || []).concat([{at: r.cifSubmittedAt, by: currentUser, step:'insCifPaper', label:'CIF received on paper'}]);
   await save('clients');
   await logAudit('CMS', r.id, 'CIF Recorded as Received on Paper', [{field:'By', oldValue:'', newValue: teamName(currentUser)}]);
-  render();
+  // As with the online form, the CIF being in moves the client on.
+  if(stateOf('CMS', r) === 'insCif') await doTransition('CMS', r.id, 'insCifReceivedT');
+  else render();
 }
 const INS_STAGE_NOTE = {
   insurancePending: 'Intake: choose Life or General, then the company, then the type and the plan, and send the client the benefit illustration.',
   insIllustration: 'Waiting for the client’s answer. Accepted goes on to the proposal form; otherwise send a revised illustration, as often as it takes.',
   insProposal: 'Get the proposal form signed by the client and record it.',
-  insCif: 'Request the Client Information Form: KYC, address and financial proofs (ITR, bank statements), medical and family history. No premium before it is in and validated.',
-  insDocsCheck: 'Work through the documents checklist above against what is on file and the CIF, and submit it; KYC opens once it is submitted.',
-  insKyc: 'Check the KYC on the KRA with the PAN. Registered, Not Registered and On Hold each raise their task; only Validated moves on to the proposal update.',
-  insProposalUpdate: 'Update the proposal with the verified CIF details and collect the first premium. This closes the sale.',
-  insDocsVerification: 'Pre-underwriting scrub: check the proposal’s medical answers against the CIF disclosures and the documents. Ask for anything missing.',
+  insCif: 'Send the Client Information Form: KYC, address and financial proofs (ITR, bank statements), medical and family history, existing policies. The stage moves to Documents Verification by itself when the client submits it.',
+  insDocsCheck: 'Work through the documents checklist above — including Health, Income and Existing Policy — against what is on file and the CIF, and submit it; then go on to the proposal form.',
+  insProposalUpdate: 'Update the proposal with the verified CIF details.',
+  insPremiumPayment: 'Collect the first premium. This closes the sale.',
+  insDocsVerification: 'Pre-underwriting scrub: check the proposal’s medical answers against the CIF disclosures, the documents and any medical reports. Ask for anything missing, or follow up with the medical team.',
   insMedical: 'Does the carrier’s grid (age, sum assured, disclosures) call for a tele-medical or physical examination?',
   insMedicalCheckup: 'Coordinate the checkup with the diagnostic centre or home visit, make sure the reports reach the insurer portal, then mark it completed.',
-  insUnderwriting: 'With the underwriter. Record any counter-offer, loading or exclusion query, then the sign-off.',
+  insUnderwriting: 'With the underwriter. Record the outcome: Policy Approved goes on to the policy; loading, exclusion or a counter-offer goes to the client to approve and pay, then back here.',
+  insUwClientApproval: 'The underwriter’s terms are with the client. Record their approval, or close the application if they decline.',
+  insUwPayment: 'Collect the payment for the revised terms; confirming it sends the case back to the underwriter.',
   insPolicyIssuance: 'Enter the policy as issued and email the client. Policy number and the two dates are typed twice.',
-  insPolicyDelivery: 'Record when the original policy document arrived and when the client confirmed it.',
-  insActive: 'In force. The client is emailed from 30 days before each premium through the grace period, and the RM gets a follow-up task; confirm each payment here.',
+  insPolicyDelivery: 'Record when the original policy document arrived and when the client confirmed it. Raise an Endorsement Requirement first if the policy needs one.',
+  insCompleted: 'The CMS journey is complete. Renewals, premium reminders and PPT are worked from the policy’s insurance module; regular reviews from RMS.',
   insClosed: 'This insurance application or policy is closed.',
 };
 function insurancePanelHtml(r, cur, editable){
@@ -29159,7 +29447,7 @@ function insurancePanelHtml(r, cur, editable){
       ${editable && !r.cifSubmittedAt ? `<div class="row" style="gap:8px;margin:0 0 8px"><button class="btn sm" onclick="insRecordPaperCif('${esc(r.id)}')">Record a CIF received on paper</button></div>` : ''}` : '';
   return `<div class="stage-panel" id="insPanel">
     <div class="stage-panel-head"><b>Insurance</b>
-      ${r.insuranceStatus ? `<span class="badge ${r.insuranceStatus==='Active' ? 'ok' : r.insuranceStatus==='Rejected' || r.insuranceStatus==='Expired' ? 'danger' : 'warn'}">${esc(r.insuranceStatus)}</span>` : ''}
+      ${r.insuranceStatus ? `<span class="badge ${r.insuranceStatus==='Active' || r.insuranceStatus==='Policy Delivered' ? 'ok' : r.insuranceStatus==='Rejected' || r.insuranceStatus==='Expired' ? 'danger' : 'warn'}">${esc(r.insuranceStatus)}</span>` : ''}
       ${due ? `<span class="badge ${left <= 30 ? 'warn' : 'info'}">Next premium ${esc(fmtDate(due))}${left !== null ? ' · ' + (left < 0 ? Math.abs(left) + ' days overdue' : left + ' days') : ''}</span>` : ''}</div>
     <div class="small-note" style="margin:0 0 8px">${esc(INS_STAGE_NOTE[cur] || '')}</div>
     ${cif}
@@ -29178,10 +29466,403 @@ function insurancePanelHtml(r, cur, editable){
       ${row('Fund value', r.insFundValue ? insMoney(r.insFundValue) + (r.insFundValueOn ? ' on ' + fmtDate(r.insFundValueOn) : '') : '')}
       ${row('Renewals paid', (r.insRenewals || []).length ? String((r.insRenewals || []).length) : '')}
     </div>
+    ${insClientPoliciesHtml(r.id)}
     ${hist.length ? `<table class="table" id="insHistory" style="margin-top:10px"><thead><tr><th>When</th><th>Step</th><th>Detail</th><th>By</th></tr></thead><tbody>
       ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(h.by==='server' ? 'Automatic' : (teamName(h.by) || ''))}</td></tr>`).join('')}
     </tbody></table>` : ''}
   </div>`;
+}
+/* =====================================================================
+   LIFE, HEALTH AND GENERAL INSURANCE — AFTER THE CMS JOURNEY
+
+   The CMS journey ends once the original policy has reached the client and
+   they have confirmed it. What follows — premiums and renewals, the three
+   follow-up actions, reminders, the payment history and the end of the
+   premium paying term — is worked here, one entry per policy, filed under
+   the client it belongs to. The client stays one record; a second policy is
+   a second entry beside the first, never a second client.
+
+   The fields keep the names they had on the client (insPolicyNo,
+   insNextDueDate, ...), so the plan line, the due-date arithmetic and the
+   letters are the same functions the journey uses.
+   ===================================================================== */
+const INS_MODULES = {
+  inslife:    {view:'inslife',    mod:'INSLIFE',    label:'Life Insurance',    short:'Life',    icon:'🛡️'},
+  inshealth:  {view:'inshealth',  mod:'INSHEALTH',  label:'Health Insurance',  short:'Health',  icon:'🩺'},
+  insgeneral: {view:'insgeneral', mod:'INSGENERAL', label:'General Insurance', short:'General', icon:'🏠'},
+};
+const INS_POLICY_KEYS = ['insCategory','insCompany','insCompanyOther','insLifeType','insGeneralCategory','insHealthType','insPlanName',
+  'insSumAssured','insPremium','insPremiumFrequency','insPolicyTerm','insPayingTerm','insRiders','insProposalNo','insPolicyNo',
+  'insCommencementDate','insFinalPremiumDate','insMaturityDate','insNomineeName','insNomineeRelation','insNextDueDate',
+  'insFundValue','insFundValueOn','insOriginalPolicyOn','insClientConfirmedOn'];
+const INS_PPT_STATUS = 'PPT Completed';
+/* Life → Life Insurance; General with a Health category → Health
+   Insurance; any other General cover → General Insurance. */
+function insModuleViewOf(src){
+  if(!src) return 'insgeneral';
+  if(src.insCategory==='Life Insurance') return 'inslife';
+  if(src.insGeneralCategory==='Health') return 'inshealth';
+  return 'insgeneral';
+}
+function insPolicyList(){ return (DB.insPolicies || []).filter(p=>p && !p.deletedAt); }
+function insPoliciesOf(clientId){ return insPolicyList().filter(p=>p.clientId===clientId); }
+function insPolicyClient(p){ return (DB.clients || []).find(c=>c.id===p.clientId) || null; }
+/* What a letter about this policy can say: the client's name and address
+   with the policy's own facts over them. */
+function insPolicyView(p){
+  const c = insPolicyClient(p) || {};
+  return Object.assign({cmsName: c.cmsName || '', email: c.email || '', rmName: c.rmName || '', assignedTo: c.assignedTo}, p);
+}
+function insPolicyOpenTask(p, taskType){
+  return (DB.tasks || []).find(t=>t && !t.deletedAt && t.clientId===p.clientId && t.taskType===taskType
+    && (t.policyId===p.id || (!t.policyId && t.policyNo && t.policyNo===p.insPolicyNo))
+    && t.overallStatus!=='Completed' && t.overallStatus!=='Cancelled') || null;
+}
+async function insPolicyCompleteTask(p, taskType){
+  const t = insPolicyOpenTask(p, taskType);
+  if(t){ t.overallStatus = 'Completed'; t.completedAt = new Date().toISOString(); await save('tasks'); }
+}
+/* Thirty days before a premium falls due the RM is given the follow-up —
+   one per policy, so a client with two policies gets two. */
+async function insPolicyRaiseTask(p){
+  if(!p.insNextDueDate || p.status!=='Active') return;
+  if(insPolicyOpenTask(p, INS_RENEWAL_TASK)) return;
+  if(!automationOn('stageTasks')) return;
+  const c = insPolicyClient(p) || {};
+  const days = Math.max(0, (insDaysUntil(p.insNextDueDate) || 0) - 30);
+  await automationRan('stageTasks', INS_RENEWAL_TASK + ' raised', p.clientId);
+  DB.tasks.push({id:uid('DST'), taskType:INS_RENEWAL_TASK, clientId:p.clientId, policyId:p.id, policyNo:p.insPolicyNo || '',
+    assignTo:c.rmName || currentUser, assignedDate:hrToday(), dueDate:futureDate(days), urgencyLevel:'Medium', overallStatus:'Not Started',
+    description:'Premium of ' + insMoney(p.insPremium) + ' on policy ' + (p.insPolicyNo || '') + ' (' + insCompanyName(p) + ') is due on ' + fmtDate(p.insNextDueDate) + '.'});
+  await save('tasks');
+}
+/* The policy as the journey left it. Found again by client and policy
+   number, so confirming twice, or a migration run twice, updates the one
+   entry rather than making a second. */
+async function insPolicyFromClient(r, opts){
+  opts = opts || {};
+  DB.insPolicies = DB.insPolicies || [];
+  const no = String(r.insPolicyNo || '').trim();
+  let p = no ? DB.insPolicies.find(x=>x && !x.deletedAt && x.clientId===r.id && String(x.insPolicyNo || '').trim()===no) : null;
+  const now = new Date().toISOString();
+  const isNew = !p;
+  if(isNew){
+    p = {id:uid('POL'), clientId:r.id, createdAt:now, createdBy:currentUser, source:'CMS', renewals:[], history:[]};
+    DB.insPolicies.push(p);
+  }
+  INS_POLICY_KEYS.forEach(k=>{ if(r[k]!==undefined && r[k]!=='') p[k] = r[k]; });
+  p.module = insModuleViewOf(p);
+  if(Array.isArray(r.insRenewals) && r.insRenewals.length && !(p.renewals || []).length) p.renewals = r.insRenewals.slice();
+  if(isNew || !p.status){
+    p.status = p.insNextDueDate || (INS_FREQUENCY_MONTHS[p.insPremiumFrequency] && !(p.insFinalPremiumDate && p.insFinalPremiumDate < hrToday()))
+      ? 'Active' : INS_PPT_STATUS;
+  }
+  p.updatedAt = now;
+  p.history = (p.history || []).concat([{at:now, by:currentUser, step:'insPolicyFiled', label: isNew ? 'Policy filed from CMS' : 'Policy updated from CMS',
+    note: opts.note || ('Original received ' + (r.insOriginalPolicyOn ? fmtDate(r.insOriginalPolicyOn) : '') + (r.insClientConfirmedOn ? ', client confirmed ' + fmtDate(r.insClientConfirmedOn) : ''))}]);
+  r.insPolicyIds = Array.from(new Set((r.insPolicyIds || []).concat([p.id])));
+  await save('insPolicies');
+  if(opts.adoptTasks){
+    /* A renewal task raised on the client before policies had entries of
+       their own belongs to this one. */
+    let moved = false;
+    (DB.tasks || []).forEach(t=>{ if(t && !t.deletedAt && t.clientId===r.id && t.taskType===INS_RENEWAL_TASK && !t.policyId
+      && t.overallStatus!=='Completed' && t.overallStatus!=='Cancelled'){ t.policyId = p.id; t.policyNo = p.insPolicyNo || ''; moved = true; } });
+    if(moved) await save('tasks');
+  }
+  await insPolicyRaiseTask(p);
+  return p;
+}
+/* The meeting the next review is counted from: the last one CMS held with
+   the client, and failing that the day the journey closed. */
+function insLastCmsMeetingDate(clientId){
+  const today = hrToday();
+  const ds = (DB.meetings || []).filter(m=>m && !m.deletedAt && m.clientId===clientId && m.linkedModule==='CMS'
+    && m.status!=='Cancelled' && m.scheduledDate && m.scheduledDate <= today).map(m=>m.scheduledDate).sort();
+  return ds.length ? ds[ds.length - 1] : '';
+}
+function rmsReviewOpen(rv){
+  if(!rv || rv.deletedAt) return false;
+  const st = (getBlueprint('RMS').states || []).find(s=>s.id===stateOf('RMS', rv));
+  return !(st && st.terminal) && !/^closed$/i.test(String(rv.rmsStatus || ''));
+}
+/* The client goes on to RMS for regular reviews. An open review already on
+   file is given the date rather than a second review being made beside it. */
+async function insScheduleRmsReview(r){
+  const from = insLastCmsMeetingDate(r.id) || r.insClientConfirmedOn || hrToday();
+  let date = nextReviewDateFrom(r.clientCategory, from);
+  if(date < hrToday()) date = nextReviewDateFrom(r.clientCategory, hrToday());
+  const open = (DB.reviews || []).filter(rmsReviewOpen).find(rv=>rv.clientId===r.id);
+  if(open){
+    if(open.meetingDate !== date && stateOf('RMS', open)===getBlueprint('RMS').startState){
+      const was = open.meetingDate || '';
+      open.meetingDate = date;
+      await save('reviews');
+      await logAudit('RMS', open.id, 'Next Review Date Set from CMS', [{field:'Meeting Date', oldValue:was, newValue:date}]);
+    }
+    return {review:open, date, created:false, from};
+  }
+  const review = {id:uid('RMS'), clientId:r.id, reviewType:'Portfolio Review', meetingDate:date, source:'Insurance — CMS journey completed'};
+  initState('RMS', review);
+  DB.reviews.push(review);
+  await save('reviews');
+  await createReviewDST(review, 'Prepare Review Form', Math.max(1, (insDaysUntil(date) || 0) - 7),
+    'Prepare the review for ' + (r.cmsName || '') + ' — due ' + fmtDate(date) + ', counted from the last CMS meeting (' + fmtDate(from) + ').');
+  await logAudit('CMS', r.id, 'Moved to RMS after the insurance journey', [{field:'Next Review Date', oldValue:'', newValue:date + ' (Category ' + (r.clientCategory || '—') + ', from ' + from + ')'}]);
+  return {review, date, created:true, from};
+}
+/* Closing the journey: the policy gets its entry in its module, the client
+   is handed to RMS, and the client stops carrying a due date of its own —
+   reminders come from the policy only, never from both. */
+async function insCloseCmsJourney(r){
+  /* A renewal task already raised on the client becomes the policy's. */
+  const p = await insPolicyFromClient(r, {adoptTasks:true});
+  delete r.insNextDueDate;
+  r.insuranceStatus = 'Policy Delivered';
+  r.insJourneyClosedAt = new Date().toISOString();
+  await save('clients');
+  const rms = await insScheduleRmsReview(r);
+  return {policy:p, rms};
+}
+/* Clients left at the old "Policy In Force" stage, and any outcome still
+   recorded as "Standard", from before the journey ended at delivery. */
+async function migrateInsuranceToModules(){
+  let touched = false;
+  for(const c of (DB.clients || [])){
+    if(!c || c.deletedAt) continue;
+    if(c.insUwOutcome==='Standard'){ c.insUwOutcome = INS_UW_APPROVED; touched = true; }
+    if(c[RECORD_STATE_FIELD.CMS]==='insActive' && c.insPolicyNo && !insPoliciesOf(c.id).some(p=>p.insPolicyNo===c.insPolicyNo)){
+      const p = await insPolicyFromClient(c, {note:'Moved from the CMS “Policy In Force” stage', adoptTasks:true});
+      if(c.insuranceStatus==='Expired'){ p.status = 'Closed'; await save('insPolicies'); }
+      delete c.insNextDueDate;
+      touched = true;
+    }
+  }
+  if(touched) await save('clients');
+}
+
+/* ------------------------------------------------------------ the page */
+function insModuleRows(view){
+  const all = insPolicyList().filter(p=>(p.module || insModuleViewOf(p))===view);
+  const ownerOf = p => (insPolicyClient(p) || {}).rmName;
+  const branchOf = p => (insPolicyClient(p) || {}).branch;
+  return visibleRecords(all, ownerOf, branchOf);
+}
+function insDueState(p){
+  if(p.status!=='Active' || !p.insNextDueDate) return '';
+  const left = insDaysUntil(p.insNextDueDate);
+  return left < 0 ? 'overdue' : left <= 30 ? 'due' : 'later';
+}
+function insStatusBadge(p){
+  const tone = p.status==='Active' ? 'ok' : p.status===INS_PPT_STATUS ? 'info' : 'muted';
+  return `<span class="badge ${tone}">${esc(p.status || '—')}</span>`;
+}
+function insDueCell(p){
+  if(!p.insNextDueDate) return '—';
+  const left = insDaysUntil(p.insNextDueDate), st = insDueState(p);
+  return `${esc(fmtDate(p.insNextDueDate))}${st ? `<div class="small-note" style="margin:0;color:${st==='overdue' ? 'var(--danger)' : st==='due' ? 'var(--warn)' : 'inherit'}">${
+    left < 0 ? Math.abs(left) + ' days overdue' : left === 0 ? 'due today' : left + ' days'}</div>` : ''}`;
+}
+function viewInsModule(view){
+  const m = INS_MODULES[view];
+  const all = insModuleRows(view);
+  const mod = m.mod;
+  const searchKey = '_insSearch_' + view;
+  let rows = all.filter(p=>{
+    const c = insPolicyClient(p) || {};
+    return matchesSearch(window[searchKey], Object.assign({}, p, {cmsName:c.cmsName, mobile:c.mobile}), {});
+  });
+  const n = f => all.filter(f).length;
+  const tests = {
+    active: p=>p.status==='Active',
+    due: p=>insDueState(p)==='due',
+    overdue: p=>insDueState(p)==='overdue',
+    ppt: p=>p.status===INS_PPT_STATUS,
+    closed: p=>p.status==='Closed',
+  };
+  rows = applyCardFilter(mod, rows, tests);
+  rows = rows.slice().sort((a, b)=>String(a.insNextDueDate || '9999').localeCompare(String(b.insNextDueDate || '9999')));
+  return `
+    ${moduleHeader({title:m.label, subtitle: all.length + ' ' + (all.length===1 ? 'policy' : 'policies')
+      + ' · premiums, renewals and the end of the paying term, after the CMS journey has delivered the policy'})}
+    <div id="insKpis">${kpiCards([
+      filterCard(mod, '', 'Total Policies', all.length),
+      filterCard(mod, 'active', 'In Force', n(tests.active), 'ok'),
+      filterCard(mod, 'due', 'Due in 30 Days', n(tests.due), 'warn'),
+      filterCard(mod, 'overdue', 'Overdue', n(tests.overdue), 'danger'),
+      filterCard(mod, 'ppt', INS_PPT_STATUS, n(tests.ppt), 'info'),
+      filterCard(mod, 'closed', 'Closed', n(tests.closed)),
+    ])}</div>
+    ${cardFilterNote(mod, {active:'In Force', due:'Due in 30 Days', overdue:'Overdue', ppt:INS_PPT_STATUS, closed:'Closed'})}
+    ${listSearchRow({stateKey:searchKey, live:true})}
+    <div class="table-wrap">
+      <table id="insPolicyTable">
+        <thead><tr><th>Client</th><th>Policy No.</th><th>Company · Plan</th><th>Premium</th><th>Next Premium</th><th>Status</th><th>RM</th></tr></thead>
+        <tbody>
+          ${rows.map(p=>{
+            const c = insPolicyClient(p) || {};
+            return `<tr class="row-clickable" data-policy="${esc(p.id)}" onclick="openInsPolicy('${esc(p.id)}')">
+              <td style="font-weight:700">${esc(c.cmsName || '—')}</td>
+              <td><span class="badge muted">${esc(p.insPolicyNo || '—')}</span></td>
+              <td>${esc([insCompanyName(p), p.insPlanName].filter(Boolean).join(' · ') || '—')}${insTypeOf(p) ? `<div class="small-note" style="margin:0">${esc(insTypeOf(p))}</div>` : ''}</td>
+              <td>${esc(insMoney(p.insPremium) || '—')}${p.insPremiumFrequency ? `<div class="small-note" style="margin:0">${esc(p.insPremiumFrequency)}</div>` : ''}</td>
+              <td>${insDueCell(p)}</td>
+              <td>${insStatusBadge(p)}</td>
+              <td style="color:var(--info)">${esc(teamName(c.rmName) || '—')}</td>
+            </tr>`;}).join('') || `<tr><td colspan="7" class="empty">No ${esc(m.short.toLowerCase())} policies match. A policy is filed here when its CMS insurance journey is completed.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+function insPolicyDetailHtml(p){
+  const c = insPolicyClient(p) || {};
+  const row = (l, v) => v ? `<div><span class="small-note" style="margin:0">${esc(l)}</span><div><b>${esc(v)}</b></div></div>` : '';
+  const ren = (p.renewals || []).slice().reverse();
+  const hist = (p.history || []).slice().reverse();
+  const canAct = can('CMS', 'edit');
+  return `<div id="insPolicyDetail" data-policy="${esc(p.id)}">
+    <div class="row" style="gap:8px;align-items:center;margin:0 0 8px">
+      <b>${esc(c.cmsName || '')}</b> ${insStatusBadge(p)}
+      ${p.insNextDueDate && p.status==='Active' ? `<span class="badge ${insDueState(p)==='later' ? 'info' : 'warn'}">Next premium ${esc(fmtDate(p.insNextDueDate))}</span>` : ''}
+      <a href="javascript:void(0)" class="cell-link" onclick="closeModal(); navigate('cms','${esc(p.clientId)}')">Open client</a>
+    </div>
+    ${insPlanLine(p) ? `<div style="margin:0 0 8px"><b>${esc(insPlanLine(p))}</b></div>` : ''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 16px">
+      ${row('Policy no.', p.insPolicyNo)}
+      ${row('Premium', p.insPremium ? insMoney(p.insPremium) + (p.insPremiumFrequency ? ' · ' + p.insPremiumFrequency : '') : '')}
+      ${row('Sum assured', insMoney(p.insSumAssured))}
+      ${row('Commencement', p.insCommencementDate ? fmtDate(p.insCommencementDate) : '')}
+      ${row('Date of last payment', p.insFinalPremiumDate ? fmtDate(p.insFinalPremiumDate) : '')}
+      ${row('Maturity', p.insMaturityDate ? fmtDate(p.insMaturityDate) : '')}
+      ${row('Nominee', [p.insNomineeName, p.insNomineeRelation ? '(' + p.insNomineeRelation + ')' : ''].filter(Boolean).join(' '))}
+      ${row('Fund value', p.insFundValue ? insMoney(p.insFundValue) + (p.insFundValueOn ? ' on ' + fmtDate(p.insFundValueOn) : '') : '')}
+      ${row('PPT completed', p.pptCompletedOn ? fmtDate(p.pptCompletedOn) : '')}
+      ${row('Closed', p.closedOn ? fmtDate(p.closedOn) + (p.insClosureReason ? ' — ' + p.insClosureReason : '') : '')}
+    </div>
+    ${canAct && p.status!=='Closed' ? `<div class="row" style="gap:8px;margin:12px 0 0">
+      ${p.status==='Active' ? `<button class="btn sm" data-step="insRenewalFollowUp" onclick="openInsPolicyStep('${esc(p.id)}','insRenewalFollowUp')">Renewal Premium Follow-up</button>
+      <button class="btn sm primary" data-step="insRenewalPaid" onclick="openInsPolicyStep('${esc(p.id)}','insRenewalPaid')">Renewal Payment Confirmed</button>` : ''}
+      <button class="btn sm" data-step="insPolicyEnded" onclick="openInsPolicyStep('${esc(p.id)}','insPolicyEnded')">Close the Policy</button>
+    </div>` : ''}
+    <h4 style="margin:14px 0 6px">Payment &amp; renewal history</h4>
+    ${ren.length ? `<table class="table" id="insRenewalHistory"><thead><tr><th>Premium due</th><th>Paid on</th><th>Amount</th><th>Receipt</th></tr></thead><tbody>
+      ${ren.map(x=>`<tr><td>${esc(x.dueOn ? fmtDate(x.dueOn) : '—')}</td><td>${esc(fmtDate(x.paidOn))}</td><td>${esc(insMoney(x.amount) || '—')}</td><td>${esc(x.receiptRef || '')}</td></tr>`).join('')}
+    </tbody></table>` : `<div class="small-note">No renewal premium recorded yet. The first premium was paid with the proposal.</div>`}
+    ${hist.length ? `<h4 style="margin:14px 0 6px">History</h4><table class="table" id="insPolicyHistory"><thead><tr><th>When</th><th>Step</th><th>Detail</th><th>By</th></tr></thead><tbody>
+      ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(h.by==='server' ? 'Automatic' : (teamName(h.by) || ''))}</td></tr>`).join('')}
+    </tbody></table>` : ''}
+  </div>`;
+}
+function openInsPolicy(id){
+  const p = insPolicyList().find(x=>x.id===id); if(!p) return;
+  openModal((INS_MODULES[p.module] || {}).label + ' — ' + (p.insPolicyNo || 'Policy'), insPolicyDetailHtml(p),
+    `<button class="btn" onclick="closeModal()">Close</button>`);
+}
+/* The three actions, with the same boxes the journey used for them. */
+function openInsPolicyStep(policyId, stepId){
+  const p = insPolicyList().find(x=>x.id===policyId); if(!p) return;
+  const st = INS_STEPS_ASK()[stepId]; if(!st) return;
+  if(!can('CMS', 'edit')){ alert('You do not have Edit permission on client records.'); return; }
+  const v = insPolicyView(p), today = hrToday();
+  const val = f => (st.today || []).indexOf(f.k) >= 0 ? today : (f.transient ? '' : (p[f.k] || ''));
+  openModal(st.title,
+    `<div class="small-note" style="margin:0 0 10px">${esc(v.cmsName)} · ${esc(p.insPolicyNo || '')}${insPlanLine(p) ? ' · ' + esc(insPlanLine(p)) : ''}</div>`
+    + (st.note ? `<div class="small-note" style="margin:0 0 10px">${esc(st.note)}</div>` : '')
+    + `<div id="insStepForm">${insFieldsFor(stepId).map(f=>fieldInput(f, val(f))).join('')}</div>`
+    + insMailBoxHtml(v, st),
+    `<button class="btn" onclick="openInsPolicy('${esc(policyId)}')">Back</button>
+     <button class="btn primary" onclick="submitInsPolicyStep('${esc(policyId)}','${esc(stepId)}')">Save</button>`);
+  applyConditionalFields();
+}
+async function submitInsPolicyStep(policyId, stepId){
+  const p = insPolicyList().find(x=>x.id===policyId); if(!p) return;
+  const st = INS_STEPS_ASK()[stepId] || {};
+  const fields = insFieldsFor(stepId);
+  const data = readFields(fields);
+  const blank = x => x===undefined || x===null || String(x).trim()==='';
+  const missing = fields.filter(f=>f.req && blank(data[f.k]));
+  if(missing.length){ alert('Please fill: ' + missing.map(f=>f.l).join(', ')); return; }
+  let mailTo = '';
+  const wantsMail = !!(st.mail && (document.getElementById('f_insMail') || {}).checked);
+  if(wantsMail){
+    mailTo = ((document.getElementById('f_insMailTo') || {}).value || '').trim();
+    if(!EMAIL_RE.test(mailTo)){ alert('Enter a valid email address to send to, or untick “Email the client”.'); return; }
+  }
+  const noted = {};
+  fields.forEach(f=>{ if(!blank(data[f.k])) noted[f.k] = data[f.k]; });
+  await insPolicyAfterStep(p, stepId, noted);
+  if(wantsMail){
+    const result = await insSendMail(insPolicyView(p), st.mail, mailTo, {Amount: insMoney(noted.insRenewalAmount),
+      PaidOn: noted.insRenewalPaidOn ? fmtDate(noted.insRenewalPaidOn) : '', ReceiptRef: noted.insRenewalReceiptRef ? ' (receipt ' + noted.insRenewalReceiptRef + ')' : ''});
+    const h = p.history[p.history.length - 1];
+    if(result.sent) h.note = (h.note ? h.note + ' · ' : '') + 'emailed to ' + mailTo;
+    else alert(mailResultNote(result, st.mail.what) + '\n\nThe step is saved. The letter is in the mail log, so you can send it by hand.');
+    await save('insPolicies');
+  }
+  openInsPolicy(policyId);
+  render();
+}
+async function insPolicyAfterStep(p, stepId, noted){
+  const now = new Date().toISOString(), today = hrToday();
+  const t = INS_STEPS_ASK()[stepId] || {};
+  const line = {at:now, by:currentUser, step:stepId, label:t.title || stepId};
+  if(stepId==='insRenewalFollowUp') line.note = noted.insRenewalNote || '';
+  if(stepId==='insRenewalPaid'){
+    const paidFor = p.insNextDueDate || '';
+    p.renewals = (p.renewals || []).concat([{dueOn:paidFor, paidOn:noted.insRenewalPaidOn || today, amount:noted.insRenewalAmount || '',
+      receiptRef:noted.insRenewalReceiptRef || '', fundValue:noted.insFundValue || '', at:now, by:currentUser}]);
+    if(noted.insFundValue){ p.insFundValue = noted.insFundValue; p.insFundValueOn = noted.insRenewalPaidOn || today; }
+    await insPolicyCompleteTask(p, INS_RENEWAL_TASK);
+    const next = insNextDue(p, paidFor || noted.insRenewalPaidOn || today);
+    if(next) p.insNextDueDate = next; else delete p.insNextDueDate;
+    line.note = 'Paid ' + insMoney(noted.insRenewalAmount) + ' on ' + fmtDate(noted.insRenewalPaidOn || today)
+      + (paidFor ? ' for the premium due ' + fmtDate(paidFor) : '') + (next ? '; next due ' + fmtDate(next) : '; no further premium due');
+  }
+  if(stepId==='insPolicyEnded'){
+    p.status = 'Closed'; p.closedOn = today;
+    p.insClosureReason = noted.insClosureReason || '';
+    delete p.insNextDueDate;
+    await insPolicyCompleteTask(p, INS_RENEWAL_TASK);
+    line.note = (noted.insClosureReason || '') + (noted.insClosureNote ? ' — ' + noted.insClosureNote : '');
+  }
+  p.history = (p.history || []).concat([line]);
+  p.updatedAt = now;
+  await save('insPolicies');
+  if(stepId==='insRenewalPaid'){
+    if(p.insNextDueDate) await insPolicyRaiseTask(p);
+    else await insPptComplete(p);
+  }
+}
+/* The last premium of the paying term is in. Reminders stop, the client
+   and the RM are told, and the policy stays on file with everything it
+   holds — it is in force, just no longer paid for. */
+async function insPptComplete(p){
+  if(p.status===INS_PPT_STATUS) return;
+  const now = new Date().toISOString();
+  p.status = INS_PPT_STATUS; p.pptCompletedOn = hrToday();
+  delete p.insNextDueDate;
+  await insPolicyCompleteTask(p, INS_RENEWAL_TASK);
+  const v = insPolicyView(p);
+  let mailed = '';
+  if(v.email && EMAIL_RE.test(v.email)){
+    const r = await insSendMail(v, {template:'insPptCompleted', label:'Insurance — Premium Paying Term Completed'}, v.email, {});
+    mailed = r && r.sent ? 'Client emailed at ' + v.email : 'The letter to the client did not go — it is in the mail log';
+  } else mailed = 'No email address on the client — tell them yourself';
+  if(v.rmName) await notifyUser(v.rmName, {title:'Premium paying term completed', kind:'insurance-ppt', view:p.module, arg:p.id,
+    body:(v.cmsName || 'A client') + ' — policy ' + (p.insPolicyNo || '') + ' (' + insCompanyName(p) + '): the last premium is paid. No more reminders will go.'});
+  p.history = (p.history || []).concat([{at:now, by:currentUser, step:'insPptCompleted', label:INS_PPT_STATUS, note:mailed}]);
+  await save('insPolicies');
+}
+/* On the client's own page: every policy it holds, each a link into its module. */
+function insClientPoliciesHtml(clientId){
+  const list = insPoliciesOf(clientId);
+  if(!list.length) return '';
+  return `<div class="card" id="insClientPolicies" style="margin-top:10px;padding:12px 14px"><b>Insurance policies</b>
+    <table class="table" style="margin-top:8px"><thead><tr><th>Module</th><th>Policy No.</th><th>Company · Plan</th><th>Next Premium</th><th>Status</th></tr></thead><tbody>
+    ${list.map(p=>`<tr class="row-clickable" onclick="openInsPolicy('${esc(p.id)}')"><td>${esc((INS_MODULES[p.module] || {}).label || '')}</td>
+      <td>${esc(p.insPolicyNo || '—')}</td><td>${esc([insCompanyName(p), p.insPlanName].filter(Boolean).join(' · '))}</td>
+      <td>${insDueCell(p)}</td><td>${insStatusBadge(p)}</td></tr>`).join('')}
+    </tbody></table></div>`;
 }
 async function createClientDST(client, taskType, dueDays, description){
   if(!automationOn('stageTasks')) return;
@@ -33663,6 +34344,10 @@ let DB = { settings:{}, settingsAudit:[], workActivities:[], djtEntries:[], camp
               and HR writes nothing outside them. */
            hrAttendance:[], hrLeave:[], hrSourceMaps:[], hrIncentives:[], hrAppraisals:[], hrConfig:{},
            hrRegularizations:[], hrCompOff:[],
+           /* Each insurance policy once its CMS journey is over: one entry per
+              policy, on the client it belongs to. The Life, Health and General
+              Insurance modules work renewals from here. */
+           insPolicies:[],
            /* What the firm has wired BOSS to, what each run of it did, and
               what has been pushed in through a connector's own door and is
               waiting to be mapped. The credentials are not here: they live
@@ -33777,6 +34462,7 @@ async function loadAll(){
   DB.hrLeave = await sget('hrLeave', []);
   DB.hrRegularizations = await sget('hrRegularizations', []);
   DB.hrCompOff = await sget('hrCompOff', []);
+  DB.insPolicies = await sget('insPolicies', []);
   DB.hrSourceMaps = await sget('hrSourceMaps', []);
   DB.hrIncentives = await sget('hrIncentives', []);
   DB.hrAppraisals = await sget('hrAppraisals', []);
@@ -34223,6 +34909,8 @@ function defaultConfig(){
         body:'Dear {ClientName},\n\nThis is a reminder that the premium of {Premium} on your {Company} policy {PolicyNo} ({Plan}) is due on {DueDate}.\n\nPaying on time keeps your cover in force without a break. If you have already paid, please ignore this note, or send us the receipt and we will update our records.\n\n{Signature}'},
       insRenewalReceived: {subject:'Premium received — policy {PolicyNo}',
         body:'Dear {ClientName},\n\nThank you. We have recorded your premium of {Amount} paid on {PaidOn} for your {Company} policy {PolicyNo}{ReceiptRef}.\n\nYour next premium is due on {DueDate}. We will remind you before then.\n\n{Signature}'},
+      insPptCompleted: {subject:'Premium paying term completed — policy {PolicyNo}',
+        body:'Dear {ClientName},\n\nWith the premium just received, you have paid every premium due on your {Company} policy {PolicyNo} ({Plan}). The premium paying term is complete and no further premiums are due.\n\nYour cover continues as per the policy terms. Maturity date: {Maturity}. Nominee: {Nominee}.\n\nWe will stay in touch through your regular reviews.\n\n{Signature}'},
       cifSend: {subject:'{Form} — to start your onboarding',
         body:'Dear {Name},\n\nTo open your account we need the details on the form below. It is prefilled with what we already hold, so there should be little left to add.\n\n{Link}\n\nBest regards,\n{FirmName}'},
       // What the C&T form produces: the client's own copy, and the
@@ -35048,6 +35736,8 @@ function navigate(view, arg){
   window._navOpen = navGroupOf(view);
   userMenuOpen = false;
   window._notifOpen = false;
+  // A notification about a policy opens the policy, over its module.
+  if(INS_MODULES[view] && arg) setTimeout(()=>openInsPolicy(arg), 60);
   if(view==='cms'){
     clientDetailId = (arg!==undefined) ? arg : null;
   } else if(view==='lms'){
@@ -35123,6 +35813,7 @@ async function boot(){
   await migrateRetireTransactionForms();
   await migrateMeetingNames();
   await migrateRetiredStages('LMS', LMS_RETIRED_STATES);
+  await migrateInsuranceToModules();
   await migrateRetiredStages('CMS', CMS_RETIRED_STATES);
   await migrateRetiredStages('RMS', RMS_RETIRED_STATES);
   await migrateConvertedLeadsOutOfLms();
@@ -35235,7 +35926,7 @@ const LIVE_KEY_TO_DB = {
   aumMonthly:'aumMonthly', assetUploads:'assetUploads', reviewEdits:'reviewEdits', reviewReports:'reviewReports',
   exportHistory:'exportHistory',
   hrAttendance:'hrAttendance', hrLeave:'hrLeave', hrSourceMaps:'hrSourceMaps', hrRegularizations:'hrRegularizations',
-  hrCompOff:'hrCompOff', hrIncentives:'hrIncentives', hrAppraisals:'hrAppraisals', hrConfig:'hrConfig',
+  insPolicies:'insPolicies', hrCompOff:'hrCompOff', hrIncentives:'hrIncentives', hrAppraisals:'hrAppraisals', hrConfig:'hrConfig',
   automationExecutionLog:'automationExecutionLog', webhooks:'webhooks', workActivities:'workActivities',
   config:'config', settings:'settings', slaRules:'slaRules', automationRules:'automationRules',
 };
@@ -35656,6 +36347,9 @@ function render(){
   `;
   const titles = {dashboard:['Dashboard','Overview across all modules'],lms:['Lead Management System','Lifecycle: New → Qualified → Converted'],lng:['LNG · Lead Nurture Group','Every lead marked Not Qualified, kept warm until it is ready'],cms:['Client Management System','Single source of truth for every client'],rms:['Review Management System','Portfolio, goal & risk-profile reviews'],dst:['DST · Daily Service Tracker','Service requests & their SLA'],recommendations:['Execution Tracker','Allocation forms prepared for a client, approved internally, then signed off by the client'],allocpdf:['Execution Tracker','The allocation form as the client receives it'],planoutput:['Plan Output','The plan the blueprint produced, goal by goal'],sevenevents:[SE_FULL,'The firm\'s seven events, from the input form through to the execution plan'],fsl:['FSL — Financial Success Ladder','Six levels of wealth, from the input form through to the plan and its allocation'],gab:['GAB — Golden Age Blueprint','The nine steps of the retirement workbook, from the input form through to the plan and its allocation'],meetings:['Meetings','Schedule meetings and track Minutes of Meeting (MOM)'],calls:['Call Logs','Calls made to and received from leads and clients'],mailbox:['Mail','Every email BOSS has sent, whoever sent it and whatever sent it'],portfolio:['Portfolio Review','Live AUM, SIP and annual premium, product by product and fund by fund'],arc:['ARC · Annual Review Calendar','Client reviews, scheduled automatically from each category\'s configured frequency'],dwt:['DWT · Daily Working Tracker','Design your week, track what actually happened'],djt:['DJT · Daily Job Tracker','Yesterday and today — work collected from the modules that own it'],business:['Daily Business Tracker','Log and track business generated across products'],transactions:['Transaction Tracker','Order lifecycle from initiation through completion'],partners:['Partners','Referral partners & distributors, linked via LMS referrals'],campaigns:['Marketing','Campaign &amp; broadcast — one-time sends and always-on drip journeys'],projects:['Projects Tracker','Track firm initiatives — compliance drives (KYC / nominee / risk) and campaigns — with a live checklist and progress.'],analytics:['Analytics','Charts drawn from the live records you can see'],reports:['Reports','Fourteen reports across six sections \u2014 what the records can answer today, and what the ones awaiting data are waiting for'],mis:['MIS — Management Information System','One board for the whole business: the pipeline, the money, the reviews, the service and the people'],import:['Bulk Import','Upload a spreadsheet and map columns to CRM fields'],teammembers:['Team Members','Everyone in the business — roles, reporting lines and the work they own'],settings:['Setup','Everything an administrator can configure, grouped by area'],recyclebin:['Recycle Bin','Soft-deleted records — restore or permanently remove'],fqtests:['FQ Assessments','Every Financial Quotient assessment sent to a lead, and every one that has come back'],iseqforms:['ISEQ Forms','Every Investor Suitability questionnaire sent, and the risk profile each one came back with'],cifforms:['CIF Forms','Every Client Information Form sent for onboarding, and how far each one has got'],planforms:['Plan Input Forms','Every blueprint input form — filled here or sent to the client — and what came back on it'],ctforms:['C&T Forms','Every C&T form sent at a portfolio review, and the references that came back on it'],queries:['QMS · Query Management','Tickets raised by clients, worked by the team and closed when they are actually answered'],profile:['My Profile','View and edit your personal details, certifications & documents'],
     hrdashboard:['HR','Attendance, incentives and appraisals — HR’s own records, read from the accounts the firm already has'],
+    inslife:['Life Insurance','Life policies after delivery — premiums, renewals and the end of the paying term'],
+    inshealth:['Health Insurance','Health policies after delivery — renewals and their history'],
+    insgeneral:['General Insurance','Motor, home and other general policies after delivery — renewals and their history'],
     hrattendance:['Attendance Management','Punch in and out, your own history, and — for HR — everybody’s'],
     hrincentive:['Incentive Management','The existing records a future incentive rule will be read from'],
     hrappraisal:['Appraisal Management','Ratings, company growth and the increment, year by year']};
@@ -35732,6 +36426,7 @@ function render(){
   else if(currentView==='queries') c.innerHTML = queryDetailId ? viewQueryDetail(queryDetailId) : viewQueries();
   else if(currentView==='recyclebin') c.innerHTML = viewRecycleBin();
   else if(currentView==='profile') c.innerHTML = viewProfile();
+  else if(INS_MODULES[currentView]) c.innerHTML = viewInsModule(currentView);
   else if(currentView==='hrdashboard') c.innerHTML = viewHrDashboard();
   else if(currentView==='hrattendance') c.innerHTML = viewHrAttendance();
   else if(currentView==='hrincentive') c.innerHTML = viewHrIncentive();
@@ -35876,6 +36571,7 @@ const NAV_ICONS = {
   automationcenter:'🤖', errorcenter:'⚠️', integrations:'🔌', webhooks:'🪝', queries:'🎫',
   fqtests:'🧮', iseqforms:'🛡️', cifforms:'🗂️', planforms:'📐', ctforms:'🤝', mailbox:'✉️', portfolio:'📈',
   systemarchitecture:'🏛️', settings:'⚙️', profile:'👤', teammembers:'🧑‍💼', dwt:'🗓️', arc:'🔁', djt:'📔',
+  inslife:'🛡️', inshealth:'🩺', insgeneral:'🏠',
   hrdashboard:'🧭', hrattendance:'⏱️', hrincentive:'💰', hrappraisal:'📈',
 };
 const NAV_LABELS = {
@@ -35885,6 +36581,7 @@ const NAV_LABELS = {
   transactions:'Transaction Tracker', partners:'Partners', campaigns:'Marketing', projects:'Projects Tracker',
   reports:'Reports', analytics:'Analytics', mis:'MIS — Management Information System', import:'Bulk Import', recyclebin:'Recycle Bin', settings:'Setup', profile:'My Profile',
   teammembers:'Team Members', dwt:'DWT · Daily Working Tracker', arc:'ARC · Annual Review Calendar', djt:'DJT · Daily Job Tracker',
+  inslife:'Life Insurance', inshealth:'Health Insurance', insgeneral:'General Insurance',
   hrdashboard:'HR Dashboard', hrattendance:'Attendance Management', hrincentive:'Incentive Management',
   hrappraisal:'Appraisal Management',
   queries:'QMS · Query Management', mailbox:'Mail', portfolio:'Portfolio Review',
@@ -35928,6 +36625,10 @@ const NAV_GROUPS = [
      inside RMS, where the work actually happens — so the views remain and
      the two rails entries have gone. Reaching either outside a review still
      works: the routes are live, and the Internal Review links to them. */
+  /* A policy, once the CMS journey has delivered it: renewals, reminders
+     and the end of the paying term, one module per kind of cover. */
+  {id:'insurance', icon:'🛡️', label:'Insurance', items:['inslife','inshealth','insgeneral'],
+   about:'Every policy after delivery — premiums, renewals and PPT, filed under the client it belongs to.'},
   {id:'advisory', icon:'🗣️', label:'Communications', items:['meetings','calls','arc'],
    about:'Every exchange with a lead or client, and the calendar that schedules the next one.'},
   /* The planning itself, a sub-module to each blueprint. The blueprints are
@@ -40503,9 +41204,11 @@ const CMS_STAGE_GROUPS = [
   ['Activation',     ['familyMapping','loginCredentials'],                      'info'],
   ['Ready for RMS',  ['readyForRMS'],                                            'ok'],
   ['In RMS',         ['convertedToRMS'],                                         'ok'],
-  ['Insurance',      ['insurancePending','insIllustration','insProposal','insDocsVerification',
-                      'insCif','insDocsCheck','insKyc','insProposalUpdate','insMedical','insMedicalCheckup','insUnderwriting','insPolicyIssuance','insPolicyDelivery'], 'warn'],
-  ['Policies In Force', ['insActive'],                                           'ok'],
+  ['Insurance',      ['insurancePending','insIllustration','insCif','insDocsCheck','insProposal','insProposalUpdate','insPremiumPayment',
+                      'insMedical','insMedicalCheckup','insDocsVerification','insUnderwriting','insUwClientApproval','insUwPayment',
+                      'insPolicyIssuance','insPolicyDelivery'], 'warn'],
+  // Delivered and confirmed: the CMS journey is done, and the policy is worked from its insurance module.
+  ['Policies Delivered', ['insCompleted'],                                      'ok'],
   ['Insurance Closed', ['insClosed'],                                            'danger'],
 ];
 const RMS_STAGE_GROUPS = [
@@ -40538,7 +41241,7 @@ const MODULE_STAGE_GROUPS = { LMS: ()=>LMS_STAGE_GROUPS, CMS: ()=>CMS_STAGE_GROU
    bar on a record is unchanged. What went is the row of boxes. */
 const MODULE_DASHBOARD = {
   LMS: ['New', 'Qualification', 'Investment Approach'],
-  CMS: ['Onboarding', 'Mandate', 'Activation', 'Insurance', 'Policies In Force'],
+  CMS: ['Onboarding', 'Mandate', 'Activation', 'Insurance', 'Policies Delivered'],
   RMS: ['Reference'],
 };
 /* One named group's tile, counted off the records handed in, still
@@ -65905,6 +66608,9 @@ async function autoAdvanceOnCifSubmission(link){
   client.cifSubmittedAt = new Date().toISOString();
   client.cifReceivedDate = client.cifSubmittedAt.slice(0,10);
   await save('clients');
+  /* On the insurance route the CIF coming back is what moves the client on
+     to Documents Verification — nobody presses a button for it. */
+  if(stateOf('CMS', client) === 'insCif'){ await doTransition('CMS', client.id, 'insCifReceivedT'); return; }
   if(stateOf('CMS', client) !== 'cifReceived') return;
   const t = getBlueprint('CMS').transitions.find(x=>x.id==='cifReceivedT' && x.from==='cifReceived');
   if(t) await doTransition('CMS', client.id, t.id);
@@ -75927,6 +76633,9 @@ const MAIL_TEMPLATE_DEFS = [
   {group:'Insurance', key:'insRenewalReceived', label:'Insurance — renewal premium received',
    when:'Sent from Renewal Payment Confirmation.',
    vars:['ClientName','PolicyNo','Company','Amount','PaidOn','ReceiptRef','DueDate','FirmName']},
+  {group:'Insurance', key:'insPptCompleted', label:'Insurance — premium paying term completed',
+   when:'Sent from the Life, Health or General Insurance module when the last premium of the paying term is confirmed.',
+   vars:['ClientName','PolicyNo','Company','Plan','Maturity','Nominee','RMName','FirmName']},
   {group:'Client', key:'reportSend', label:'Investment report (Unit Allotted)',
    when:'Composed at the Unit Allotted stage. The stage only moves on once it has been sent.',
    vars:['ClientName','Ref','OrderRef','Total','Date','RMName','FirmName']},
