@@ -135,6 +135,31 @@ suite({mail: true}, async t => {
     return 'CIF ' + (sent.forms ? 'emailed' : 'requested') + '; received → Documents Verification by itself; no KYC stage';
   });
 
+  await t.step('a CIF submitted on the client’s own link moves the case on, with no permission message', async () => {
+    const token = await t.eval(async () => {
+      const c = {id: 'CMS-ZCIF', cmsName: 'ZZ Cif Link', email: 'zzcif@example.com', mobile: '9800111444', createdAt: new Date().toISOString(), rmName: me().id};
+      initState('CMS', c); DB.clients = DB.clients.filter(x => x.id !== c.id).concat([c]); await save('clients');
+      await doTransition('CMS', c.id, 'toInsurance');
+      c.cmsStage = 'insCif'; await save('clients');
+      const type = activeFormsInCategory('CIF').filter(x => formQuestionCount(x))[0];
+      return type ? await createDocLink(c.id, type, {recordModule: 'CMS', recordId: c.id}) : '';
+    });
+    if(!token) return 'no CIF form configured — skipped';
+    const r = await t.eval(async (token) => {
+      const link = (DB.docLinks || []).find(l => l.token === token);
+      // As the client's page runs it: nobody signed in, on the ?doc= link.
+      const said = []; const al = window.alert; window.alert = m => said.push(String(m));
+      const keepMe = window.me; window.me = () => null;
+      history.replaceState(null, '', '/?doc=' + token);
+      try { await autoAdvanceOnCifSubmission(link); }
+      finally { window.me = keepMe; window.alert = al; history.replaceState(null, '', '/'); }
+      const c = DB.clients.find(x => x.id === 'CMS-ZCIF');
+      return {said, stage: stateOf('CMS', c), by: (c.insHistory || []).slice(-1).map(h => h.by + ':' + h.step)[0]};
+    }, token);
+    if(r.said.length || r.stage !== 'insDocsCheck' || r.by !== 'client:insCifReceivedT') throw new Error(JSON.stringify(r));
+    return 'moved to Documents Verification; recorded as by the client';
+  });
+
   await t.step('Documents Verification has Health, Income and Existing Policy; then proposal submitted, updated, premium paid as separate steps', async () => {
     const r = await t.eval(async () => {
       const c = DB.clients.find(x => x.id === 'CMS-ZINW');

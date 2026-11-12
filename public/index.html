@@ -29468,7 +29468,7 @@ function insurancePanelHtml(r, cur, editable){
     </div>
     ${insClientPoliciesHtml(r.id)}
     ${hist.length ? `<table class="table" id="insHistory" style="margin-top:10px"><thead><tr><th>When</th><th>Step</th><th>Detail</th><th>By</th></tr></thead><tbody>
-      ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(h.by==='server' ? 'Automatic' : (teamName(h.by) || ''))}</td></tr>`).join('')}
+      ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(h.by==='server' ? 'Automatic' : h.by==='client' ? 'Client' : (teamName(h.by) || ''))}</td></tr>`).join('')}
     </tbody></table>` : ''}
   </div>`;
 }
@@ -29749,7 +29749,7 @@ function insPolicyDetailHtml(p){
       ${ren.map(x=>`<tr><td>${esc(x.dueOn ? fmtDate(x.dueOn) : '—')}</td><td>${esc(fmtDate(x.paidOn))}</td><td>${esc(insMoney(x.amount) || '—')}</td><td>${esc(x.receiptRef || '')}</td></tr>`).join('')}
     </tbody></table>` : `<div class="small-note">No renewal premium recorded yet. The first premium was paid with the proposal.</div>`}
     ${hist.length ? `<h4 style="margin:14px 0 6px">History</h4><table class="table" id="insPolicyHistory"><thead><tr><th>When</th><th>Step</th><th>Detail</th><th>By</th></tr></thead><tbody>
-      ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(h.by==='server' ? 'Automatic' : (teamName(h.by) || ''))}</td></tr>`).join('')}
+      ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(h.by==='server' ? 'Automatic' : h.by==='client' ? 'Client' : (teamName(h.by) || ''))}</td></tr>`).join('')}
     </tbody></table>` : ''}
   </div>`;
 }
@@ -66610,10 +66610,28 @@ async function autoAdvanceOnCifSubmission(link){
   await save('clients');
   /* On the insurance route the CIF coming back is what moves the client on
      to Documents Verification — nobody presses a button for it. */
-  if(stateOf('CMS', client) === 'insCif'){ await doTransition('CMS', client.id, 'insCifReceivedT'); return; }
+  if(stateOf('CMS', client) === 'insCif'){ await cifAutoMove(client, 'insCifReceivedT'); return; }
   if(stateOf('CMS', client) !== 'cifReceived') return;
   const t = getBlueprint('CMS').transitions.find(x=>x.id==='cifReceivedT' && x.from==='cifReceived');
-  if(t) await doTransition('CMS', client.id, t.id);
+  if(t) await cifAutoMove(client, t.id);
+}
+/* The CIF is usually submitted by the client on their own link, where
+   nobody is signed in — so the stage permission that guards the buttons
+   cannot apply, and asking it only puts "You do not have permission" in
+   front of the client. Inside the CRM the move goes through the stage as
+   usual; on the client's page the record is moved by the submission
+   itself, with the same history line the stage would write. */
+async function cifAutoMove(client, transitionId){
+  const onClientPage = new URLSearchParams(location.search).has('doc');
+  if(!onClientPage && me()){ await doTransition('CMS', client.id, transitionId); return; }
+  const t = getBlueprint('CMS').transitions.find(x=>x.id===transitionId && x.from===stateOf('CMS', client));
+  if(!t) return;
+  const at = new Date().toISOString();
+  client[RECORD_STATE_FIELD.CMS] = t.to;
+  client.blueprintHistory = (client.blueprintHistory || []).concat([{state:t.to, at, by:'client', via:'CIF submitted by the client'}]);
+  if(insIsStage(t.to)) client.insHistory = (client.insHistory || []).concat([{at, by:'client', step:transitionId, label:t.label || transitionId,
+    note:'CIF received ' + fmtDate(at) + ' from the client'}]);
+  await save('clients');
 }
 /* The score card the client gets back the moment they submit. Same wording
    they see on screen, in their inbox, on the record — one result, three places. */
