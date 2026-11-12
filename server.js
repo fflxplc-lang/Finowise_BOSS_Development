@@ -1033,6 +1033,12 @@ app.get('/logout',  (req, res) => { res.clearCookie(COOKIE, { path: '/' }); res.
 // itself, and the three endpoints it uses, are open; every one of them checks
 // the token and serves nothing beyond what that token names. /config.js is
 // open too, and simply hands out nothing when nobody is signed in.
+function isStaticCode(req) {
+  if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path === '/config.js') return false;
+  if (!/^\/[\w\-\/.]+\.(js|css)$/.test(req.path) || req.path.indexOf('..') >= 0) return false;
+  const file = path.join(__dirname, 'public', req.path);
+  return file.startsWith(path.join(__dirname, 'public') + path.sep) && fs.existsSync(file);
+}
 function isClientLinkRequest(req) {
   if (req.path.startsWith('/api/public/')) return true;
   if (req.path === '/config.js') return true;
@@ -1046,6 +1052,11 @@ app.use((req, res, next) => {
   // being asked to sign in again, and it is what shows a push.
   if (req.path === '/sw.js') return next();
   if (isClientLinkRequest(req)) return next();
+  // The page's own scripts and styles (multi-asset.js, the PDF reader, the
+  // review report's code) are code, not data, and a client's form page loads
+  // them like any other — refused, they came back as the sign-in page and the
+  // form stopped with "maLoadRows is not defined".
+  if (isStaticCode(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'not signed in' });
   res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
 });

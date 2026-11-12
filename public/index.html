@@ -13128,7 +13128,11 @@ async function doTransition(module, recordId, transitionId){
   // all. That is not a record that has moved on; it is a card with no stage
   // behind it, and the right answer is to do nothing but draw the page again.
   if(!transitionId){ render(); return; }
-  if(!can(module,'changeStage')){
+  /* A move the client's own form submission makes, on their link: nobody
+     is signed in there, so the staff permissions do not apply to it. Only
+     the exact move clientLinkMove() named is let through. */
+  const byClient = inPublicMode() && window._clientLinkMove === module + ':' + recordId + ':' + transitionId;
+  if(!byClient && !can(module,'changeStage')){
     const block = stageChangeBlock(module)
       || {why:'You do not have permission to move this record forward.',
           spec:{kind:'action', module, action:'changeStage'}};
@@ -13143,7 +13147,7 @@ async function doTransition(module, recordId, transitionId){
   /* Change stage says they may move a record at all; this says which
      stages they may move one into. Checked here, where every move goes
      through, rather than on the buttons that offer them. */
-  if(t && !stageOpenToMe(module, t.to, me())){
+  if(t && !byClient && !stageOpenToMe(module, t.to, me())){
     accessDenied('You may move a ' + module + ' record, but not into "'
       + stateLabel(module, t.to) + '". That stage is not among the ones your account is allowed.',
       {kind:'stage', module, stage: t.to});
@@ -13157,6 +13161,7 @@ async function doTransition(module, recordId, transitionId){
        they are concerned. Nothing has gone wrong, so nothing is said: the
        page is simply drawn as it now stands. */
     const asked = getBlueprint(module).transitions.find(x=>x.id===transitionId);
+    if(byClient) return;   // the client's page draws its own thank-you
     if(!(asked && asked.to===cur))
       alert('That step is no longer available — this record is at “'+stateLabel(module,cur)+'” now.');
     if(currentView==='lms') navigate('lms', leadDetailId); else if(currentView==='cms') navigate('cms', clientDetailId);
@@ -13311,7 +13316,7 @@ async function doTransition(module, recordId, transitionId){
   try {
     record[RECORD_STATE_FIELD[module]] = t.to;
     record.blueprintHistory = record.blueprintHistory || [];
-    record.blueprintHistory.push({state:t.to, at:new Date().toISOString(), by:currentUser, via:t.label});
+    record.blueprintHistory.push({state:t.to, at:new Date().toISOString(), by: byClient ? 'client' : currentUser, via: byClient ? t.label + ' (submitted by the client)' : t.label});
     await save(dbKey);
     await logAudit(module, record.id, 'Stage Change', [{field:'stage', oldValue:stateLabel(module,cur), newValue:stateLabel(module,t.to)}]);
     await handleBlueprintSideEffect(module, record, t);
@@ -13323,6 +13328,8 @@ async function doTransition(module, recordId, transitionId){
   } finally {
     delete _stageMoveInFlight[moveKey];
   }
+  // The client's link has no CRM screen to go back to; it draws its own thank-you.
+  if(byClient){ window._afterTransitionNav = null; return; }
   // A transition can move the record to another module — Convert to Client takes the
   // lead out of LMS entirely — so follow it rather than landing on a record that is gone.
   if(window._afterTransitionNav){
@@ -26542,7 +26549,7 @@ async function markPlanInputSubmitted(record, by){
   const tid = st==='fbpPreparation' ? 'sheetFilledHereT'
             : st==='dataGatheringSent' ? 'fwd_planInputSubmitted'
             : null;
-  if(tid) await doTransition('LMS', record.id, tid);
+  if(tid) await clientLinkMove('LMS', record.id, tid);
   else redraw();
 }
 /* Everything the engine needs, answered. What is missing is named rather
@@ -29101,7 +29108,7 @@ async function insuranceAfterStep(r, id){
   const noted = window._insNoted || {}; window._insNoted = null;
   const t = getBlueprint('CMS').transitions.find(x=>x.id===id) || {};
   const now = new Date().toISOString(), today = hrToday();
-  const line = {at: now, by: currentUser, step: id, label: t.label || id};
+  const line = {at: now, by: inPublicMode() ? 'client' : currentUser, step: id, label: t.label || id};
   const note = noted.insRevisionReason || noted.insDocsNote || noted.insMedicalNote || noted.insUwNote
     || noted.insRenewalNote || noted.insClosureNote || '';
   if(note) line.note = note;
@@ -66615,24 +66622,21 @@ async function autoAdvanceOnCifSubmission(link){
   const t = getBlueprint('CMS').transitions.find(x=>x.id==='cifReceivedT' && x.from==='cifReceived');
   if(t) await cifAutoMove(client, t.id);
 }
-/* The CIF is usually submitted by the client on their own link, where
-   nobody is signed in — so the stage permission that guards the buttons
-   cannot apply, and asking it only puts "You do not have permission" in
-   front of the client. Inside the CRM the move goes through the stage as
-   usual; on the client's page the record is moved by the submission
-   itself, with the same history line the stage would write. */
-async function cifAutoMove(client, transitionId){
-  const onClientPage = new URLSearchParams(location.search).has('doc');
-  if(!onClientPage && me()){ await doTransition('CMS', client.id, transitionId); return; }
-  const t = getBlueprint('CMS').transitions.find(x=>x.id===transitionId && x.from===stateOf('CMS', client));
-  if(!t) return;
-  const at = new Date().toISOString();
-  client[RECORD_STATE_FIELD.CMS] = t.to;
-  client.blueprintHistory = (client.blueprintHistory || []).concat([{state:t.to, at, by:'client', via:'CIF submitted by the client'}]);
-  if(insIsStage(t.to)) client.insHistory = (client.insHistory || []).concat([{at, by:'client', step:transitionId, label:t.label || transitionId,
-    note:'CIF received ' + fmtDate(at) + ' from the client'}]);
-  await save('clients');
+/* A form the client submits on their own link can move their record on —
+   the CIF to Documents Verification, the Plan Input form to Plan Input
+   Submitted. Inside the CRM that is an ordinary stage move. On the client's
+   page nobody is signed in, so the staff permission that guards the stage
+   buttons cannot apply; asking it only put "You do not have permission to
+   move this record forward" in front of the client. The move goes through
+   the stage as usual (its tasks, its history), let through for this one
+   move only and recorded as made by the client. */
+async function clientLinkMove(module, recordId, transitionId){
+  if(!inPublicMode()) return doTransition(module, recordId, transitionId);
+  window._clientLinkMove = module + ':' + recordId + ':' + transitionId;
+  try { await doTransition(module, recordId, transitionId); }
+  finally { window._clientLinkMove = null; }
 }
+async function cifAutoMove(client, transitionId){ return clientLinkMove('CMS', client.id, transitionId); }
 /* The score card the client gets back the moment they submit. Same wording
    they see on screen, in their inbox, on the record — one result, three places. */
 async function sendIseqScoreCard(link, result, when){
