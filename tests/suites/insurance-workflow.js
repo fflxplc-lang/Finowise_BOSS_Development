@@ -224,13 +224,14 @@ suite({mail: true}, async t => {
     await t.page.setInputFiles('#insPolicyPdf', {name: 'ZZ_policy.pdf', mimeType: 'application/pdf',
       buffer: tinyPdf(['Policy Schedule', 'Policy No. : TST-2468', 'Risk Commencement Date : 01-02-2026', 'Maturity Date : 01-02-2046', 'Nominee Name : ZZ Nominee'])});
     let r = null;
-    for(let i = 0; i < 125 && !(r && /Read|could not/.test(r.note)); i++){
+    // "Reading…" is the box at work; "Read <file>:" is the box done.
+    for(let i = 0; i < 125 && !(r && /^(Read |Nothing recognisable|This PDF could not)/.test(r.note)); i++){
       await t.wait(200);
       r = await t.eval(() => ({note: (document.getElementById('insPolicyPdfResult') || {}).textContent || '', no: (document.getElementById('f_insPolicyNo') || {}).value,
         start: (document.getElementById('f_insCommencementDate') || {}).value, att: composeAttachments.map(a => a.filename)}));
     }
     await t.eval(() => closeModal());
-    if(!r || !/Read/.test(r.note) || r.start !== '2026-02-01' || r.att.indexOf('ZZ_policy.pdf') < 0) throw new Error(JSON.stringify(r));
+    if(!r || !/^Read /.test(r.note) || r.start !== '2026-02-01' || r.att.indexOf('ZZ_policy.pdf') < 0) throw new Error(JSON.stringify(r));
     return r.note.slice(0, 120) + ' · attached to the policy letter';
   });
 
