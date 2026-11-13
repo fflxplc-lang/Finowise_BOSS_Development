@@ -81,7 +81,7 @@ suite(async t => {
       DB.config.marketZone = {zone:'Expensive', setOn:new Date().toISOString(), by: me().id};
       const z = lexiClientSignals(DB.clients.find(c=>c.id===id));
       DB.config.marketZone = null;
-      return {pct: s.pct, moves: s.moves, live: s.live, total: s.total, card: /LEXI SIGNALS/.test(card) && /Switch/.test(card), zoneWhy: (z.moves[0]||{}).why || ''};
+      return {pct: s.pct, moves: s.moves, live: s.live, total: s.total, card: /RIA AI SIGNALS/.test(card) && /Switch/.test(card), zoneWhy: (z.moves[0]||{}).why || ''};
     }, cid);
     if(!r.live || r.total !== 150000 + 100000 + 300000 + 20000) throw new Error('valuation ' + JSON.stringify(r));
     const sell = r.moves.find(m=>m.action==='Sell' && m.asset==='Equity');
@@ -124,7 +124,7 @@ suite(async t => {
     const u = lastUser();
     if(!u.includes('portfolioSignals') || !u.includes('Quant Multi Asset') || !u.includes('"Switch"')) throw new Error(u.slice(0, 400));
     const sys = ((seen[seen.length-1].messages||[]).find(m=>m.role==='system')||{}).content || '';
-    if(!/LEXI AI/.test(sys) || !/portfolioSignals/.test(sys)) throw new Error('rules missing');
+    if(!/RIA AI/.test(sys) || !/portfolioSignals/.test(sys)) throw new Error('rules missing');
     return 'signals in the data, rule in the brief';
   });
   await t.step('a book-wide sell question gets the clients to act on', async () => {

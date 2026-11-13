@@ -2685,7 +2685,7 @@ tr.alloc-sub td{font-weight:700;background:var(--soft)}
 .cg-help:focus-visible{outline:2px solid var(--info);outline-offset:2px;color:var(--ink)}
 @media (max-width:700px){ .cg-help{width:34px;height:34px;flex-basis:34px} }
 @media (max-width:700px){ .cg-step{grid-template-columns:22px 1fr} .cg-num{width:22px;height:22px;font-size:11px} }
-/* ---- the LEXI AI Assistant ----
+/* ---- the RIA AI Assistant ----
    A panel beside the page rather than a page of its own, so opening it
    never costs the work in progress behind it. */
 /* The way in. A labelled button rather than one more glyph in a row of
@@ -34416,7 +34416,7 @@ const PERM_DEFAULT_ON = {changeStage: 1};
    that list is what opens the Setup panel and using the assistant is not a
    reason to be shown the firm's configuration. */
 const USER_FLAGS = ['useAiAssistant'];
-const USER_FLAG_LABELS = {useAiAssistant:'Use the LEXI AI Assistant'};
+const USER_FLAG_LABELS = {useAiAssistant:'Use the RIA AI Assistant'};
 /* "manage Fields" is a variable name with a space in it. These are what
    the capability is called and what it actually opens. */
 const ADMIN_FLAG_LABELS = {
@@ -36309,8 +36309,8 @@ function render(){
              firm asked for and then asked to have back: the rail is for
              modules you navigate to, and the assistant is a panel that opens
              beside whatever you are already on. -->
-        ${aiAvailable()? `<button class="ai-open-btn ${ai.open?'on':''}" title="LEXI AI Assistant — ask, draft, reframe, report"
-          aria-label="Open the LEXI AI Assistant" onclick="aiTogglePanel()">${iconSparkle()}<span>Ask AI</span></button>`:''}
+        ${aiAvailable()? `<button class="ai-open-btn ${ai.open?'on':''}" title="RIA AI Assistant — ask, draft, reframe, report"
+          aria-label="Open the RIA AI Assistant" onclick="aiTogglePanel()">${iconSparkle()}<span>RIA AI</span></button>`:''}
         <button class="topnav-icon-btn" title="Toggle dark mode" onclick="toggleDarkMode()">${darkMode?'☀':'☾'}</button>
         <div style="position:relative">
           <button class="topnav-icon-btn notif-badge" title="Notifications" onclick="toggleNotifPanel(event)">🔔${notifCount?`<span class="count">${notifCount>99?'99+':notifCount}</span>`:''}</button>
@@ -43259,7 +43259,7 @@ function viewClientDetail(id){
          new ISEQ, the C&T. The lead card has always had this; the client
          card sent them to the stage or nowhere. */
       {label:'Send Form', icon:'📝', onclick:`openSendCustomFormModal('CMS','${id}')`},
-      aiAvailable() && {label:'Ask LEXI', icon:'✨', onclick:`bossAskAbout('${id}')`},
+      aiAvailable() && {label:'Ask RIA AI', icon:'✨', onclick:`bossAskAbout('${id}')`},
       can('CMS','edit') && {label:'Edit', icon:'✎', onclick:`openClientForm('${id}')`},
       can('CMS','delete') && {label:'Delete', icon:'🗑', onclick:`softDeleteRecord('CMS','${id}')`},
       {label:'Print', icon:'🖨', onclick:'window.print()'},
@@ -58050,7 +58050,7 @@ const CONNECTOR_CATALOG = [
      can only call in. The first two are tested by calling them; the last
      two are Not Connected until an editor has actually called, whatever is
      stored against them. */
-  {id:'bossai', kind:'selfhosted', name:'LEXI AI (your own model)', channel:'AI Insights',
+  {id:'bossai', kind:'selfhosted', name:'RIA AI (your own model)', channel:'AI Insights',
    desc:'A model the firm runs, or an enterprise endpoint it contracts for, behind an OpenAI-compatible API. The only connector through which BOSS data never reaches a shared service.',
    selfNote:'Ollama, vLLM, LM Studio and every enterprise gateway worth the name speak the OpenAI chat format, so one setting covers them all: the base URL (usually ending <b>/v1</b>) and the model it serves. A key is needed only if your own server asks for one. Because the endpoint is yours, nothing sent through it leaves your infrastructure \u2014 which is why this connector is privacy-verified by what it is, and the public APIs below are not.'},
   {id:'claude', kind:'https', name:'Claude (Anthropic)', channel:'AI Insights',
@@ -58321,7 +58321,7 @@ function toggleConnector(id){
 }
 
 /* =====================================================================
-   THE LEXI AI ASSISTANT
+   THE RIA AI ASSISTANT
 
    One assistant, reachable from anywhere, that can see exactly what the
    person using it can see and nothing else. It drafts, reframes,
@@ -58407,7 +58407,8 @@ function aiSystemBrief(){
   const house = (DB.config.aiKnowledge||[]).filter(k=>k.active!==false)
     .map(k=>'- '+k.title+': '+k.body).join('\n');
   return [
-    'You are LEXI AI, the assistant inside Finowise BOSS, the wealth-management CRM of '+(DB.config.company.name||'this firm')+'.',
+    'You are RIA AI, the B2C-focused financial education and investor-support assistant inside Finowise BOSS, the wealth-management platform of '+(DB.config.company.name||'this firm')+'.',
+    'B2C SERVICE MODE: Explain financial concepts, SIPs, mutual funds, risk, diversification, costs and planning in clear, customer-friendly language. Use only facts and records explicitly supplied in the current BOSS context; never claim to see an investor’s personal portfolio unless those exact records are present in the supplied context. Do not promise returns or issue unsupported buy/sell instructions. Encourage suitability review and a qualified advisor for personal decisions.',
     'You are speaking to '+(u.name||'a user')+', whose role is '+(roleOf(u)||'unknown')+' and whose record scope is "'+(u.scope||'own')+'".',
     '',
     'HOW BOSS IS ORGANISED',
@@ -58847,10 +58848,10 @@ function aiDrawPanel(){
   const sel = ai.selection;
   host.innerHTML = `
     <div class="ai-scrim" onclick="aiCloseP()"></div>
-    <aside class="ai-panel" role="dialog" aria-label="LEXI AI Assistant">
+    <aside class="ai-panel" role="dialog" aria-label="RIA AI Assistant">
       <div class="ai-head">
         <div>
-          <b>LEXI AI Assistant</b>
+          <b>RIA AI Assistant</b>
           <div class="ai-sub">${esc(aiContextLine(ai.context)||'Ask about anything you can already see.')}</div>
         </div>
         <div class="row" style="gap:6px">
@@ -58877,7 +58878,7 @@ function aiDrawPanel(){
                   .map(q=>`<button class="quick-chip" onclick="aiPrefill(${JSON.stringify(q).replace(/"/g,'&quot;')})">${esc(q)}</button>`).join('')}
               </div>
             </div>`}
-        ${ai.busy && !ai.turns.some(t=>t.live)? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-thinking"><span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(ai.phase || 'LEXI is thinking')}</div></div>`:''}
+        ${ai.busy && !ai.turns.some(t=>t.live)? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-thinking"><span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(ai.phase || 'RIA AI is thinking')}</div></div>`:''}
         ${ai.error? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-err">${esc(ai.error)}</div></div>`:''}
         ${ai.report? aiReportCardHtml(ai.report) : ''}
       </div>
@@ -59042,7 +59043,7 @@ function aiShowSelBtn(el, a, b){
   const btn = document.createElement('button');
   btn.id = 'aiSelBtn'; btn.type = 'button'; btn.className = 'ai-selbtn';
   btn.title = 'Ask the assistant to reframe the selected text';
-  btn.innerHTML = '✨ Ask AI';
+  btn.innerHTML = '✨ RIA AI';
   btn.style.top  = Math.max(8, r.top + window.scrollY - 34) + 'px';
   btn.style.left = Math.min(window.innerWidth - 120, r.left + window.scrollX + 8) + 'px';
   // mousedown, not click: the field must not lose its selection first.
@@ -59304,12 +59305,12 @@ function bossClientAlerts(c){
    person reading it does not have to go and find the process. */
 function bossInsightsHtml(c){
   const alerts = bossClientAlerts(c);
-  if(!alerts.length) return `<div class="boss-ins boss-ins-ok">🤖 <b>LEXI:</b> Nothing is pending on this client.</div>`;
+  if(!alerts.length) return `<div class="boss-ins boss-ins-ok">🤖 <b>RIA AI:</b> Nothing is pending on this client.</div>`;
   const tone = {blocker:'danger', high:'warn', medium:'info', low:''};
   const word = {blocker:'Blocker', high:'Urgent', medium:'Pending', low:'Opportunity'};
   return `<div class="boss-ins">
-    <div class="boss-ins-h">🤖 LEXI INSIGHTS (${alerts.length})
-      ${aiAvailable()? `<button class="btn sm ghost" onclick="bossAskAbout('${esc(c.id)}')">Ask LEXI</button>`:''}</div>
+    <div class="boss-ins-h">🤖 RIA AI INSIGHTS (${alerts.length})
+      ${aiAvailable()? `<button class="btn sm ghost" onclick="bossAskAbout('${esc(c.id)}')">Ask RIA AI</button>`:''}</div>
     ${alerts.map(a=>{ const s = bossSopById(a.sop); return `<details class="boss-ins-row">
       <summary><span class="badge ${tone[a.sev]}">${word[a.sev]}</span> ${esc(a.text)}</summary>
       <div class="boss-ins-sop">
@@ -59466,8 +59467,8 @@ function bossLooksLikeData(q){
   return /\b(kitne|kitna|kitni|how many|how much|total|list|pending|due|aaj|today|week|hafte|month|mahine|aum|clients|leads|meetings|tasks|reviews|queries|business|calls|top|highest|sabse|branch[- ]?wise|rm[- ]?wise|mere|my)\b/i.test(q);
 }
 const BOSS_ANSWER_RULES = `
-HOW LEXI AI ANSWERS
-  You are LEXI AI: a senior wealth-management operations and planning expert (30+ years, CFP-level) for this firm.
+HOW RIA AI ANSWERS
+  You are RIA AI: a senior wealth-management operations and planning expert (30+ years, CFP-level) for this firm.
   - For any question about the market, a chart or a technical read, apply the discipline of a Chartered Market Technician (CMT, the US charter): read the primary trend (200-day average, 52-week range), the secondary trend (50-day) and the short-term trend (20-day); ask for confirmation from independent signals (trend, momentum, volume, volatility) before leaning on one; treat a signal that the others contradict as unconfirmed; and always state the level at which the view is invalidated. Use only the indicators in <data>; never invent a pattern, count or divergence that is not computed there. Do not tell anyone you hold the charter.
   - Answer from the <data> and the <sops> you are given. Quote figures exactly as they appear in <data>; never estimate one.
   - For a how-to question, give the steps of the matching SOP in order, the documents needed and the TAT. Name the SOP id in brackets.
@@ -59564,7 +59565,7 @@ async function bossRunChat(q){
   const mktNames = !chart && !chartQ ? lexiMarketAsk(q, people) : null;
   let market = null;
   if(mktNames){
-    ai.phase = 'LEXI is reading live prices'; aiDrawPanel();
+    ai.phase = 'RIA AI is reading live prices'; aiDrawPanel();
     market = await lexiMarketRead(mktNames);
     /* Every name drawn from the sentence failed: it was filler, not a company. */
     let shortlist = mktNames === LEXI_MKT_SHORTLIST || (mktNames.length === LEXI_MKT_SHORTLIST.length && mktNames.every((n, i) => n === LEXI_MKT_SHORTLIST[i]));
@@ -59575,7 +59576,7 @@ async function bossRunChat(q){
     data.marketZone = lexiLiveZoneLabel(market.quotes);
     sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean))];
   } else if(!chart && !chartQ && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
-    ai.phase = 'LEXI is reading the live market'; aiDrawPanel();
+    ai.phase = 'RIA AI is reading the live market'; aiDrawPanel();
     const now = await lexiMarketRead(['NIFTY 50']);
     if(now.quotes.length){
       data.marketNow = lexiMarketForAi(now, 0, false);
@@ -59584,7 +59585,7 @@ async function bossRunChat(q){
     }
   }
   if(!mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
-    ai.phase = 'LEXI is checking the records'; aiDrawPanel();
+    ai.phase = 'RIA AI is checking the records'; aiDrawPanel();
     const plan = await bossPlanReads(q);
     if(plan.error) return {error: plan.error};
     if(plan.client) bossClientsNamedIn(plan.client).forEach(c=>{ if(!people.includes(c)) people.push(c); });
@@ -59608,7 +59609,7 @@ async function bossRunChat(q){
   const ask = (sops.length ? '<sops>\n' + sops.map(bossSopText).join('\n\n') + '\n</sops>\n\n' : '')
     + (Object.keys(data).length ? '<data>\n' + dataText + '\n</data>\n\n' : '<data>none read for this question</data>\n\n')
     + 'Question: ' + q;
-  ai.phase = 'LEXI is typing'; aiDrawPanel();
+  ai.phase = 'RIA AI is typing'; aiDrawPanel();
   const turn = {role:'assistant', content:'', live:true,
     clients: people.slice(0,3).map(c=>({id:c.id, name:clientDisplayName(c)})),
     sops: sops.map(s=>({id:s.id, t:s.t})), chart: chart || undefined,
@@ -59839,7 +59840,7 @@ function viewAnalytics(){
     ${a.total ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px">
       ${shown.map(analyticsCard).join('')}</div>` : `<div class="empty">No ${esc(what.toLowerCase())} ${timelineWindow('AN') ? 'in this period' : 'yet'}. The charts appear as soon as there are records.</div>`}
     ${empty.length && a.total ? `<p class="small-note" style="margin-top:12px">No data recorded yet for: ${empty.map(c=>esc(c.label)).join(', ')}.</p>` : ''}
-    <p class="small-note">Ask LEXI AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>
+    <p class="small-note">Ask RIA AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>
     ${analyticsSignalsSection()}
     ${tasks ? analyticsTaskSection() : ''}`;
 }
@@ -59922,7 +59923,7 @@ function analyticsTaskSection(){
     ${branchTabs({rows:all, stateKey:'_anTaskBranch', branchOf:analyticsTaskBranch, note:'tasks you can see'})}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-top:12px">
       ${cards.map((c,i)=>analyticsRankHtml(c, ANALYTICS_COLORS[i % ANALYTICS_COLORS.length])).join('')}</div>
-    <p class="small-note">Ask LEXI AI, for example "aaj ke tasks assign to wise chart".</p>
+    <p class="small-note">Ask RIA AI, for example "aaj ke tasks assign to wise chart".</p>
   </div>`;
 }
 /* =====================================================================
@@ -60187,7 +60188,7 @@ function lexiSignalsCard(c){
   lexiLoadNavs(s.rows.map(r=>(DB.platformHoldings||[]).find(h=>h.id===r.id)).filter(Boolean));
   const badge = a => `<span class="badge ${LEXI_ACTION_TONE[a]||''}">${esc(a)}</span>`;
   return `<div class="boss-ins" style="margin-top:10px">
-    <div class="boss-ins-h">📈 LEXI SIGNALS ${s.need ? '(' + s.need + ' to act on)' : '· all in line with the policy'}
+    <div class="boss-ins-h">📈 RIA AI SIGNALS ${s.need ? '(' + s.need + ' to act on)' : '· all in line with the policy'}
       <span class="small-note" style="margin-left:auto;font-weight:400">${s.live ? 'Valued at AMFI NAV of ' + esc(s.navDate) : lexiNav.error ? esc(lexiNav.error) + ', statement values shown' : 'Statement values' + (s.navDate ? ' · latest NAV ' + esc(s.navDate) : '')}</span></div>
     <div class="small-note" style="margin:2px 0 6px">${s.profile ? esc(s.profile) + ' profile · equity ' + s.pct[0] + '% / debt ' + s.pct[1] + '% / gold ' + s.pct[2] + '% (strategic ' + s.target.mix.join('/') + ')' : 'No risk profile recorded, so the allocation is not checked'} · ${esc(s.zoneNote || 'Market valuation zone not set (Analytics › Portfolio signals)')}</div>
     ${s.moves.map(m=>`<div class="boss-ins-row" style="padding:6px 0">${badge(m.action)} <b>${esc(m.asset)}</b> about ${esc(money(m.amount))}: ${esc(m.why)}</div>`).join('')}
@@ -60214,7 +60215,7 @@ function analyticsSignalsSection(){
   const act = all.filter(s=>s.need).sort((a,b)=>b.need - a.need || b.total - a.total);
   return `<div id="anSignals" style="margin-top:22px">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">
-      <h3 style="margin:0 0 4px">Portfolio signals (LEXI)</h3>${analyticsLiveNote()}</div>
+      <h3 style="margin:0 0 4px">Portfolio signals (RIA AI)</h3>${analyticsLiveNote()}</div>
     <div class="small-note" style="margin:0 0 10px">Every holding read against the firm's investment policy: the recommended list, the risk-profile allocation, and the market valuation zone below. ${lexiNav.fetchedAt ? 'Valued at AMFI NAVs fetched ' + esc(new Date(lexiNav.fetchedAt).toLocaleString()) + ' where units are on file.' : lexiNav.error ? esc(lexiNav.error) + '; statement values used.' : 'Statement values used until NAVs arrive.'}</div>
     <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
       <label class="tl-lbl" for="lexiZone">Market valuation zone</label>
@@ -60236,7 +60237,7 @@ function analyticsSignalsSection(){
             <td style="padding:6px;border-bottom:1px solid var(--line)">${s.moves.map(m=>esc(m.action + ' ' + m.asset.toLowerCase() + ' ~' + money(m.amount))).concat(s.rows.filter(r=>r.action!=='Hold').map(r=>esc(r.action + ': ' + r.scheme))).join('<br>')}</td>
             <td style="padding:6px 0;border-bottom:1px solid var(--line);text-align:right">${esc(money(s.total))}</td></tr>`).join('')}</tbody></table>` : '<div class="empty" style="padding:20px 0">Every portfolio is in line with the policy.</div>'}
       </div></div>` : '<div class="empty">No holdings on file yet. Import holdings (or add them on a client) and the signals appear here.</div>'}
-    <p class="small-note">Policy checks for the advisor to review, not advice given to a client. Ask LEXI AI, for example "Rahul Verma ke portfolio mein kya buy, hold ya sell karna hai?"</p>
+    <p class="small-note">Policy checks for the advisor to review, not advice given to a client. Ask RIA AI, for example "Rahul Verma ke portfolio mein kya buy, hold ya sell karna hai?"</p>
   </div>`;
 }
 /* LEXI: LIVE PRICES FOR ANY LISTED COMPANY.
@@ -60969,15 +60970,15 @@ const CONNECTOR_GUIDES = {
          title:'Models served', rows:[{t:'the model your server serves', v:'ready', hl:1}]}),
        cap:'If this does not answer from the BOSS server, nothing below will.'},
       {t:'Point BOSS at it',
-       d:'Setup → Developer Hub → Connections → LEXI AI (your own model) → Configure. The base URL is the address plus /v1. The model is the name your server serves it under. A key only if your own server asks for one; most do not.',
-       art:()=>artBoss({name:'LEXI AI (your own model)', btn:'Close', open:1, testHl:1, rows:[
+       d:'Setup → Developer Hub → Connections → RIA AI (your own model) → Configure. The base URL is the address plus /v1. The model is the name your server serves it under. A key only if your own server asks for one; most do not.',
+       art:()=>artBoss({name:'RIA AI (your own model)', btn:'Close', open:1, testHl:1, rows:[
          {l:'Endpoint (base URL)', v:'http://10.0.0.21:11434/v1', mono:1},
          {l:'Model', v:'the model your server serves', hl:1},
          {l:'Key, if your server wants one', v:'(usually blank)'}]}),
        cap:'Plain http is accepted here and only here: the traffic never leaves your network.'},
       {t:'Save, then test',
        d:'The test asks your server what it serves. A model name that does not match what came back is caught here, with the real list printed, rather than at the first question somebody asks the assistant.',
-       art:()=>artResult({name:'LEXI AI (your own model)', ok:true,
+       art:()=>artResult({name:'RIA AI (your own model)', ok:true,
          message:'Connected. Your own model server answered and serves 1 model(s). Nothing from BOSS leaves your infrastructure through this connector.'}),
        cap:'This is the only connector whose pass includes that last sentence.'},
     ],
@@ -76319,7 +76320,7 @@ function renderSettingsAiAssistant(){
     </div>
     <div class="card">
       <div class="section-title" style="margin-top:0">Who can use it</div>
-      <div class="small-note" style="margin:0 0 8px">Granted per person under Roles and Permissions, as “Use the LEXI AI Assistant”.
+      <div class="small-note" style="margin:0 0 8px">Granted per person under Roles and Permissions, as “Use the RIA AI Assistant”.
         Anyone without it never sees the ✨ at all.</div>
       ${who.length? `<div class="row" style="gap:6px;flex-wrap:wrap">${who.map(t=>`<span class="badge info">${esc(t.name)}</span>`).join('')}</div>`
         : `<div class="small-note" style="margin:0">Nobody but administrators, so far.</div>`}
