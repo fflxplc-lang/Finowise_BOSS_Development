@@ -437,11 +437,20 @@ function smtpExplain(stage, code, text) {
   return 'The server replied ' + code + ' ' + text + ' at the ' + stage + ' step.';
 }
 
+/* A request that times out is destroyed, and destroying it also raises
+   'error' — so without this guard the caller's callback runs twice, the
+   second reply throws "Cannot set headers after they are sent", and the
+   whole server process exits. Every outbound helper below answers once. */
+function callOnce(cb) {
+  let called = false;
+  return function () { if (called) return; called = true; return cb.apply(this, arguments); };
+}
 /* ---- a real HTTPS probe for token-based connectors ----
  * The user supplies the endpoint their provider documents; this calls it for
  * real with the credential attached and reports the status line it got back.
  */
 function httpsProbe({ url, method, headers, body }, cb) {
+  cb = callOnce(cb);
   let target;
   try { target = new URL(url); } catch (e) { return cb({ ok: false, message: 'That is not a valid URL.' }); }
   if (target.protocol !== 'https:') return cb({ ok: false, message: 'Use an https:// endpoint — a credential must not travel over plain http.' });
@@ -454,6 +463,7 @@ function httpsProbe({ url, method, headers, body }, cb) {
     timeout: 12000,
   }, (res) => {
     let data = '';
+    res.on('close', () => { if (!res.complete) cb({ ok: false, message: 'Could not reach the provider — the connection closed before the reply was complete.' }); });
     res.setEncoding('utf8');
     res.on('data', (d) => { if (data.length < 2000) data += d; });
     res.on('end', () => {
@@ -477,6 +487,7 @@ function httpsProbe({ url, method, headers, body }, cb) {
 // httpsProbe reports whether a call worked; this one also hands back what
 // came back, for the calls where the answer is the point.
 function httpsProbeJson(opts, cb) {
+  cb = callOnce(cb);
   let target;
   try { target = new URL(opts.url); } catch (e) { return cb({ ok: false, message: 'That is not a valid URL.' }); }
   if (target.protocol !== 'https:') return cb({ ok: false, message: 'Use an https:// endpoint.' });
@@ -487,6 +498,7 @@ function httpsProbeJson(opts, cb) {
     timeout: 15000,
   }, (res) => {
     let data = '';
+    res.on('close', () => { if (!res.complete) cb({ ok: false, message: 'Could not reach the provider — the connection closed before the reply was complete.' }); });
     res.setEncoding('utf8');
     res.on('data', d => { if (data.length < 20000) data += d; });
     res.on('end', () => {
@@ -1712,6 +1724,7 @@ function cleanAddresses(value) {
 // uses: no user sits in front of this, so there is nobody to send to a consent
 // screen. The secret never leaves this process.
 function graphToken(config, secrets, cb) {
+  cb = callOnce(cb);
   const body = new URLSearchParams({
     client_id: config.clientId || '',
     client_secret: secrets.clientSecret || '',
@@ -1725,6 +1738,7 @@ function graphToken(config, secrets, cb) {
     timeout: 12000,
   }, (res) => {
     let data = '';
+    res.on('close', () => { if (!res.complete) cb('Could not reach Microsoft — the connection closed before the reply was complete.'); });
     res.setEncoding('utf8');
     res.on('data', d => { if (data.length < 8000) data += d; });
     res.on('end', () => {
@@ -2508,6 +2522,7 @@ function privateHost(hostname) {
 }
 /* The one outbound call, with the stored credential put on it here. */
 function apiConnFetch(opts, cb) {
+  cb = callOnce(cb);
   let target;
   try { target = new URL(opts.url); } catch (e) { return cb({ ok: false, status: 0, message: 'That is not a valid URL.' }); }
   if (target.protocol !== 'https:')
@@ -2522,6 +2537,7 @@ function apiConnFetch(opts, cb) {
     timeout: Number(opts.timeout) || 20000,
   }, (res) => {
     let data = '', over = false;
+    res.on('close', () => { if (!res.complete) cb({ ok: false, status: 0, message: 'Could not reach it — the connection closed before the reply was complete.' }); });
     res.setEncoding('utf8');
     res.on('data', d => { if (data.length < 400000) data += d; else over = true; });
     res.on('end', () => {
@@ -2915,6 +2931,7 @@ function aiProviderCall({ id, kind, config, secrets, system, messages, maxTokens
    fine — the traffic never leaves their infrastructure — so this one allows
    it where the outward-facing probe does not. Everything else is identical. */
 function httpProbeJsonAny(opts, cb) {
+  cb = callOnce(cb);
   let target;
   try { target = new URL(opts.url); } catch (e) { return cb({ ok: false, message: 'That is not a valid URL.' }); }
   const lib = target.protocol === 'http:' ? http : https;
@@ -2929,6 +2946,7 @@ function httpProbeJsonAny(opts, cb) {
     timeout: AI_TIMEOUT_MS,
   }, (res) => {
     let data = '';
+    res.on('close', () => { if (!res.complete) cb({ ok: false, message: 'Could not reach the model server — the connection closed before the reply was complete.' }); });
     res.setEncoding('utf8');
     res.on('data', (d) => { if (data.length < 400000) data += d; });
     res.on('end', () => {
