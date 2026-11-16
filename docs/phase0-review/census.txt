@@ -1,0 +1,184 @@
+Finowise B2C — RIA AI Phase 0 census (b2c-census-1.0) — data.json — 2026-11-16T10:03:27.194Z
+Counts only. No names, PAN, mobile, email, ids, per-client amounts or money totals.
+
+STORE COUNTS
+  clients: 9
+  team: 2
+  transactions: 7
+  businessEntries: 2
+  tasks: 3
+  platformHoldings: 3
+  platformSips: 5
+  importBatches: 4
+  schemes: 2
+  amcs: 1
+  projects: 3
+  projectClients: 6
+  aumMonthly: 2
+
+AUM (dashboard book logic)
+  clients: 9
+  clientsWithPlatformHoldings: 2
+  clientsWithCompletedLedgerOnly: 1
+  clientsWithBoth_ledgerIgnoredByDashboard: 1
+  clientsWithNeither_noAumFigure: 6
+  holdings: 3
+  holdingsByPlatform:
+    nj: 1
+    finowise: 1
+    ar: 1
+  holdingsWithAssetClassSleeves: 1
+  holdingsWithoutSleeves_noProductSplit: 2
+  holdingsWithSchemeLevelDetail: 0
+  holdingsWithoutReportAsOnDate: 2
+  holdingsCurrentValueBlankOrZero: 1
+  holdingsWhoseClientIsMissing: 1
+  clientsWithStaticAumFieldSet: 1
+  aumImportBatchesByPlatform:
+    nj: 1
+
+BRANCHES
+  configuredBranches: 2
+  distinctBranchValuesOnClients: 2
+  clientsWithoutBranch: 1
+  clientsWhoseBranchIsNotInConfiguredList: 1
+  distinctUnlistedBranchValues: 1
+
+RELATIONSHIP MANAGERS
+  teamMembers: 2
+  distinctRmsOnClients: 3
+  clientsWithoutRmName: 1
+  clientsWhoseRmIsNotInTeam: 1
+  clientsWhoseRmIsInactive: 1
+  clientsUsingAssignedToField: 1
+
+PROJECTS
+  projects: 3
+  projectsByCategory:
+    Planning: 2
+    Insurance: 1
+  projectClientLinks: 6
+  linksToMissingProject: 1
+  linksToMissingClient: 1
+  duplicateLinks: 1
+  projectsWithNoClients: 1
+  clientsInNoProject: 7
+  clientsInExactlyOneProject: 1
+  clientsInTwoOrMoreProjects: 1
+  doubleCountFactor_sumOfProjectClientCounts_vs_distinctLinkedClients: 1.500 (3 / 2)
+
+TRANSACTIONS, SCHEMES, AMCs
+  transactions: 7
+  mainRollups: 1
+  byType:
+    Purchase: 2
+    SIP: 2
+    Monthly SIP: 1
+    Redemption: 1
+  byStatus:
+    Completed: 2
+    Processed: 1
+    [redacted: matches a name]: 1
+    [redacted: PAN-like]: 1
+    Rejected: 1
+  completed: 2
+  withoutInitiatedDate: 5
+  withoutAmount: 1
+  withoutClient: 1
+  withSchemeId: 3
+  schemeIdFoundInSchemeMaster: 2
+  schemeHasAmcFoundInAmcMaster: 1
+  schemesInMaster: 2
+  schemesWithAmc: 1
+  amcsInMaster: 1
+
+SIPs
+  configuredTransactionStatuses:
+    source: Setup (configured)
+    labels:
+      Not Started
+      Submitted
+      Processed
+      Completed
+      Rejected
+  configuredSipTransactionTypes:
+    SIP
+  configuredBusinessStatuses:
+    source: default (not changed in Setup)
+    labels:
+      Pending from Client Consent
+      Not Started
+      In Process
+      Completed
+      Declined
+  sipTransactions: 3
+  sipTransactionsByType:
+    SIP: 2
+    Monthly SIP: 1
+  sipTransactionsByStatus:
+    Processed: 1
+    [redacted: matches a name]: 1
+    [redacted: PAN-like]: 1
+  sipTransactionStatusNotInConfiguredList: 2
+  sipTransactionStageDates:
+    withPlacedAt: 0
+    withAllottedAt: 1
+    withCompletedDate: 0
+    withRejectedAttempt: 0
+  sipStatusVsStage:
+    Processed | allotted: 1
+    [redacted: matches a name] | no stage date: 1
+    [redacted: PAN-like] | no stage date: 1
+  sipBusinessEntries: 1
+  sipBusinessEntriesByStatus:
+    Completed: 1
+  platformSips: 5
+  platformSipsByPlatform:
+    finowise: 3
+    nj: 2
+  platformSipsWithAnyStatusField: 1
+  platformSipsEndDate:
+    future: 1
+    past: 1
+    blank: 1
+    unreadable date: 1
+    within 30 days: 1
+  platformSipsType:
+    (blank): 4
+    Normal: 1
+  platformSipsFrequency:
+    Monthly: 2
+    (blank): 2
+    [redacted: phone-like]: 1
+  platformSipsWithMonthlyAmount: 2
+  platformSipsWithOnlyAmount: 1
+  platformSipsWithNoAmount: 2
+  platformSipsSchemeNameMatchesSchemeMaster: 1
+  platformSipsWhoseClientIsMissing: 1
+  platformSipsNotInLatestReportOfTheirPlatform: 1
+  platformSipsWithoutReportAsOnDate: 4
+  sipImportBatchesByPlatform:
+    nj: 2
+    finowise: 1
+  sipStopPauseTasksByType:
+    SIP Stop: 1
+    SIP Pause: 1
+  sipStopPauseTasksByStatus:
+    Completed: 1
+    In Progress: 1
+
+MONTHLY HISTORY (aumMonthly)
+  aumMonthlyRows: 2
+  firstMonth: 2026-07
+  lastMonth: 2026-09
+  rowsWithReportDate: 1
+  rowsFiledUnderArrivalMonth: 1
+  missingMonthsBetweenFirstAndLast: 1
+
+OTHER FIELD HEALTH
+  tasksWithoutAssignTo: 2
+  tasksUsingAssignedToField: 1
+  tasksByOverallStatus:
+    Completed: 1
+    In Progress: 1
+    (blank): 1
