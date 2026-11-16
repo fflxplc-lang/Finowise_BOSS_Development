@@ -3020,6 +3020,133 @@ app.get('/api/ai/status', checkApiKey, (req, res) => {
   }) });
 });
 
+/* ---------------------------------------------------------------------
+   RIA AI'S TOTAL AUM — the Dashboard's figure, worked out here
+
+   GET /api/ai/aum -> { ok, total, scope, source, computedAt, dataDate,
+                        composition, notes } — totals only, never a client row.
+
+   The book is public/book-aum.js, the same file the Dashboard's Live AUM card
+   is built from, so the two cannot disagree. Who is in scope follows the
+   Dashboard's visibility rules (all / branch / team / own, clients by rmName)
+   with one deliberate difference: the firm-wide total is only for an
+   ADMINISTRATOR ACCOUNT, and that is decided by the users.db role — which
+   lives here and cannot be changed through /api/storage — never by the team
+   record or anything the browser says. An account whose team record would
+   show it the whole firm, but which is not a users.db administrator, is
+   refused rather than given the firm-wide figure.
+
+   The scope of a non-administrator is read from its team record (branch,
+   reporting line), exactly as the Dashboard reads it. Until storage writes
+   are authorised on the server, that record is only as trustworthy as the
+   Dashboard's own scope; it can never widen to firm-wide here.
+   --------------------------------------------------------------------- */
+const BookAum = require(path.join(__dirname, 'public', 'book-aum.js'));
+const AUM_ADMIN_ROLE = 'Admin';
+const AUM_DEFAULT_ROLES = ['Admin', 'President / CEO', 'Senior Vice President', 'Vice President',
+  'Senior General manager', 'General Manager', 'Senior Manager', 'Manager', 'Senior Executive', 'Executive'];
+/* Parsed copies, reused only while the stored text is exactly what was parsed:
+   a write replaces the string, so the very next request parses afresh. (Not
+   keyed on storeVersion, which moves on a short timer after a write.) */
+const aumCache = {};
+function aumParse(k, fallback) {
+  const raw = store[k];
+  const hit = aumCache[k];
+  if (hit && hit.raw === raw) return hit.value;
+  let value = fallback;
+  try { const v = JSON.parse(raw || JSON.stringify(fallback)); value = (Array.isArray(fallback) ? Array.isArray(v) : (v && typeof v === 'object')) ? v : fallback; }
+  catch (e) { value = fallback; }
+  aumCache[k] = { raw, value };
+  return value;
+}
+function aumStores() {
+  return { clients: aumParse('clients', []), team: aumParse('team', []), holdings: aumParse('platformHoldings', []),
+    sips: aumParse('platformSips', []), transactions: aumParse('transactions', []), config: aumParse('config', {}) };
+}
+/* The page's roleOf()/defaultRole(): a member with no role of its own is the
+   most junior role the firm has, never Admin unless Admin is all there is. */
+function aumMemberRole(m, config) {
+  if (m && m.role) return m.role;
+  const list = Array.isArray(config.roles) && config.roles.length ? config.roles : AUM_DEFAULT_ROLES;
+  const roles = list.includes(AUM_ADMIN_ROLE) ? list : [AUM_ADMIN_ROLE].concat(list);
+  const norm = (x) => String(x == null ? '' : x).trim().toLowerCase();
+  const junior = AUM_DEFAULT_ROLES.filter(r => r !== AUM_ADMIN_ROLE).slice(-1)[0];
+  return roles.find(r => norm(r) === norm(junior)) || roles.find(r => r !== AUM_ADMIN_ROLE) || AUM_ADMIN_ROLE;
+}
+/* The page's userDescendants(): everyone below a member on the reporting line. */
+function aumDescendants(team, id) {
+  const out = []; const seen = new Set([id]); const queue = team.filter(t => t && t.parentUserId === id);
+  while (queue.length) {
+    const u = queue.shift();
+    if (seen.has(u.id)) continue;
+    seen.add(u.id); out.push(u); queue.push(...team.filter(t => t && t.parentUserId === u.id));
+  }
+  return out;
+}
+function aumScopeFor(user, s) {
+  const all = s.clients.filter(c => c && !c.deletedAt);
+  if (user.role === 'admin')
+    return { kind: 'firm', label: 'Firm-wide: every client in this BOSS (administrator account)', clients: all };
+  const m = s.team.find(t => t && t.id === user.member_id);
+  if (!m) return { refuse: 'no_member', message: 'This sign-in is not linked to a team member, so BOSS cannot tell which clients are in its scope. Nothing was calculated.' };
+  if (aumMemberRole(m, s.config) === AUM_ADMIN_ROLE || m.scope === 'all')
+    return { refuse: 'firm_wide_admin_only', message: 'Firm-wide AUM is available to administrator accounts only. This account’s scope covers the whole firm, so no total was given; an administrator can provide it.' };
+  /* The Dashboard's Live AUM card needs CMS view: the page's can('CMS','view')
+     — the module open to this role (config.moduleRoles.CMS; empty = open) and
+     View ticked on the member. Whoever the card is closed to gets no total here. */
+  const cmsRoles = (s.config.moduleRoles || {}).CMS;
+  const cmsOpen = !Array.isArray(cmsRoles) || !cmsRoles.length || cmsRoles.includes(aumMemberRole(m, s.config));
+  if (!cmsOpen || !(m.perms && m.perms.CMS && m.perms.CMS.view))
+    return { refuse: 'no_cms_view', message: 'Your account cannot see client AUM (it needs CMS view), so no AUM total was calculated.' };
+  if (m.scope === 'branch')
+    return { kind: 'branch', label: 'Your branch: ' + (m.branch || '(no branch set on your profile)'), clients: all.filter(c => c.branch === m.branch) };
+  if (m.scope === 'team') {
+    const ids = new Set([m.id].concat(aumDescendants(s.team, m.id).map(t => t.id)));
+    return { kind: 'team', label: 'You and the ' + (ids.size - 1) + ' people who report to you', clients: all.filter(c => ids.has(c.rmName)) };
+  }
+  return { kind: 'own', label: 'Your own clients', clients: all.filter(c => c.rmName === m.id) };
+}
+app.get('/api/ai/aum', checkApiKey, (req, res) => {
+  const t0 = Date.now();
+  const user = signedInUser(req);
+  if (!user) return res.status(401).json({ ok: false, reason: 'signed_out', message: 'Sign in again to see AUM.' });
+  const s = aumStores();
+  const scope = aumScopeFor(user, s);
+  if (scope.refuse) {
+    console.log('[ai-aum] user #' + user.id + ' refused: ' + scope.refuse);
+    return res.status(403).json({ ok: false, reason: scope.refuse, message: scope.message });
+  }
+  const mine = new Set(scope.clients.map(c => c.id));
+  const input = { clients: scope.clients, holdings: s.holdings, sips: s.sips,
+    txns: BookAum.eligibleTxns(s.transactions).filter(t => mine.has(t.clientId)) };
+  const sum = BookAum.aumSummary(BookAum.bookRows(input), input);
+  const notes = [];
+  if (sum.clientsWithoutAum) notes.push(sum.clientsWithoutAum + ' of ' + sum.clientsInScope + ' clients in scope have no platform holdings and no completed BOSS transactions, so they add nothing.');
+  if (sum.clientsWithBothLedgerIgnored) notes.push(sum.clientsWithBothLedgerIgnored + ' clients have both a platform report and BOSS transactions; the platform report is used and the ledger is not added on top, as on the Dashboard.');
+  if (sum.holdingsWithoutReportDate) notes.push(sum.holdingsWithoutReportDate + ' platform holdings carry no report date; they are counted, but their as-on date is unknown.');
+  notes.push('Only completed transactions count (pending, submitted and rejected do not), Main summary records are not double-counted, and redemptions are deducted.');
+  notes.push('The manual "AUM" field on client records is not used.');
+  if (scope.kind !== 'firm') notes.push('Firm-wide AUM is available to administrator accounts only; this figure covers your scope.');
+  const computedAt = new Date().toISOString();
+  console.log('[ai-aum] user #' + user.id + ' scope=' + scope.kind + ' clients=' + sum.clientsInScope + ' ' + (Date.now() - t0) + 'ms');
+  res.set('Cache-Control', 'no-store').json({
+    ok: true,
+    total: sum.total,
+    scope: { kind: scope.kind, label: scope.label },
+    source: 'Dashboard Live AUM logic: each client’s imported platform report where there is one, otherwise completed BOSS transactions with redemptions deducted.',
+    dataset: 'This BOSS only (Finowise B2C)',
+    computedAt,
+    dataDate: { platformAsOn: sum.platformAsOn, holdingsWithoutReportDate: sum.holdingsWithoutReportDate, ledgerReadAt: computedAt },
+    composition: {
+      fromPlatformHoldings: sum.fromPlatformHoldings, fromBossLedger: sum.fromBossLedger,
+      clientsInScope: sum.clientsInScope, clientsWithAum: sum.clientsWithAum, clientsWithoutAum: sum.clientsWithoutAum,
+      clientsUsingPlatformHoldings: sum.clientsUsingPlatformHoldings, clientsUsingLedger: sum.clientsUsingLedger,
+      clientsWithBothLedgerIgnored: sum.clientsWithBothLedgerIgnored,
+    },
+    notes,
+  });
+});
+
 /* The editors' way in. Not behind the CRM's API key: an extension running on
    somebody's laptop holds the connector's own key and nothing else, which is
    exactly the credential being checked here. A wrong key is a 401 and is not
