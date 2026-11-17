@@ -16,3 +16,5 @@ aadhaar-vault.key
 reminders.json
 reminders.json.tmp
 push-vapid.json
+audit/
+backups/

@@ -1083,6 +1083,21 @@ function checkApiKey(req, res, next) {
   next();
 }
 
+/* Phase 1: the server's own copy of who may do what (access-control.js)
+   and its own audit trail (audit-log.js). Step 1 identifies people and
+   evaluates the team-record rule in report mode only; nothing here
+   refuses a request yet. */
+const accessControl = require('./access-control').create({
+  storeRaw: (key) => store[key],
+  memberOfUser: (user) => memberOfUser(user),
+});
+const auditLog = require('./audit-log').create({ dir: path.join(path.dirname(DB_FILE), 'audit') });
+console.log('[access] mode: ' + accessControl.MODE + (accessControl.UNSCOPED ? ' (scoped storage OFF)' : ''));
+function auditWho(req) {
+  const p = accessControl.principal(signedInUser(req));
+  return p ? { userId: p.userId, email: p.email, memberId: p.memberId } : { userId: null, email: '', memberId: '' };
+}
+
 // GET /api/storage/:key -> { key, value } | 404
 app.get('/api/storage/:key', checkApiKey, (req, res) => {
   const value = store[req.params.key];
@@ -1457,6 +1472,24 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
       return res.status(422).json({ error: 'Not saved: ' + wrong.slice(0, 5).join(' '), problems: wrong });
     }
     if (checked) value = checked.value;
+  }
+  /* The team record decides roles, scope and permissions. Phase 1 step 1
+     only records who would be refused (report mode); step 2 enforces it. */
+  if (req.params.key === 'team') {
+    let next = null;
+    try { next = JSON.parse(value); } catch (e) { next = null; }
+    if (Array.isArray(next)) {
+      let prev = [];
+      try { const v = JSON.parse(store.team || '[]'); prev = Array.isArray(v) ? v : []; } catch (e) { prev = []; }
+      const p = accessControl.principal(signedInUser(req));
+      const bad = accessControl.teamViolations(p, prev, next);
+      if (bad.length) {
+        auditLog.append(Object.assign(auditWho(req), { action: 'team.write', target: 'team', outcome: 'would-deny',
+          mode: 'report', ids: bad.map((v) => v.memberId),
+          fields: Array.from(new Set([].concat(...bad.map((v) => v.fields)))),
+          reason: bad.map((v) => v.reason).join(' | ') }));
+      }
+    }
   }
   store[req.params.key] = value;
   writeToDisk();
@@ -3235,6 +3268,40 @@ app.delete('/api/users/:memberId', checkApiKey, requireApiAdmin, (req, res) => {
   }
   deleteUserById.run(user.id);
   res.json({ ok: true, removed: true, email: user.email });
+});
+
+/* Phase 1: before any rule is enforced, an administrator sees where the
+   sign-in accounts and the team records disagree. Counts first, then the
+   ids behind each count (no emails, no other details), so the accounts
+   can be put right before enforcement. */
+app.get('/api/access/reconcile', checkApiKey, requireApiAdmin, (req, res) => {
+  const users = listUsers.all();
+  let team = [];
+  try { const v = JSON.parse(store.team || '[]'); team = Array.isArray(v) ? v : []; } catch (e) { team = []; }
+  const live = team.filter((t) => t && t.id && !t.deletedAt);
+  const linked = new Set();
+  const out = { accountsWithoutMember: [], teamAdminWithoutAdminAccount: [], adminAccountWithoutTeamAdmin: [],
+    scopeAllWithoutAdminAccount: [], membersWithoutAccount: [] };
+  users.forEach((u) => {
+    if (u.active === 0) return;
+    const m = memberOfUser(u);
+    if (!m) { out.accountsWithoutMember.push('account#' + u.id); return; }
+    linked.add(m.id);
+    const teamAdmin = accessControl.roleOf(m) === accessControl.ADMIN_ROLE;
+    if (teamAdmin && u.role !== 'admin') out.teamAdminWithoutAdminAccount.push(m.id);
+    if (!teamAdmin && u.role === 'admin') out.adminAccountWithoutTeamAdmin.push(m.id);
+    if (m.scope === 'all' && u.role !== 'admin') out.scopeAllWithoutAdminAccount.push(m.id);
+  });
+  live.forEach((t) => { if (!linked.has(t.id) && (t.status || 'Active') === 'Active') out.membersWithoutAccount.push(t.id); });
+  const counts = {};
+  Object.keys(out).forEach((k) => { counts[k] = out[k].length; });
+  auditLog.append(Object.assign(auditWho(req), { action: 'access.reconcile', target: 'users', outcome: 'ok' }));
+  res.set('Cache-Control', 'no-store').json({ ok: true, mode: accessControl.MODE, counts, ids: out });
+});
+
+/* The server's audit trail, newest first. Administrators only. */
+app.get('/api/audit', checkApiKey, requireApiAdmin, (req, res) => {
+  res.set('Cache-Control', 'no-store').json({ ok: true, entries: auditLog.read(req.query.limit) });
 });
 
 // ------------------------------------------------- the client's own pages --

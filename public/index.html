@@ -2878,6 +2878,19 @@ const PUBLIC_WRITE_KEYS = ['docSubmissions','tasks','communications','auditLog',
   // A client approving their plan raises the business entry from it, there and then.
   'businessEntries'];
 function inPublicMode(){ return !!publicToken; }
+/* THE SESSION ENDED UNDER AN OPEN TAB.
+
+   A read or a save that comes back 401 means the server no longer knows
+   who this is (signed out elsewhere, the session ran out, the account
+   was switched off). Carrying on would only fail quietly, one save at a
+   time, so the tab goes to the sign-in page once, and comes back here
+   afterwards. A client's own link page never signs in and is left alone. */
+var crmSessionGoneOnce = false;
+function crmSessionGone(){
+  if(crmSessionGoneOnce || inPublicMode()) return;
+  crmSessionGoneOnce = true;
+  try{ location.assign('/login?next=' + encodeURIComponent(location.pathname + location.search + location.hash)); }catch(e){}
+}
 async function loadPublicBundle(token){
   const res = await fetch('/api/public/bundle?token='+encodeURIComponent(token));
   const r = await res.json().catch(()=>({ok:false}));
@@ -2987,6 +3000,7 @@ async function sget(key, fallback, shared){
   }
   try{
     const res = await fetch('/api/storage/'+encodeURIComponent(key), { headers: apiHeaders() });
+    if(res.status===401){ crmSessionGone(); return fallback; }
     if(res.status===404) return fallback;
     if(!res.ok) throw new Error('storage get failed: '+res.status);
     const r = await res.json();
@@ -3059,6 +3073,7 @@ async function sset(key, value, shared){
       alert(r.error || 'The server refused to save this.');
       return false;
     }
+    if(res.status === 401){ crmSessionGone(); return false; }
     if(!res.ok) throw new Error('storage set failed: '+res.status);
   }catch(e){ console.error('storage set failed', e); }
 }
@@ -35164,7 +35179,12 @@ function bindSignedInMember(){
   const byEmail = !byId && window.CRM_USER_EMAIL
     && DB.team.find(t=>(t.email||'').toLowerCase()===String(window.CRM_USER_EMAIL).toLowerCase());
   const member = byId || byEmail;
-  if(member){ currentUser = member.id; return member; }
+  if(member){ currentUser = member.id; crmUnlinked = false; return member; }
+  /* Not an administrator and not anybody on the team: work as nobody, not as team[0]. */
+  if(window.CRM_USER_EMAIL && !window.CRM_IS_ADMIN && DB.team.length){
+    crmUnlinked = true;
+    currentUser = UNLINKED_MEMBER.id;
+  }
   return null;
 }
 
@@ -35239,7 +35259,30 @@ function fullAdminFlags(all){
   // with everything gets them and one set up with nothing starts without.
   const f={}; ADMIN_FLAGS.concat(USER_FLAGS).forEach(a=>f[a]=all?1:0); return f;
 }
-function me(){ return DB.team.find(t=>t.id===currentUser) || DB.team[0]; }
+function me(){ return DB.team.find(t=>t.id===currentUser) || (crmUnlinked ? UNLINKED_MEMBER : DB.team[0]); }
+/* A SIGN-IN THAT IS NOBODY ON THE TEAM.
+
+   me() used to fall back to whoever is first in the team list — usually
+   the firm's own Admin record — for any account the page could not match
+   to a member. For an administrator's own account that is harmless and is
+   kept (a fresh install has no member for it yet). For anybody else it
+   meant working as the Admin. Such an account is now this placeholder: no
+   role, no permissions, owner of nothing, so the page shows nothing it
+   should not, and a notice says what to do. The server makes the same
+   call on its own side (access-control.js). */
+var crmUnlinked = false;   // var: me() may run before this line is reached
+var UNLINKED_MEMBER = Object.freeze({id:'__unlinked__', name:'Unlinked sign-in', role:'', scope:'own',
+  perms:{}, permsOff:{}, adminFlags:{}, hrAccess:{}, status:'Active', documents:[], notes:[]});
+function showUnlinkedNotice(){
+  if(document.getElementById('crmUnlinkedNotice')) return;
+  const d = document.createElement('div');
+  d.id = 'crmUnlinkedNotice';
+  d.setAttribute('role', 'alert');
+  d.style.cssText = 'position:sticky;top:0;z-index:9999;background:#fff4e5;color:#7a4b00;border-bottom:1px solid #f0c27a;padding:10px 16px;font-size:14px';
+  d.textContent = 'This sign-in (' + (window.CRM_USER_EMAIL || '') + ') is not linked to a team member, so BOSS shows nothing. '
+    + 'Ask an administrator to add you under Team Members with this email address.';
+  document.body.insertBefore(d, document.body.firstChild);
+}
 /* THE NAME A PERMISSION IS FILED UNDER.
 
    Three of the keys the record helpers are handed are not permission
@@ -35849,6 +35892,7 @@ async function boot(){
   await alignRolesOnce();
   await migrateQueryPermissions();
   bindSignedInMember();
+  if(crmUnlinked) showUnlinkedNotice();
   desktopNotifySweep();
   /* Now that the page is the person who signed in: a session left open
      yesterday is reconciled, and the punch reminder is worked out from
