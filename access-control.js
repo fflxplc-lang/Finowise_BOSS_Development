@@ -54,13 +54,15 @@ const USER_FLAGS = ['useAiAssistant'];                                        //
    person never changes these on their own record; on somebody else's
    the page's own capability is needed (TEAM_FIELD_CAPABILITY). */
 const TEAM_PROTECTED = ['role', 'scope', 'branch', 'status', 'deletedAt', 'parentUserId', 'managerIds',
-  'departments', 'perms', 'permsOff', 'pagePerms', 'stagePerms', 'adminFlags', 'hrAccess'];
+  'departments', 'perms', 'permsOff', 'pagePerms', 'stagePerms', 'adminFlags', 'hrAccess', 'viewFullPan'];
+/* Step 6b: a colleague's HR identity: Team edit, Manage Users or HR admin. */
+const TEAM_HR_FIELDS = ['employeeId', 'designation', 'dateOfJoining', 'officialMobile', 'aadhaarLast4', 'accountEmail'];
 const TEAM_IDENTITY = ['name', 'email', 'personalEmail', 'officialEmail', 'mobile', 'phone', 'alternateMobile', 'whatsapp', 'panNumber'];
 const TEAM_FIELD_CAPABILITY = {
   role: 'teamEdit', scope: 'teamEdit', branch: 'teamEdit', status: 'teamEdit', deletedAt: 'teamDelete',
   parentUserId: 'manageUsers', managerIds: 'manageUsers', departments: 'manageUsers',
   perms: 'managePermissions', permsOff: 'managePermissions', pagePerms: 'managePermissions',
-  stagePerms: 'managePermissions', adminFlags: 'managePermissions', hrAccess: 'hrAdmin',
+  stagePerms: 'managePermissions', adminFlags: 'managePermissions', hrAccess: 'hrAdmin', viewFullPan: 'managePermissions',
 };
 
 function norm(x) { return String(x === null || x === undefined ? '' : x).trim().toLowerCase(); }
@@ -386,6 +388,8 @@ function create(opts) {
       const hiddenHere = was && id !== p.memberId ? new Set(privateHidden(p, id)) : null;
       const identity = was && id !== p.memberId ? TEAM_IDENTITY.filter((k) => !hiddenHere.has(k) && !same(was[k], now[k])) : [];
       if (identity.length && !(holds.teamEdit || holds.manageUsers)) out.push({ memberId: id, fields: identity, reason: 'needs_teamEdit:identity' });
+      const hrFields = was && id !== p.memberId ? TEAM_HR_FIELDS.filter((k) => !hiddenHere.has(k) && !same(was[k], now[k])) : [];
+      if (hrFields.length && !(holds.teamEdit || holds.manageUsers || holds.hrAdmin)) out.push({ memberId: id, fields: hrFields, reason: 'needs_teamEdit:hr_fields' });
       if (!fields.length) continue;
       const reasons = [];
       /* Step 6b: who may hand out the flags that make administrators is the administrator account's decision. */
@@ -936,7 +940,8 @@ function create(opts) {
      the same way. Soft deletion (deletedAt) is an edit, not a removal. */
   const SHRINK_EXEMPT = new Set(['apiInbox']);                 // a queue: draining it is its job
   function shrinkCheck(p, key, curRaw, nextValue, confirmHeader) {
-    if (SHRINK_EXEMPT.has(key) || DYNAMIC.test(key)) return null;  // per-upload rows are replaced whole on purpose
+    if (SHRINK_EXEMPT.has(key)) return null;
+    const dyn = DYNAMIC.test(key);          // per-upload rows are replaced whole on purpose; only emptying them is guarded (step 6b)
     const cur = parsedRaw(key, curRaw);
     if (cur === undefined || cur === null) return null;
     let removed = 0, total = 0, emptied = false;
@@ -957,7 +962,7 @@ function create(opts) {
     /* Emptying is refused when it takes two or more records with it. Removing
        the last single record (converting the only lead, deleting the only SLA
        rule) is an ordinary action and goes through (decision, 2026-11-17). */
-    if (!(emptied && removed >= 2) && removed <= limit) return null;
+    if (!(emptied && removed >= 2) && (dyn || removed <= limit)) return null;
     const n = Number(confirmHeader);
     if (p && p.admin && Number.isFinite(n) && n >= removed) return null;
     return { removed, total, emptied, limit, confirmed: confirmHeader !== undefined && confirmHeader !== '' };

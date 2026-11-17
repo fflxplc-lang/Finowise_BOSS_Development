@@ -442,6 +442,69 @@ secSuite(async (t) => {
     return '403';
   });
 
+  /* ======== the fourth, fresh review (step 6b, round 4) ======== */
+  await t.step('R4-C1 a value that is not JSON, or not a list where a list is stored, is refused before anything else', async () => {
+    admin = await enf.admin();
+    const put = (c, key, raw) => c.call('PUT', '/api/storage/' + key, { value: raw });
+    const before = (await admin.store('team', [])).length;
+    const r = [await put(rmA, 'team', '['), await put(rmA, 'leads', 'not json at all'), await put(admin, 'config', 'x'),
+      await put(rmA, 'clients', 'null'), await put(admin, 'tasks', '0'), await put(admin, 'config', '0'), await put(admin, 'clients', '{}')];
+    const st = r.map((x) => x.status);
+    const after = (await admin.store('team', [])).length;
+    const clientsOk = Array.isArray(await admin.store('clients', null));
+    if (st.slice(0, 3).some((x) => x !== 400) || st.slice(3).some((x) => x !== 422) || after !== before || !clientsOk) throw new Error(st.join(',') + ' team ' + before + '→' + after);
+    return 'not JSON: ' + st.slice(0, 3).join(',') + '; wrong shape (null, 0, 0 for an object, {} for a list): ' + st.slice(3).join(',') + '; stores intact';
+  });
+
+  await t.step('R4-H1 PAN match cannot be used to guess a masked PAN', async () => {
+    admin = await enf.admin();
+    const k4 = own.pan.slice(-4);
+    const guesses = Array.from({ length: 9 }, (_, i) => 'ZQ' + String.fromCharCode(65 + i) + 'PZ' + k4);
+    const a = await rmA.post('/api/clients/pan-match', { pans: guesses });
+    const normal = await rmA.post('/api/clients/pan-match', { pans: [own.pan, theirs.pan] });
+    const st = [];
+    for (let i = 0; i < 4; i++) st.push((await rmA.post('/api/clients/pan-match', { pans: Array.from({ length: 8 }, (_, j) => 'ZR' + String.fromCharCode(65 + i) + String.fromCharCode(65 + j) + 'Z' + '777Q') })).status);
+    let limited = 0;
+    for (let i = 0; i < 40 && !limited; i++) { const x = await rmA.post('/api/clients/pan-match', { pans: ['ZZZZZ' + String(1000 + i) + 'Z'] }); if (x.status === 429) limited = i + 1; }
+    if (a.status !== 422 || normal.status !== 200 || !st.includes(422) || !limited) throw new Error(JSON.stringify({ batch: a.status, normal: normal.status, windowed: st, limited }));
+    return '9 candidates sharing a last four 422; ordinary lookup 200; the same last four across requests refused (' + st.join(',') + '); rate limit after ' + limited + ' more calls';
+  });
+
+  await t.step('R4-H2 a link token is never a record id: one shaped like an id is refused, and a planted one grants nothing', async () => {
+    admin = await enf.admin();
+    const links = await rmA.store('docLinks', []);
+    const a = await rmA.save('docLinks', links.concat([{ id: 'DL-ZZH2', token: theirs.id, recordModule: 'CMS', recordId: own.id, createdBy: 'U-RMA' }]));
+    /* planted directly (an administrator, or old data): still grants nothing beyond its own client */
+    const all = await admin.store('docLinks', []);
+    const raw = JSON.stringify(all.concat([{ id: 'DL-ZZH2B', token: theirs.id, clientId: own.id, recordModule: 'CMS', recordId: own.id }]));
+    await admin.call('PUT', '/api/storage/docLinks', { value: raw });
+    const p = await fetch(enf.base + '/api/public/patch?token=' + encodeURIComponent(theirs.id), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: { clients: { [theirs.id]: { email: 'stolen@evil.test' } } } }) });
+    const after = (await admin.store('clients', [])).find((c) => c.id === theirs.id);
+    if (a.status !== 422 || after.email === 'stolen@evil.test') throw new Error(JSON.stringify({ save: a.status, patch: p.status, email: after.email }));
+    return 'RM link with a record id as token 422; planted one: patch ' + p.status + ', the other client unchanged';
+  });
+
+  await t.step('R4-M4 upload rows and the upload index cannot be emptied without the administrator’s confirmation', async () => {
+    admin = await enf.admin();
+    await admin.save('assetUploads', [{ id: 'UP-ZZ1', file: 'a' }, { id: 'UP-ZZ2', file: 'b' }]);
+    await admin.save('assetRows.UP-ZZ1', [{ client_name: 'A' }, { client_name: 'B' }, { client_name: 'C' }]);
+    const a = await rmA.save('assetRows.UP-ZZ1', []);
+    const b = await rmA.save('assetUploads', []);
+    const re = await rmA.save('assetRows.UP-ZZ1', [{ client_name: 'A2' }]);                    // a re-upload replacing rows is fine
+    if (a.status !== 409 || b.status !== 409 || re.status !== 200) throw new Error([a.status, b.status, re.status].join(' / '));
+    return 'emptying rows 409; emptying the index 409; replacing rows with a new upload 200';
+  });
+
+  await t.step('R4-M2 a colleague’s viewFullPan and HR identity fields need the matching right', async () => {
+    const team = await rmA.store('team', []);
+    const res = [];
+    for (const [k, v] of [['viewFullPan', true], ['employeeId', 'E-ZZ'], ['designation', 'ZZ Boss'], ['aadhaarLast4', '1234'], ['dateOfJoining', '2020-01-01']])
+      res.push(k + ':' + (await rmA.save('team', team.map((m) => (m.id === 'U-RMB' ? Object.assign({}, m, { [k]: v }) : m)))).status);
+    if (res.some((x) => !x.endsWith(':403'))) throw new Error(res.join(' '));
+    return res.join(', ');
+  });
+
   /* ---------- suspected: SMTP to a metadata address ---------- */
   await t.step('(suspected) the mail connector never connects to a link-local or metadata address', async () => {
     admin = await enf.admin();

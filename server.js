@@ -1839,12 +1839,32 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
      person could not see exactly as it was. */
   let nextValue, savedValue;
   try { nextValue = JSON.parse(value); } catch (e) { nextValue = undefined; }
+  /* Step 6b, every mode, everyone: a value that is not JSON skipped every
+     check below and was written as it came. It is refused; so is a value of
+     the wrong shape for what is stored (anything but a list where a list
+     is kept, anything but an object where an object is kept). */
+  if (nextValue === undefined) return res.status(400).json({ error: 'Not saved: the value is not valid JSON.' });
+  {
+    const was = String(store[req.params.key] || '').trimStart()[0];
+    const isObj = nextValue !== null && typeof nextValue === 'object' && !Array.isArray(nextValue);
+    if ((was === '[' && !Array.isArray(nextValue)) || (was === '{' && !isObj)) {
+      auditLog.append(Object.assign(auditWho(req), { action: 'store.shape', target: req.params.key, outcome: 'deny', reason: was === '[' ? 'not a list' : 'not an object' }));
+      return res.status(422).json({ error: 'Not saved: this store holds ' + (was === '[' ? 'a list' : 'an object') + ', and the value sent is not one.' });
+    }
+  }
   /* Step 6b, every mode, everyone: a placeholder stands for the stored
      record (never replaces it), and a save may not add a duplicate id or a
      second team record bound to one email. */
   if (nextValue !== undefined) {
     const stubbed = accessControl.resolveStubs(req.params.key, store[req.params.key], nextValue);
     if (stubbed.stubs) { nextValue = stubbed.value; value = JSON.stringify(nextValue); }
+    if (req.params.key === 'docLinks' && Array.isArray(nextValue)) {
+      const bad = badLinkTokens(store.docLinks, nextValue);
+      if (bad.length) {
+        auditLog.append(Object.assign(auditWho(req), { action: 'store.write', target: 'docLinks', outcome: 'deny', count: bad.length, reason: 'link token not a token' }));
+        return res.status(422).json({ error: 'Not saved: a link token must be a random token (8 to 128 letters, digits, - or _), not the id of a record.' });
+      }
+    }
     const dup = accessControl.duplicates(req.params.key, store[req.params.key], nextValue);
     if (dup.ids.length || dup.emails.length) {
       auditLog.append(Object.assign(auditWho(req), { action: 'store.duplicate', target: req.params.key, outcome: 'deny',
@@ -4001,6 +4021,48 @@ app.get('/api/access/reconcile', checkApiKey, requireApiAdmin, (req, res) => {
    holds masked PANs (an import matching its rows, a duplicate check).
    Answers ids of clients in the person's scope and a yes/no for "also on
    a client outside your scope"; never a PAN, never anybody else's id. */
+/* Step 6b: link tokens are tokens. A new or changed token (or the ISEQ
+   token riding on a link) must look like one and must not be the id of a
+   record, since a token names what a client's page may open. */
+const LINK_TOKEN_RE = /^[A-Za-z0-9_-]{8,128}$/;
+function badLinkTokens(curRaw, next) {
+  let cur = []; try { cur = JSON.parse(curRaw || '[]'); } catch (e) { cur = []; }
+  const known = new Set((Array.isArray(cur) ? cur : []).flatMap((l) => (l ? [l.token, l.iseqToken] : [])).filter(Boolean));
+  const out = [];
+  next.forEach((l) => {
+    if (!l || typeof l !== 'object') return;
+    [l.token, l.iseqToken].forEach((tok) => {
+      if (!tok || known.has(tok)) return;
+      const id = '"id":"' + String(tok).replace(/["\\]/g, '') + '"';
+      if (!LINK_TOKEN_RE.test(String(tok))
+          || ['clients', 'leads', 'reviews', 'recommendations', 'tasks', 'queries', 'transactions', 'businessEntries'].some((k) => String(store[k] || '').includes(id)))
+        out.push(tok);
+    });
+  });
+  return out;
+}
+/* Step 6b: PAN match is for matching rows, not for guessing. A masked PAN
+   gives away its last four, so for anybody but the administrator account:
+   at most 8 candidates sharing a last four in one request, 20 in an hour,
+   and 30 requests in ten minutes. An import of 50,000 rows needs ten. */
+const panMatchSeen = new Map();
+function panMatchProblem(p, pans) {
+  if (!p || p.admin) return null;
+  const now = Date.now(), who = String(p.userId);
+  const rec = panMatchSeen.get(who) || { calls: [], last4: new Map() };
+  rec.calls = rec.calls.filter((t) => now - t < 10 * 60 * 1000);
+  for (const [k, v] of rec.last4) { const kept = v.filter((t) => now - t < 3600 * 1000); if (kept.length) rec.last4.set(k, kept); else rec.last4.delete(k); }
+  panMatchSeen.set(who, rec);
+  if (rec.calls.length >= 30) return { status: 429, reason: 'rate_limited', message: 'Too many PAN look-ups. Wait a few minutes.' };
+  const here = new Map();
+  pans.forEach((x) => { const k = String(x || '').trim().slice(-4).toUpperCase(); if (k.length === 4) here.set(k, (here.get(k) || 0) + 1); });
+  for (const [k, n] of here) {
+    if (n > 8 || n + (rec.last4.get(k) || []).length > 20) return { status: 422, reason: 'guessing', message: 'These look like guesses at one PAN, not a list of clients.' };
+  }
+  rec.calls.push(now);
+  for (const [k, n] of here) rec.last4.set(k, (rec.last4.get(k) || []).concat(new Array(n).fill(now)));
+  return null;
+}
 app.post('/api/clients/pan-match', checkApiKey, (req, res) => {
   res.set('Cache-Control', 'no-store');
   const p = accessControl.principal(signedInUser(req));
@@ -4010,6 +4072,11 @@ app.post('/api/clients/pan-match', checkApiKey, (req, res) => {
   }
   const pans = Array.isArray((req.body || {}).pans) ? req.body.pans : [];
   if (pans.length > 5000) return res.status(413).json({ ok: false, message: 'At most 5,000 PANs at a time.' });
+  const problem = panMatchProblem(p, pans);
+  if (problem) {
+    auditLog.append(Object.assign(auditWho(req), { action: 'pan.match', target: 'clients', outcome: 'deny', count: pans.length, reason: problem.reason }));
+    return res.status(problem.status).json({ ok: false, message: problem.message });
+  }
   const results = accessControl.panMatch(p, pans);
   auditLog.append(Object.assign(auditWho(req), { action: 'pan.match', target: 'clients', outcome: 'ok', count: results.filter(Boolean).length }));
   res.json({ ok: true, results });
@@ -4271,7 +4338,7 @@ function publicScope(token) {
     const owner = (lead && lead.assignedTo) || (client && client.rmName) || (review && review.assignTo) || '';
     return {
       kind: 'doc', token, link,
-      ids: new Set([link.token, lead && lead.id, client && client.id, review && review.id, rec && rec.id,
+      ids: new Set([lead && lead.id, client && client.id, review && review.id, rec && rec.id,       // step 6b: never the token itself
                     reviewClient && reviewClient.id].filter(Boolean)),
       records: { lead, client: client || reviewClient, review, rec },
       owner: team.find((t) => t.id === owner) || null,

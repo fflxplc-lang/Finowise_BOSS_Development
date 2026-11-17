@@ -238,7 +238,7 @@ secSuite(async (t) => {
     return "RM Two's PAN and salary hidden on read, and kept on save";
   });
 
-  await t.step('the wipe guard: two or more removed into empty, or over max(5, 10%); queues and upload rows exempt', async () => {
+  await t.step('the wipe guard: two or more removed into empty, or over max(5, 10%); queues exempt; upload rows may be replaced, not emptied', async () => {
     const { ac: a4 } = make({ team: TEAM });
     const adm = a4.principal(user(40, 'admin', ''));
     const rm = a4.principal(user(41, 'user', 'U-R1'));
@@ -253,7 +253,9 @@ secSuite(async (t) => {
       [!!a4.shrinkCheck(adm, 'leads', list(100), [], '99'), true, 'administrator confirming too few'],
       [!!a4.shrinkCheck(rm, 'leads', list(100), [], '100'), true, 'an RM confirming'],
       [a4.shrinkCheck(rm, 'apiInbox', list(50), [], undefined), null, 'a queue drained'],
-      [a4.shrinkCheck(rm, 'maRows.U1', list(50), [], undefined), null, 'per-upload rows replaced'],
+      [a4.shrinkCheck(rm, 'maRows.U1', list(50), list(3), undefined), null, 'per-upload rows replaced by a new upload'],
+      /* step 6b: emptying them is not a replacement, and is guarded like any other store */
+      [!!a4.shrinkCheck(rm, 'assetRows.U1', list(50), [], undefined), true, 'per-upload rows emptied: refused'],
       [a4.shrinkCheck(rm, 'aumMonthly', JSON.stringify([{ m: 1 }, { m: 2 }, { m: 3 }]), [{ m: 1 }, { m: 2 }, { m: 4 }], undefined), null, 'a list without ids rebuilt in place'],
       [!!a4.shrinkCheck(rm, 'settings', JSON.stringify({ a: 1, b: 2 }), {}, undefined), true, 'an object store with two keys emptied'],
       [a4.shrinkCheck(rm, 'settings', JSON.stringify({ a: 1 }), {}, undefined), null, 'an object store with one key emptied (same rule as a last record)'],
