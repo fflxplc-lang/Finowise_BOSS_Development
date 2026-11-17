@@ -625,6 +625,58 @@ function create(opts) {
      are kept as they are, placeholders are never saved, and hidden private
      fields of a team record are kept from the server copy. */
   function keyOf(r) { return r && typeof r === 'object' && r.id ? 'id:' + r.id : 'json:' + JSON.stringify(r); }
+
+  /* Phase 1, step 5: WHAT A SAVE CHANGED, for the audit trail. Counts of
+     records added, changed and removed, and up to 50 of their ids; the ids
+     of records whose PAN changed (never the PAN); and, for the team, which
+     access fields changed on whom (field names, never values). Unchanged
+     records are recognised by their JSON. */
+  const PERM_FIELDS = ['role', 'perms', 'adminFlags', 'scope', 'status', 'parentUserId', 'branch', 'department', 'viewFullPan', 'teamAccess'];
+  function pansOf(v, out, depth) {
+    if (depth > 4 || v === null || v === undefined) return out;
+    if (typeof v === 'string') { if (PAN_FULL_RE.test(v.trim())) out.push(v.trim().toUpperCase()); return out; }
+    if (typeof v === 'object') for (const k in v) pansOf(v[k], out, depth + 1);
+    return out;
+  }
+  function changeSummary(key, curRaw, nextValue) {
+    /* The stored copy as it was: from the parse cache when it is still
+       there, otherwise parsed here without evicting what readers use. */
+    const hit = anyCache[key];
+    let cur;
+    if (hit && hit.raw === curRaw) cur = hit.value;
+    else { try { cur = curRaw === undefined ? undefined : JSON.parse(curRaw); } catch (e) { cur = undefined; } }
+    const out = { added: 0, changed: 0, removed: 0, ids: [], panIds: [], perms: [] };
+    const note = (r) => { if (r && r.id && out.ids.length < 50) out.ids.push(String(r.id)); };
+    if (!Array.isArray(nextValue)) {
+      if (JSON.stringify(cur) === JSON.stringify(nextValue)) return out;
+      out.changed = 1;
+      if (cur && nextValue && typeof cur === 'object' && typeof nextValue === 'object' && !Array.isArray(cur)) {
+        out.fields = Array.from(new Set(Object.keys(cur).concat(Object.keys(nextValue))))
+          .filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(nextValue[k])).slice(0, 50);
+      }
+      return out;
+    }
+    const before = Array.isArray(cur) ? cur : [];
+    const byKey = new Map(); before.forEach((r) => byKey.set(keyOf(r), r));
+    const seen = new Set();
+    for (const r of nextValue) {
+      const k = keyOf(r); seen.add(k);
+      const was = byKey.get(k);
+      if (was === undefined) { out.added++; note(r); continue; }
+      if (JSON.stringify(was) === JSON.stringify(r)) continue;
+      out.changed++; note(r);
+      if (was && r && typeof was === 'object' && typeof r === 'object') {
+        if (pansOf(was, [], 0).sort().join() !== pansOf(r, [], 0).sort().join() && r.id && out.panIds.length < 50) out.panIds.push(String(r.id));
+        if (key === 'team') {
+          const fields = PERM_FIELDS.filter((f) => JSON.stringify(was[f]) !== JSON.stringify(r[f]));
+          if (fields.length && out.perms.length < 50) out.perms.push({ id: String(r.id || ''), fields });
+        }
+      }
+    }
+    for (const [k, was] of byKey) if (!seen.has(k)) { out.removed++; note(was); }
+    return out;
+  }
+
   function mergeWrite(p, key, curRaw, nextValue) {
     const res = { cls: classOf(key), violations: [], value: nextValue, advisory: [] };
     if (!p) { res.violations.push({ id: '', reason: 'not_signed_in' }); return res; }
@@ -847,7 +899,7 @@ function create(opts) {
 
   return {
     MODE, UNSCOPED, ADMIN_ROLE, ADMIN_FLAGS, USER_FLAGS, TEAM_PROTECTED, TEAM_PRIVATE,
-    panMatch, mayMatchPans, aadhaarDecision, mailDecision, mayUseAi,
+    panMatch, mayMatchPans, aadhaarDecision, mailDecision, mayUseAi, changeSummary,
     principal, can, canAdmin, hrAdmin, inScope, teamViolations,
     classOf, readView, mergeWrite, shrinkCheck,
     roleOf: (m) => roleOf(m, config()), descendants: (id) => descendants(team(), id),
@@ -874,6 +926,8 @@ function create(opts) {
 const ROUTE_POLICY = {
   'GET /login': 'public', 'POST /login': 'public', 'GET /login/otp': 'public', 'POST /login/otp': 'public',
   'POST /login/otp/resend': 'public', 'POST /logout': 'public', 'GET /logout': 'public',
+  'POST /login/json': 'public', 'POST /login/otp/json': 'public',
+  'GET /api/session': 'signed-in', 'POST /api/session/activity': 'signed-in', 'POST /api/audit/export': 'signed-in',
   'GET /api/storage/:key': 'scoped', 'PUT /api/storage/:key': 'scoped', 'DELETE /api/storage/:key': 'day1-admin',
   'GET /api/connections': 'signed-in', 'PUT /api/connections/:id': 'day1-admin',
   'DELETE /api/connections/:id': 'day1-admin', 'POST /api/connections/:id/test': 'day1-admin',
@@ -890,7 +944,7 @@ const ROUTE_POLICY = {
   'GET /api/events': 'signed-in', 'GET /api/changes': 'signed-in', 'GET /api/health': 'public',
   'GET /users': 'admin', 'POST /users/delete': 'admin', 'POST /users': 'admin',
   'GET /api/users': 'admin', 'POST /api/users/sync': 'admin', 'POST /api/users/:memberId/password': 'admin',
-  'DELETE /api/users/:memberId': 'admin',
+  'DELETE /api/users/:memberId': 'admin', 'POST /api/users/:memberId/sessions/revoke': 'admin',
   'GET /api/access/reconcile': 'admin', 'GET /api/audit': 'admin', 'POST /api/clients/pan-match': 'scoped',
   'GET /api/public/bundle': 'token', 'POST /api/public/patch': 'token', 'POST /api/approvals': 'signed-in',
   'POST /api/public/approval': 'token', 'POST /api/public/mail': 'token', 'POST /api/public/website-lead': 'public',

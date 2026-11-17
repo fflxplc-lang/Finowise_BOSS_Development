@@ -92,14 +92,25 @@ secSuite(async (t) => {
       return 'RM → U-RMA; admin account without a member → ' + ad.id + ' (unchanged behaviour)';
     });
 
-    await t.step('a session that ends under an open tab goes to the sign-in page', async () => {
+    /* Step 5 changed what the tab does (approved scope: unsaved work kept
+       across re-login): instead of navigating away it asks for the
+       password over the screen. The read is still refused and nothing is
+       served until the person signs in; another account still goes
+       through the sign-in page. */
+    await t.step('a session that ends under an open tab asks for the password in place; nothing is served meanwhile', async () => {
       const { ctx, page } = await asUser('rma2@sec.test', 'Passw0rd-rma-2');
+      const before = page.url();
       await ctx.clearCookies();
-      await Promise.all([page.waitForURL(/\/login/, { timeout: 8000 }), page.evaluate(() => { sget('clients', []); })]);
+      await page.evaluate(() => { window.__zzRead = 'pending'; sget('clients', null).then((v) => { window.__zzRead = v === null ? 'refused' : 'served'; }); });
+      await page.waitForSelector('#crmRelogin', { timeout: 8000 });
+      await page.waitForTimeout(500);
+      const read = await page.evaluate(() => window.__zzRead);
+      const stayed = page.url() === before;
+      await Promise.all([page.waitForURL(/\/login/, { timeout: 8000 }), page.click('#crmRelogin a[href="/logout"]')]);
       const url = page.url();
       await ctx.close();
-      if (!/\/login\?next=/.test(url)) throw new Error(url);
-      return url.replace(t.base, '');
+      if (read !== 'pending' || !stayed || !/\/login/.test(url)) throw new Error(JSON.stringify({ read, stayed, url }));
+      return 'sign-in dialog over the same screen; the read waits (nothing served); "Sign in as someone else" → ' + url.replace(t.base, '');
     });
   } finally {
     await browser.close();

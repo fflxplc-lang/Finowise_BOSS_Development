@@ -180,10 +180,28 @@ function passwordMatches(plain, stored) {
   const got = crypto.scryptSync(plain, salt, want.length);
   return crypto.timingSafeEqual(want, got);
 }
-// Persist this across restarts or every deploy signs everyone out.
+// Keys the two-step sign-in codes (sign() below). Read, never changed. Sign-in
+// sessions no longer depend on it: they are rows in users.db (sessions.js).
 const SESSION_SECRET = process.env.CRM_SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const COOKIE = 'finowise_session';
+/* Phase 1, step 5: server sessions. 30 minutes without real activity, 12
+   hours at most from sign-in; both settable for a firm that decides
+   otherwise (CRM_IDLE_MINUTES, CRM_SESSION_MAX_HOURS). */
+const sessions = require('./sessions').create({
+  db: usersDb,
+  idleMs: (Number(process.env.CRM_IDLE_MINUTES) > 0 ? Number(process.env.CRM_IDLE_MINUTES) : 30) * 60 * 1000,
+  maxMs: (Number(process.env.CRM_SESSION_MAX_HOURS) > 0 ? Number(process.env.CRM_SESSION_MAX_HOURS) : 12) * 60 * 60 * 1000,
+});
+const SESSION_MAX_AGE_MS = sessions.maxMs;
+setInterval(() => { try { sessions.sweep(); } catch (e) { console.error('session sweep failed'); } }, 60 * 60 * 1000).unref();
+/* Comparing a secret a caller sent with the stored one, in constant time:
+   both are hashed first, so neither the length nor the first differing
+   character shows in how long the answer takes. */
+function safeEqual(given, want) {
+  const a = crypto.createHash('sha256').update(String(given == null ? '' : given)).digest();
+  const b = crypto.createHash('sha256').update(String(want == null ? '' : want)).digest();
+  return crypto.timingSafeEqual(a, b) && String(given) === String(want);
+}
 
 // Load the whole store into memory once at boot; every request reads/writes this
 // object, and writeToDisk() persists it. Simple, and correct at this scale.
@@ -675,26 +693,11 @@ function usersPage({ error = null, added = null, removed = null, meId = null } =
 }
 
 // ---------------------------------------------------------------- sign-in --
-// Session cookie is "<expiry>.<hmac>" — no server-side session store to keep in
-// sync, and a restart doesn't sign everyone out as long as CRM_SESSION_SECRET
-// is set in the environment.
+// The session cookie is an opaque id for a row in users.db (sessions.js).
+// A cookie in the old "<user>.<expiry>.<hmac>" form matches no row, so the
+// first request after this change asks everyone to sign in once more.
 function sign(value) {
   return crypto.createHmac('sha256', SESSION_SECRET).update(String(value)).digest('hex');
-}
-function issueToken(userId) {
-  const exp = Date.now() + SESSION_MAX_AGE_MS;
-  return `${userId}.${exp}.${sign(userId + '.' + exp)}`;
-}
-function userIdFromToken(token) {
-  if (!token || typeof token !== 'string') return null;
-  const [id, exp, sig] = token.split('.');
-  if (!id || !exp || !sig || !/^\d+$/.test(id) || !/^\d+$/.test(exp)) return null;
-  if (Number(exp) < Date.now()) return null;
-  const expected = Buffer.from(sign(id + '.' + exp));
-  const given = Buffer.from(sig);
-  // Fixed-length compare: timingSafeEqual throws on a length mismatch.
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
-  return Number(id);
 }
 function readCookie(req, name) {
   const header = req.headers.cookie;
@@ -705,13 +708,30 @@ function readCookie(req, name) {
   }
   return null;
 }
+/* The session behind this request, worked out once per request. A session
+   found to have ended (idle, past its limit, account changed or gone) is
+   closed for good and written to the audit trail the first time. */
+function sessionOf(req) {
+  if (req._crmSession) return req._crmSession;
+  const token = readCookie(req, COOKIE);
+  const checked = sessions.check(token, (id) => findUserById.get(id));
+  if (!checked.ok && checked.end) {
+    sessions.close(checked.row, checked.reason);
+    try {
+      const u = findUserById.get(checked.row.user_id);
+      auditLog.append({ userId: checked.row.user_id, email: (u && u.email) || '', memberId: (u && u.member_id) || '',
+        action: 'session.end', target: 'session', outcome: 'ended', reason: checked.reason });
+    } catch (e) { /* the audit trail is best effort here; the session is closed either way */ }
+  }
+  checked.token = token;
+  req._crmSession = checked;
+  return checked;
+}
 function signedInUser(req) {
-  const id = userIdFromToken(readCookie(req, COOKIE));
-  const user = id ? findUserById.get(id) : undefined;
+  const checked = sessionOf(req);
   // Deactivating somebody in the CRM ends the session they already have, at
-  // their next request, rather than whenever the cookie happens to expire.
-  if (user && user.active === 0) return undefined;
-  return user;
+  // their next request (sessions.js checks the account on every request).
+  return checked.ok ? checked.user : undefined;
 }
 function isSignedIn(req) {
   return !!signedInUser(req);
@@ -756,7 +776,7 @@ function branding() {
 const esc = (v) => String(v).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function loginPage({ error = null, next = '/', email = '' } = {}) {
+function loginPage({ error = null, next = '/', email = '', info = null } = {}) {
   const b = branding();
   const mark = b.logo
     ? `<img class="logo-img" src="${esc(b.logo)}" alt="${esc(b.name)}">`
@@ -835,6 +855,7 @@ function loginPage({ error = null, next = '/', email = '' } = {}) {
       <div class="mark">${mark}</div>
       <div class="rule"></div>
       ${error ? `<p class="error">${esc(error)}</p>` : ''}
+      ${!error && info ? `<p class="error" style="color:#1B2233;background:#F4F6FA;border-color:#E4E7EC">${esc(info)}</p>` : ''}
       <label for="email">Email</label>
       <input id="email" name="email" type="email" autocomplete="username"
              autofocus required value="${esc(email)}" placeholder="you@company.com">
@@ -849,9 +870,25 @@ function loginPage({ error = null, next = '/', email = '' } = {}) {
 </html>`;
 }
 
+/* A failed sign-in is recorded against the account when there is one. The
+   address typed is not recorded when it matches no account: people type
+   their password into the wrong box. */
+function auditSignInFailure(user, reason) {
+  try {
+    auditLog.append({ userId: user ? user.id : null, email: user ? user.email : '', memberId: (user && user.member_id) || '',
+      action: 'session.signin', target: 'session', outcome: 'deny', reason });
+  } catch (e) { /* best effort */ }
+}
+/* Why the sign-in page is showing, when a session has just ended. */
+const ENDED_MESSAGES = {
+  idle: 'You were signed out after ' + Math.round(sessions.idleMs / 60000) + ' minutes without activity. Sign in again to carry on.',
+  expired: 'Your sign-in reached its daily limit. Sign in again to carry on.',
+  account_changed: 'Your account was changed (password or role), so you were signed out. Sign in again.',
+};
 app.get('/login', (req, res) => {
   if (isSignedIn(req)) return res.redirect(safeNext(req.query.next));
-  res.type('html').set('Cache-Control', 'no-store').send(loginPage({ next: safeNext(req.query.next) }));
+  const why = ENDED_MESSAGES[String(req.query.why || '')];
+  res.type('html').set('Cache-Control', 'no-store').send(loginPage({ next: safeNext(req.query.next), info: why || null }));
 });
 
 app.post('/login', (req, res) => {
@@ -860,6 +897,7 @@ app.post('/login', (req, res) => {
   res.set('Cache-Control', 'no-store');
 
   if (tooManyAttempts(ip)) {
+    auditSignInFailure(null, 'too_many_attempts');
     return res.status(429).type('html')
       .send(loginPage({ error: 'Too many attempts. Wait a few minutes and try again.', next,
                        email: String((req.body || {}).email || '').trim() }));
@@ -871,12 +909,14 @@ app.post('/login', (req, res) => {
   // as a wrong password, so the page still says nothing about who exists.
   if (user && user.active === 0) {
     noteFailure(ip);
+    auditSignInFailure(user, 'deactivated');
     return res.status(401).type('html')
       .send(loginPage({ error: 'That email and password do not match.', next, email }));
   }
   // One message for both cases, so this cannot be used to discover which emails exist.
   if (!user || !passwordMatches(password, user.password_hash)) {
     noteFailure(ip);
+    auditSignInFailure(user, user ? 'wrong_password' : 'no_such_account');
     return res.status(401).type('html')
       .send(loginPage({ error: 'That email and password do not match.', next, email }));
   }
@@ -904,14 +944,22 @@ function completeSignIn(req, res, user, next) {
   // read is deleted. Anyone who needs to give them one again issues a new one.
   noteUserLogin.run(user.id);
   noteLoginAlert(req, user);
-  res.cookie(COOKIE, issueToken(user.id), {
+  setSessionCookie(req, res, user);
+  res.redirect(next);
+}
+function setSessionCookie(req, res, user) {
+  const old = readCookie(req, COOKIE);
+  if (old) sessions.revoke(old, 'replaced');           // signing in again replaces this browser's old session
+  const token = sessions.issue(user, req.get('user-agent'));
+  auditLog.append({ userId: user.id, email: user.email, memberId: user.member_id || '', action: 'session.start',
+    target: 'session', outcome: 'ok', reason: user.two_factor ? 'password+code' : 'password' });
+  res.cookie(COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
     secure: req.secure || req.get('x-forwarded-proto') === 'https',
     maxAge: SESSION_MAX_AGE_MS,
     path: '/',
   });
-  res.redirect(next);
 }
 
 /* ---------------------------------------------------------------------
@@ -1054,9 +1102,10 @@ app.post('/login/otp', (req, res) => {
   if (!ch) return otpRestart(res, 'That sign-in has expired. Sign in again to get a new code.');
   const why = checkOtp(ch, (req.body || {}).code);
   if (why === 'expired') { otpChallenges.delete(ch.id); return otpRestart(res, 'That code has expired. Sign in again to get a new one.'); }
-  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip); return otpRestart(res, 'Too many wrong codes. Sign in again to get a new one.'); }
+  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip); auditSignInFailure(findUserById.get(ch.userId), 'code_locked'); return otpRestart(res, 'Too many wrong codes. Sign in again to get a new one.'); }
   if (why) {
     noteFailure(ip);
+    auditSignInFailure(findUserById.get(ch.userId), 'wrong_code');
     return res.status(401).type('html').send(otpPage({ ch,
       error: 'That code is not right. ' + (OTP_MAX_TRIES - ch.tries) + ' tr' + (OTP_MAX_TRIES - ch.tries === 1 ? 'y' : 'ies') + ' left.' }));
   }
@@ -1079,8 +1128,91 @@ app.post('/login/otp/resend', (req, res) => {
   });
 });
 
-app.post('/logout', (req, res) => { res.clearCookie(COOKIE, { path: '/' }); res.redirect('/login'); });
-app.get('/logout',  (req, res) => { res.clearCookie(COOKIE, { path: '/' }); res.redirect('/login'); });
+/* SIGNING IN AGAIN WITHOUT LEAVING THE PAGE.
+   When a session ends while somebody is part-way through something, the
+   page asks for the password in place instead of navigating away, so what
+   is on screen (an open form, an unsaved edit) is kept, and the request
+   that was refused is sent again once they are back. Same checks, same
+   attempt limit and same two-step code as the sign-in page. `expect` is
+   the account the tab belongs to: a different account is not signed in
+   here (the tab holds the other person's screen), it goes through the
+   sign-in page instead. */
+app.post('/login/json', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const ip = req.ip || 'unknown';
+  if (tooManyAttempts(ip)) {
+    auditSignInFailure(null, 'too_many_attempts');
+    return res.status(429).json({ ok: false, message: 'Too many attempts. Wait a few minutes and try again.' });
+  }
+  const body = req.body || {};
+  const email = String(body.email || '').trim();
+  const user = findUserByEmail.get(email);
+  if (!user || user.active === 0 || !passwordMatches(String(body.password || ''), user.password_hash)) {
+    noteFailure(ip);
+    auditSignInFailure(user, !user ? 'no_such_account' : user.active === 0 ? 'deactivated' : 'wrong_password');
+    return res.status(401).json({ ok: false, message: 'That email and password do not match.' });
+  }
+  attempts.delete(ip);
+  const expect = String(body.expect || '').trim().toLowerCase();
+  if (expect && String(user.email).toLowerCase() !== expect) {
+    return res.status(409).json({ ok: false, reason: 'different_account',
+      message: 'This window belongs to another account. Use "Sign in as someone else" to switch.' });
+  }
+  if (user.two_factor) {
+    const ch = newOtpChallenge(user, 'login', '/');
+    return sendOtp(ch, (err) => {
+      if (err) {
+        otpChallenges.delete(ch.id);
+        return res.status(503).json({ ok: false, message: 'The sign-in code could not be emailed. Ask an administrator to check the email connector.' });
+      }
+      res.cookie(OTP_COOKIE, ch.id, { httpOnly: true, sameSite: 'lax', path: '/login',
+        secure: req.secure || req.get('x-forwarded-proto') === 'https', maxAge: OTP_TTL_MS * 2 });
+      res.json({ ok: false, otp: true, to: maskEmail(user.email) });
+    });
+  }
+  noteUserLogin.run(user.id);
+  noteLoginAlert(req, user);
+  setSessionCookie(req, res, user);
+  res.json({ ok: true });
+});
+app.post('/login/otp/json', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const ip = req.ip || 'unknown';
+  const ch = otpChallengeOf(req);
+  const restart = (message) => { res.clearCookie(OTP_COOKIE, { path: '/login' }); return res.status(401).json({ ok: false, restart: true, message }); };
+  if (!ch) return restart('That sign-in has expired. Enter your password again for a new code.');
+  const why = checkOtp(ch, (req.body || {}).code);
+  if (why === 'expired') { otpChallenges.delete(ch.id); return restart('That code has expired. Enter your password again for a new one.'); }
+  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip); auditSignInFailure(findUserById.get(ch.userId), 'code_locked'); return restart('Too many wrong codes. Enter your password again for a new one.'); }
+  if (why) {
+    noteFailure(ip);
+    auditSignInFailure(findUserById.get(ch.userId), 'wrong_code');
+    return res.status(401).json({ ok: false, message: 'That code is not right. ' + (OTP_MAX_TRIES - ch.tries) + ' left.' });
+  }
+  otpChallenges.delete(ch.id);
+  const user = findUserById.get(ch.userId);
+  if (!user || user.active === 0) return restart('That email and password do not match.');
+  res.clearCookie(OTP_COOKIE, { path: '/login' });
+  noteUserLogin.run(user.id);
+  noteLoginAlert(req, user);
+  setSessionCookie(req, res, user);
+  res.json({ ok: true });
+});
+
+/* Signing out ends the session on the server, not only in this browser: the
+   same cookie used again afterwards is refused. */
+function signOut(req, res) {
+  const checked = sessionOf(req);
+  if (checked.token && sessions.revoke(checked.token, 'signed_out') && checked.row) {
+    const u = findUserById.get(checked.row.user_id);
+    auditLog.append({ userId: checked.row.user_id, email: (u && u.email) || '', memberId: (u && u.member_id) || '',
+      action: 'session.signout', target: 'session', outcome: 'ok' });
+  }
+  res.clearCookie(COOKIE, { path: '/' });
+  res.set('Cache-Control', 'no-store').redirect('/login');
+}
+app.post('/logout', signOut);
+app.get('/logout', signOut);
 
 // Everything below this line needs a session. /api/health stays open so the
 // deploy script can tell a release apart from a broken one without a password.
@@ -1115,8 +1247,15 @@ app.use((req, res, next) => {
   // them like any other — refused, they came back as the sign-in page and the
   // form stopped with "maLoadRows is not defined".
   if (isStaticCode(req)) return next();
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'not signed in' });
-  res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+  /* Why there is no session: the page uses this to ask for the password
+     again in place, keeping what was on screen, and to say why. */
+  const why = sessionOf(req).reason || 'none';
+  const told = why === 'none' || why === 'unknown' ? 'none' : why;
+  if (req.path.startsWith('/api/')) {
+    res.set('X-CRM-Session', 'ended').set('X-CRM-Session-Reason', told).set('Cache-Control', 'no-store');
+    return res.status(401).json({ error: 'not signed in', session: told });
+  }
+  res.redirect('/login?next=' + encodeURIComponent(req.originalUrl) + (ENDED_MESSAGES[told] ? '&why=' + told : ''));
 });
 
 // Minimal shared-secret gate. Real per-user authentication is a separate, larger
@@ -1125,9 +1264,36 @@ app.use((req, res, next) => {
 function checkApiKey(req, res, next) {
   if (!API_KEY) return next(); // no key configured — open access, fine for local/dev use only, see README
   const provided = req.get('X-API-Key');
-  if (provided !== API_KEY) return res.status(401).json({ error: 'Invalid or missing X-API-Key header' });
+  if (!safeEqual(provided || '', API_KEY)) return res.status(401).json({ error: 'Invalid or missing X-API-Key header' });
   next();
 }
+
+/* THIS SESSION. GET says how long it has left and never extends it, so the
+   page can check before warning. POST /activity is the only request that
+   extends a session: the page sends it, at most once a minute, after real
+   keyboard, mouse or touch input, and when "Stay signed in" is pressed. */
+app.get('/api/session', (req, res) => {
+  const checked = sessionOf(req);
+  res.set('Cache-Control', 'no-store').json(Object.assign({ ok: true }, sessions.statusOf(checked.row, Date.now())));
+});
+app.post('/api/session/activity', (req, res) => {
+  const checked = sessionOf(req);
+  res.set('Cache-Control', 'no-store').json(Object.assign({ ok: true }, sessions.touch(checked)));
+});
+
+/* A FILE SAVED FROM THE PAGE. Exports (Excel, PDF, backups) are built in
+   the browser from data it already holds, so the server cannot see them
+   happen; the page reports each one here. It is what the page says, and
+   is recorded as such (outcome "reported"): a file type and the screen it
+   came from, never its name or contents. */
+app.post('/api/audit/export', checkApiKey, (req, res) => {
+  const body = req.body || {};
+  const format = String(body.format || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'file';
+  const screen = String(body.screen || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'unknown';
+  const rows = Number.isFinite(Number(body.rows)) && Number(body.rows) >= 0 ? Math.floor(Number(body.rows)) : undefined;
+  auditLog.append(Object.assign(auditWho(req), { action: 'export', target: screen, outcome: 'reported', reason: format, count: rows }));
+  res.set('Cache-Control', 'no-store').json({ ok: true });
+});
 
 /* Phase 1: the server's own copy of who may do what (access-control.js)
    and its own audit trail (audit-log.js). Step 1 identifies people and
@@ -1587,7 +1753,7 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
      by record. Report mode records what would be refused and saves as
      before. Enforce mode refuses, and otherwise keeps every record the
      person could not see exactly as it was. */
-  let nextValue;
+  let nextValue, savedValue;
   try { nextValue = JSON.parse(value); } catch (e) { nextValue = undefined; }
   if (nextValue !== undefined) {
     const key = req.params.key;
@@ -1610,6 +1776,7 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
         reason: Array.from(new Set(merge.advisory.map((v) => v.reason))).join(',') }));
     }
     const finalValue = enforce ? merge.value : nextValue;
+    savedValue = finalValue;
     /* Day 1, whatever the mode: a save that would empty a store, or remove
        more than max(5, 10%) of its records, is refused unless an
        administrator account confirms the number (X-CRM-Confirm-Bulk). */
@@ -1622,6 +1789,26 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
           + ' this store. If this tab could not load the data, reload before editing.' });
     }
     if (enforce && finalValue !== nextValue) value = JSON.stringify(finalValue);
+  }
+  /* Phase 1, step 5: every save that changes something is in the audit
+     trail with its counts and ids; PAN changes and team access changes get
+     their own lines (ids and field names, never values). */
+  if (savedValue !== undefined) {
+    /* Worked out just after the answer is sent, so the save is not kept
+       waiting (about 130 ms for a 50,000-record store; a few ms today). */
+    const key = req.params.key, prevRaw = store[key], who = auditWho(req);
+    setImmediate(() => { try {
+      const sum = accessControl.changeSummary(key, prevRaw, savedValue);
+      const n = sum.added + sum.changed + sum.removed;
+      if (n) {
+        auditLog.append(Object.assign({}, who, { action: 'store.write', target: key, outcome: 'ok', count: n, ids: sum.ids,
+          fields: sum.fields, reason: '+' + sum.added + ' ~' + sum.changed + ' -' + sum.removed }));
+        if (sum.panIds.length) auditLog.append(Object.assign({}, who, { action: 'pan.change', target: key, outcome: 'ok',
+          count: sum.panIds.length, ids: sum.panIds, fields: ['pan'] }));
+        sum.perms.forEach((c) => auditLog.append(Object.assign({}, who, { action: 'team.permissions', target: 'team', outcome: 'ok',
+          ids: [c.id], fields: c.fields })));
+      }
+    } catch (e) { console.error('[audit] write summary failed:', e.message); } });
   }
   store[req.params.key] = value;
   writeToDisk();
@@ -3011,7 +3198,7 @@ function shareAuthorised(req, id) {
   const want = (apiConnEntry(id).secrets || {}).shareToken || '';
   const got = String(req.query.token || req.get('X-Share-Token') || '');
   if (!want) return 'No share token is set for this connector.';
-  if (got.length !== want.length || got !== want) return 'That token is not the one for this connector.';
+  if (!safeEqual(got, want)) return 'That token is not the one for this connector.';      // constant time (Phase 1, step 5)
   return '';
 }
 app.get('/api/share/:id', (req, res) => {
@@ -3021,7 +3208,13 @@ app.get('/api/share/:id', (req, res) => {
   if (conn.active === false) return res.status(403).json({ error: 'that connector is switched off' });
   if (conn.direction === 'in') return res.status(403).json({ error: 'that connector only imports; it shares nothing' });
   const why = shareAuthorised(req, id);
-  if (why) return res.status(401).json({ error: why });
+  if (why) {
+    auditLog.append({ userId: null, email: '', memberId: '', action: 'export.share', target: 'apiconn:' + id, outcome: 'deny', reason: 'bad_token' });
+    return res.status(401).json({ error: why });
+  }
+  /* A connector share hands data out of BOSS: recorded as an export. */
+  auditLog.append({ userId: null, email: '', memberId: '', action: 'export.share', target: 'apiconn:' + id, outcome: 'ok',
+    reason: 'connector share' });
   const cap = Number(conn.shareLimit) || 1000;
   const read = (key) => {
     let rows = [];
@@ -3062,7 +3255,10 @@ app.post('/api/share/:id', (req, res) => {
   if (conn.active === false) return res.status(403).json({ error: 'that connector is switched off' });
   if (conn.direction === 'out') return res.status(403).json({ error: 'that connector only shares; it imports nothing' });
   const why = shareAuthorised(req, id);
-  if (why) return res.status(401).json({ error: why });
+  if (why) {
+    auditLog.append({ userId: null, email: '', memberId: '', action: 'import.share', target: 'apiconn:' + id, outcome: 'deny', reason: 'bad_token' });
+    return res.status(401).json({ error: why });
+  }
   const body = req.body || {};
   /* A whole-system push is one object carrying every module, and goes
      into the queue as one item; anything else is a list of records. */
@@ -3421,8 +3617,7 @@ app.post('/api/ai/hello', (req, res) => {
   const stored = c && c.secrets && c.secrets.apiKey;
   if (!stored) return res.status(409).json({ ok: false, error: 'no key has been issued for this connector yet' });
   const given = String(body.key || '');
-  if (given.length !== String(stored).length
-      || !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(String(stored)))) {
+  if (!safeEqual(given, String(stored))) {
     return res.status(401).json({ ok: false, error: 'that key does not match the one stored' });
   }
   c.config = c.config || {};
@@ -3441,7 +3636,7 @@ app.post('/api/ai/hello', (req, res) => {
    browser cannot put a header on an EventSource, so the session cookie is
    what authenticates it, and the payload carries no record data either way. */
 app.get('/api/events', (req, res) => {
-  if (!isSignedIn(req) && API_KEY && req.get('X-API-Key') !== API_KEY) {
+  if (!isSignedIn(req) && API_KEY && !safeEqual(req.get('X-API-Key') || '', API_KEY)) {
     return res.status(401).json({ error: 'sign in first' });
   }
   res.writeHead(200, {
@@ -3468,7 +3663,7 @@ app.get('/api/events', (req, res) => {
    `gap` says the log no longer reaches back that far, so the browser
    should re-read everything rather than trust a partial list. */
 app.get('/api/changes', (req, res) => {
-  if (!isSignedIn(req) && API_KEY && req.get('X-API-Key') !== API_KEY) {
+  if (!isSignedIn(req) && API_KEY && !safeEqual(req.get('X-API-Key') || '', API_KEY)) {
     return res.status(401).json({ error: 'sign in first' });
   }
   const since = Number(req.query.since || 0) || 0;
@@ -3530,6 +3725,7 @@ app.post('/users/delete', requireAdmin, (req, res) => {
       .send(usersPage({ error: 'That is the only admin account — make somebody else an admin first.', meId: me.id }));
   }
   deleteUserById.run(user.id);
+  endAccountSessions(req, user, 'account_removed', ['account']);
   res.type('html').send(usersPage({ removed: user.email, meId: me.id }));
 });
 
@@ -3556,6 +3752,15 @@ app.post('/users', requireAdmin, (req, res) => {
 // that member signs in with is created here in the same breath — same email,
 // same role, and a generated password the CRM mails to them. Nothing is typed
 // in twice, and the two cannot drift apart.
+/* Phase 1, step 5: a change to an account ends its sessions at once, with
+   the reason recorded (sessions.js would also notice the change at the
+   next request, whichever way it was made). The audit line names the
+   fields that changed, never their values. */
+function endAccountSessions(req, user, reason, fields) {
+  const n = sessions.revokeUser(user.id, reason);
+  auditLog.append(Object.assign(auditWho(req), { action: 'account.change', target: 'user:' + user.id, ids: [user.member_id || ''].filter(Boolean),
+    outcome: 'ok', reason: reason + (n ? '; ' + n + ' session(s) ended' : ''), fields: fields || [] }));
+}
 function requireApiAdmin(req, res, next) {
   const user = signedInUser(req);
   if (user && user.role === 'admin') return next();
@@ -3592,6 +3797,11 @@ app.post('/api/users/sync', checkApiKey, requireApiAdmin, (req, res) => {
   if (existing) {
     updateUserAccount.run(email, role, memberId, crmRole, active, existing.id);
     const after = findUserById.get(existing.id);
+    const changed = [['email', String(existing.email || '').toLowerCase() !== String(after.email || '').toLowerCase()],
+      ['role', (existing.role || '') !== (after.role || '')], ['crmRole', (existing.crm_role || '') !== (after.crm_role || '')],
+      ['active', (existing.active === 0 ? 0 : 1) !== (after.active === 0 ? 0 : 1)], ['member', (existing.member_id || '') !== (after.member_id || '')]]
+      .filter((x) => x[1]).map((x) => x[0]);
+    if (changed.length) endAccountSessions(req, after, changed.indexOf('active') >= 0 && after.active === 0 ? 'deactivated' : 'account_changed', changed);
     return res.json({ ok: true, created: false, adopted: !byMember, account: accountJson(after) });
   }
   if (byEmail) return res.status(409).json({ ok: false, message: email + ' already signs in as somebody else.' });
@@ -3610,6 +3820,7 @@ app.post('/api/users/:memberId/password', checkApiKey, requireApiAdmin, (req, re
   if (!user) return res.status(404).json({ ok: false, message: 'That team member has no sign-in account yet.' });
   const password = generatePassword();
   updateUserPassword.run(hashPassword(password), sealIssued(password), user.id);
+  endAccountSessions(req, user, 'password_changed', ['password']);
   res.json({ ok: true, password, account: accountJson(findUserById.get(user.id)) });
 });
 
@@ -3623,7 +3834,21 @@ app.delete('/api/users/:memberId', checkApiKey, requireApiAdmin, (req, res) => {
     return res.status(409).json({ ok: false, message: 'That is the account you are signed in with.' });
   }
   deleteUserById.run(user.id);
+  endAccountSessions(req, user, 'account_removed', ['account']);
   res.json({ ok: true, removed: true, email: user.email });
+});
+
+/* An administrator ends every session of a team member's account ("sign
+   out everywhere"): a lost laptop, a shared screen left signed in. */
+app.post('/api/users/:memberId/sessions/revoke', checkApiKey, requireApiAdmin, (req, res) => {
+  const user = findUserByMember.get(String(req.params.memberId || ''));
+  res.set('Cache-Control', 'no-store');
+  if (!user) return res.status(404).json({ ok: false, message: 'That team member has no sign-in account.' });
+  const me = signedInUser(req);
+  const n = sessions.revokeUser(user.id, 'revoked_by_admin', me && me.id === user.id ? sessionOf(req).token : null);
+  auditLog.append(Object.assign(auditWho(req), { action: 'session.revoke', target: 'user:' + user.id, ids: [user.member_id],
+    outcome: 'ok', count: n, reason: 'revoked_by_admin' }));
+  res.json({ ok: true, ended: n });
 });
 
 /* Phase 1: before any rule is enforced, an administrator sees where the
@@ -5214,6 +5439,27 @@ app.get('/api/attendance/today', checkApiKey, (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/*splat', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+/* SAFE ERRORS (Phase 1, step 5). Nothing below NODE_ENV=production in
+   Express sends a stack trace — file paths, a line of code, sometimes a
+   value — to whoever caused the error. Every unexpected error now answers
+   with a short message and a reference; the details stay in the server
+   log, without the request body. A body that is not valid JSON, or too
+   large, says so plainly. */
+app.use((err, req, res, next) => {   // eslint-disable-line no-unused-vars
+  if (res.headersSent) return next(err);
+  if (err && (err.type === 'entity.parse.failed' || err.type === 'encoding.unsupported'))
+    return res.status(400).json({ ok: false, error: 'The request body is not valid JSON.' });
+  if (err && err.type === 'entity.too.large')
+    return res.status(413).json({ ok: false, error: 'The request is too large.' });
+  const st = Number(err && (err.status || err.statusCode));
+  if (st >= 400 && st < 500) return res.status(st).json({ ok: false, error: 'The request could not be understood.' });
+  const ref = crypto.randomBytes(4).toString('hex');
+  console.error('[error ' + ref + '] ' + req.method + ' ' + req.path + ': ' + ((err && err.stack) || err));
+  const msg = 'Something went wrong on the server. It has been logged (reference ' + ref + ').';
+  if (req.path.startsWith('/api/')) return res.status(500).json({ ok: false, error: msg, ref });
+  res.status(500).type('text').send(msg);
 });
 
 const HOST = process.env.HOST || '0.0.0.0'; // in production bind to 127.0.0.1 so only nginx can reach it

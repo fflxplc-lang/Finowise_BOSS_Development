@@ -2882,15 +2882,191 @@ function inPublicMode(){ return !!publicToken; }
 
    A read or a save that comes back 401 means the server no longer knows
    who this is (signed out elsewhere, the session ran out, the account
-   was switched off). Carrying on would only fail quietly, one save at a
-   time, so the tab goes to the sign-in page once, and comes back here
-   afterwards. A client's own link page never signs in and is left alone. */
+   was switched off). Since Phase 1 step 5 the password is normally asked
+   for over the screen (crmRelogin below) and the request sent again; this
+   is the fallback when that cannot happen, and the tab goes to the
+   sign-in page once. A client's own link page never signs in and is left alone. */
 var crmSessionGoneOnce = false;
 function crmSessionGone(){
   if(crmSessionGoneOnce || inPublicMode()) return;
   crmSessionGoneOnce = true;
   try{ location.assign('/login?next=' + encodeURIComponent(location.pathname + location.search + location.hash)); }catch(e){}
 }
+/* ===================================================================
+   THE SIGN-IN SESSION, SEEN FROM THE PAGE (Phase 1, step 5)
+
+   The server ends a session after 30 minutes in which nobody did anything
+   (12 hours at most). "Did anything" means real keyboard, mouse or touch
+   input in this window: the page tells the server at most once a minute
+   (POST /api/session/activity). Nothing that runs by itself — the HR
+   active-time heartbeat, saves, live sync, drips, scheduled syncs — tells
+   it anything, so an unattended screen still signs out.
+
+     - Five minutes before the end, a bar says so with "Stay signed in".
+     - When the session has ended, the password is asked for here, over
+       the screen, instead of going to the sign-in page: an open form and
+       anything unsaved stay as they are, and the request that was refused
+       is sent again once the person is back. A different account goes
+       through the sign-in page ("Sign in as someone else").
+   =================================================================== */
+var crmSess = { lastPing: 0, idleDeadline: 0, absDeadline: 0, warnBefore: 300000, idleMs: 1800000, maxMs: 43200000,
+  relogin: null, bar: null, checking: false, checkedAt: 0, started: false };
+const crmFetch0 = window.fetch.bind(window);
+window.fetch = async function(input, init){
+  const res = await crmFetch0(input, init);
+  if(res.status !== 401 || res.headers.get('X-CRM-Session') !== 'ended') return res;
+  try{ if(inPublicMode()) return res; }catch(e){ return res; }
+  const back = await crmRelogin(res.headers.get('X-CRM-Session-Reason') || '');
+  if(!back) return res;
+  try{ return await crmFetch0(input, init); }catch(e){ return res; }   // sent again, once
+};
+function crmSessWhy(reason){
+  const hrs = Math.round(crmSess.maxMs / 3600000);
+  const idle = crmSess.idleMs >= 60000 ? Math.round(crmSess.idleMs / 60000) + ' minutes' : Math.round(crmSess.idleMs / 1000) + ' seconds';
+  return ({
+    idle: 'You were signed out after ' + idle + ' without activity.',
+    expired: 'Your sign-in reached its ' + hrs + '-hour limit.',
+    password_changed: 'Your password was changed, so you were signed out.',
+    account_changed: 'Your account was changed, so you were signed out.',
+    revoked_by_admin: 'An administrator signed you out.',
+    signed_out: 'You signed out in another window.',
+    replaced: 'You signed in again in another window.',
+  })[reason] || 'Your sign-in has ended.';
+}
+function crmRelogin(reason){
+  if(crmSess.relogin) return crmSess.relogin.promise;
+  let resolve; const promise = new Promise(r=>{ resolve = r; });
+  crmSess.relogin = { promise };
+  crmSessBar(null);
+  const me = String(window.CRM_USER_EMAIL || '');
+  const box = document.createElement('div');
+  box.id = 'crmRelogin';
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+  box.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(15,27,45,.6);display:flex;align-items:center;justify-content:center;padding:16px';
+  box.innerHTML = '<form style="background:#fff;color:#1B2233;border-radius:12px;padding:24px 22px;width:min(380px,100%);'
+    + 'font:14px -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;box-shadow:0 20px 50px rgba(0,0,0,.35)">'
+    + '<h3 style="margin:0 0 8px;font-size:17px">Sign in to carry on</h3>'
+    + '<p style="margin:0 0 14px;color:#4B5563;line-height:1.45">' + esc(crmSessWhy(reason))
+    + ' Everything on this screen is kept, and whatever was being saved is sent once you are back.</p>'
+    + '<label style="display:block;font-size:12.5px;font-weight:600;margin:0 0 4px">Email</label>'
+    + '<input name="email" type="email" autocomplete="username" style="width:100%;padding:9px;border:1px solid #D1D5DB;border-radius:8px;margin-bottom:10px"'
+    + (me ? ' readonly value="' + esc(me) + '"' : '') + '>'
+    + '<div data-step="pw"><label style="display:block;font-size:12.5px;font-weight:600;margin:0 0 4px">Password</label>'
+    + '<input name="password" type="password" autocomplete="current-password" style="width:100%;padding:9px;border:1px solid #D1D5DB;border-radius:8px"></div>'
+    + '<div data-step="otp" hidden><label style="display:block;font-size:12.5px;font-weight:600;margin:0 0 4px" data-otp-label>Code</label>'
+    + '<input name="code" inputmode="numeric" autocomplete="one-time-code" style="width:100%;padding:9px;border:1px solid #D1D5DB;border-radius:8px"></div>'
+    + '<p data-err style="color:#B3432B;min-height:18px;margin:8px 0 4px;font-size:13px"></p>'
+    + '<button type="submit" style="width:100%;padding:10px;border:0;border-radius:8px;background:#0F1B2D;color:#fff;font-weight:600;cursor:pointer">Sign in</button>'
+    + '<p style="text-align:center;margin:12px 0 0;font-size:12.5px"><a href="/logout" style="color:#6B7280">Sign in as someone else</a></p></form>';
+  document.body.appendChild(box);
+  const form = box.querySelector('form'), err = box.querySelector('[data-err]');
+  let stage = 'pw';
+  const focus = ()=>{ const el = form.querySelector(stage === 'otp' ? 'input[name=code]' : (me ? 'input[name=password]' : 'input[name=email]')); if(el) el.focus(); };
+  setTimeout(focus, 0);
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault(); err.textContent = '';
+    const btn = form.querySelector('button'); btn.disabled = true;
+    try{
+      const body = stage === 'otp' ? { code: form.code.value } : { email: form.email.value, password: form.password.value, expect: me };
+      const r = await crmFetch0(stage === 'otp' ? '/login/otp/json' : '/login/json', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await r.json().catch(()=>({}));
+      if(j.ok){
+        box.remove(); crmSess.relogin = null; crmSess.lastPing = Date.now();
+        crmSessRefresh();
+        try{ if(live.src && live.src.readyState === 2){ live.src = null; } liveConnect(); liveCatchUp('signed in again'); }catch(e2){}
+        resolve(true); return;
+      }
+      if(j.otp){ stage = 'otp'; form.querySelector('[data-step=pw]').hidden = true; form.querySelector('[data-step=otp]').hidden = false;
+        form.querySelector('[data-otp-label]').textContent = 'Code emailed to ' + (j.to || 'you'); focus(); return; }
+      if(j.restart){ stage = 'pw'; form.querySelector('[data-step=pw]').hidden = false; form.querySelector('[data-step=otp]').hidden = true; form.password.value = ''; }
+      err.textContent = j.message || 'That did not work. Try again.';
+      focus();
+    }catch(e3){ err.textContent = 'The server could not be reached. Check the connection and try again.'; }
+    finally{ btn.disabled = false; }
+  });
+  return promise;
+}
+function crmSessApply(s){
+  if(!s || typeof s.idleLeftMs !== 'number') return;
+  const t = Date.now();
+  crmSess.idleDeadline = t + s.idleLeftMs; crmSess.absDeadline = t + s.absLeftMs;
+  crmSess.warnBefore = s.warnBeforeMs || crmSess.warnBefore; crmSess.idleMs = s.idleMs || crmSess.idleMs; crmSess.maxMs = s.maxMs || crmSess.maxMs;
+  crmSessTick();
+}
+/* How long this session has left. Never extends it. */
+async function crmSessRefresh(){
+  if(crmSess.checking) return;
+  crmSess.checking = true; crmSess.checkedAt = Date.now();
+  try{ const r = await fetch('/api/session', { headers: apiHeaders() }); if(r.ok) crmSessApply(await r.json()); }
+  catch(e){} finally{ crmSess.checking = false; }
+}
+/* Real activity: tells the server, at most once a minute (or a sixth of
+   the idle limit when a firm sets it shorter than six minutes). */
+async function crmSessPing(force){
+  if(crmSess.relogin || (!force && Date.now() - crmSess.lastPing < Math.min(60000, crmSess.idleMs / 6))) return;
+  crmSess.lastPing = Date.now();
+  try{ const r = await fetch('/api/session/activity', { method: 'POST', headers: apiHeaders() }); if(r.ok) crmSessApply(await r.json()); }catch(e){}
+}
+function crmSessInput(e){ if(e && e.isTrusted) crmSessPing(false); }
+function crmSessBar(text, canStay){
+  if(!text){ if(crmSess.bar){ crmSess.bar.remove(); crmSess.bar = null; } return; }
+  if(!crmSess.bar){
+    const bar = document.createElement('div');
+    bar.id = 'crmSessWarn'; bar.setAttribute('role', 'alert');
+    bar.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2147482000;background:#0F1B2D;color:#fff;'
+      + 'padding:11px 14px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.3);display:flex;gap:12px;align-items:center;'
+      + 'font:13.5px -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;max-width:calc(100vw - 32px)';
+    bar.innerHTML = '<span data-text></span><button type="button" data-stay style="border:0;border-radius:7px;padding:7px 11px;'
+      + 'background:#B9863E;color:#fff;font-weight:600;cursor:pointer;white-space:nowrap">Stay signed in</button>';
+    bar.querySelector('[data-stay]').addEventListener('click', ()=>crmSessPing(true));
+    document.body.appendChild(bar);
+    crmSess.bar = bar;
+  }
+  crmSess.bar.querySelector('[data-text]').textContent = text;
+  crmSess.bar.querySelector('[data-stay]').hidden = !canStay;
+}
+function crmSessTick(){
+  if(!crmSess.started || crmSess.relogin) return;
+  const t = Date.now();
+  const idleLeft = crmSess.idleDeadline - t, absLeft = crmSess.absDeadline - t;
+  const left = Math.min(idleLeft, absLeft);
+  if(left > crmSess.warnBefore){ crmSessBar(null); return; }
+  /* Another window may have kept the session going: ask before warning,
+     and again when the time is up (a 401 then asks for the password). */
+  if(Date.now() - crmSess.checkedAt > (left <= 0 ? 2000 : 15000)) crmSessRefresh();
+  if(left <= 0) return;
+  const m = Math.floor(left / 60000), sec = Math.floor((left % 60000) / 1000);
+  const clock = m + ':' + String(sec).padStart(2, '0');
+  if(idleLeft <= absLeft) crmSessBar('You will be signed out in ' + clock + ' because nothing has been done here for a while.', true);
+  else crmSessBar('Your sign-in reaches its ' + Math.round(crmSess.maxMs / 3600000) + '-hour limit in ' + clock
+    + '. Save what you are doing; you will be asked for your password.', false);
+}
+function crmSessStart(){
+  if(crmSess.started || inPublicMode()) return;
+  crmSess.started = true;
+  ['keydown', 'pointerdown', 'mousemove', 'wheel', 'touchstart'].forEach(ev=>window.addEventListener(ev, crmSessInput, { capture: true, passive: true }));
+  crmSessRefresh();
+  setInterval(crmSessTick, 1000);
+}
+/* A FILE SAVED FROM THE PAGE is reported to the audit trail: its type and
+   the screen it came from, never its name or contents. */
+(function(){
+  const report = (name)=>{
+    try{
+      if(inPublicMode()) return;
+      const ext = (String(name || '').split('.').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+      crmFetch0('/api/audit/export', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
+        body: JSON.stringify({ format: ext, screen: typeof currentView === 'string' ? currentView : '' }) }).catch(()=>{});
+    }catch(e){}
+  };
+  const click0 = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function(){ if(this.hasAttribute('download')) report(this.getAttribute('download')); return click0.apply(this, arguments); };
+  document.addEventListener('click', (e)=>{
+    const a = e.isTrusted && e.target && e.target.closest ? e.target.closest('a[download]') : null;
+    if(a) report(a.getAttribute('download'));
+  }, true);
+})();
 async function loadPublicBundle(token){
   const res = await fetch('/api/public/bundle?token='+encodeURIComponent(token));
   const r = await res.json().catch(()=>({ok:false}));
@@ -36006,6 +36182,7 @@ async function boot(){
   liveWatchWindow();
   livePoll();
   liveReportBuild();
+  crmSessStart();          // the session warning and the activity signal (Phase 1, step 5)
 }
 
 
