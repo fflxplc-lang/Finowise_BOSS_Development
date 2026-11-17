@@ -99,11 +99,16 @@ function isMaskedPan(v) { return typeof v === 'string' && PAN_MASKED_RE.test(v.t
    too. Only text is searched, i.e. a string with a separator in it; a
    long run of base64 (a file, an image) is left alone, since a PAN-shaped
    run inside it is not a PAN and changing it would corrupt the file. */
-const PAN_IN_TEXT_RE = /\b[A-Za-z]{5}[0-9]{4}[A-Za-z]\b/g;
-const MASKED_IN_TEXT_RE = /\bX{6}([0-9]{3}[A-Za-z])\b/g;
+/* Step 6b: one rule decides where a PAN inside a string is looked for,
+   and the same rule decides where a masked one is put back, so nothing is
+   ever restored where it would not be masked again. A PAN-shaped run not
+   touching another letter or digit counts (so "pan=", "#" and "_" are
+   separators); a data: URL or a long run of base64 is not text. */
+const PAN_IN_TEXT_RE = /(?<![A-Za-z0-9])[A-Za-z]{5}[0-9]{4}[A-Za-z](?![A-Za-z0-9])/g;
+const MASKED_IN_TEXT_RE = /(?<![A-Za-z0-9])X{6}([0-9]{3}[A-Za-z])(?![A-Za-z0-9])/g;
 function isText(s) {
-  if (s.length < 11 || !/[\s,;:()]/.test(s) || /^data:/i.test(s)) return false;
-  return !(s.length > 200 && /^[A-Za-z0-9+/=\s]+$/.test(s));
+  if (s.length < 10 || /^\s*data:/i.test(s)) return false;
+  return !(s.length > 200 && /^[A-Za-z0-9+/=\r\n]+$/.test(s));
 }
 function maskText(s, counter) {
   if (!isText(s)) return s;
@@ -122,8 +127,8 @@ function maskPansDeep(v, counter) {
   let renamed = false;
   Object.keys(v).forEach((k) => {
     const y = maskPansDeep(v[k], counter);
-    const k2 = isFullPan(k) ? maskPan(k) : k;
-    if (k2 !== k) { counter.n++; renamed = true; }
+    const k2 = isFullPan(k) ? maskPan(k) : maskText(k, counter);
+    if (k2 !== k) { if (isFullPan(k)) counter.n++; renamed = true; }
     if (y !== v[k] || k2 !== k) { if (!copy) copy = Object.assign({}, v); if (k2 !== k) { delete copy[k]; } copy[k2] = y; }
   });
   void renamed;
@@ -137,7 +142,7 @@ function pansByLast4(v, out) {
     if (isFullPan(v)) notePan(v, out);
     else if (isText(v)) (v.match(PAN_IN_TEXT_RE) || []).forEach((m) => notePan(m, out));
   } else if (v && typeof v === 'object') {
-    if (!Array.isArray(v)) Object.keys(v).forEach((k) => { if (isFullPan(k)) notePan(k, out); });
+    if (!Array.isArray(v)) Object.keys(v).forEach((k) => { if (isFullPan(k)) notePan(k, out); else if (isText(k)) (k.match(PAN_IN_TEXT_RE) || []).forEach((m) => notePan(m, out)); });
     (Array.isArray(v) ? v : Object.values(v)).forEach((x) => pansByLast4(x, out));
   }
   return out;
@@ -157,7 +162,9 @@ function restorePansDeep(v, last4, counter) {
     }
     /* a masked PAN inside text: put back when it is certain which; left as
        it is otherwise (the text then simply says what the reader saw) */
-    if (!MASKED_IN_TEXT_RE.test(v)) return v;
+    if (!isText(v)) return v;
+    MASKED_IN_TEXT_RE.lastIndex = 0;
+    if (!MASKED_IN_TEXT_RE.test(v)) { MASKED_IN_TEXT_RE.lastIndex = 0; return v; }
     MASKED_IN_TEXT_RE.lastIndex = 0;
     return v.replace(MASKED_IN_TEXT_RE, (all, k4) => { const full = restoreOne(k4, last4); if (full) { counter.restored++; return full; } return all; });
   }
@@ -170,7 +177,9 @@ function restorePansDeep(v, last4, counter) {
   Object.keys(v).forEach((k) => {
     const y = restorePansDeep(v[k], last4, counter);
     const km = k.match(PAN_MASKED_RE);
-    const k2 = km ? (restoreOne(km[1], last4) || k) : k;
+    const k2 = km ? (restoreOne(km[1], last4) || k)
+      : (isText(k) ? k.replace(MASKED_IN_TEXT_RE, (all, k4) => restoreOne(k4, last4) || all) : k);
+    MASKED_IN_TEXT_RE.lastIndex = 0;
     if (k2 !== k) counter.restored++;
     if (y !== v[k] || k2 !== k) { if (!copy) copy = Object.assign({}, v); if (k2 !== k) delete copy[k]; copy[k2] = y; }
   });
@@ -179,7 +188,7 @@ function restorePansDeep(v, last4, counter) {
 function hasMaskedPan(v) {
   if (typeof v === 'string') { if (isMaskedPan(v)) return true; MASKED_IN_TEXT_RE.lastIndex = 0; const t = MASKED_IN_TEXT_RE.test(v); MASKED_IN_TEXT_RE.lastIndex = 0; return t; }
   if (!v || typeof v !== 'object') return false;
-  if (!Array.isArray(v) && Object.keys(v).some((k) => PAN_MASKED_RE.test(k))) return true;
+  if (!Array.isArray(v) && Object.keys(v).some((k) => { MASKED_IN_TEXT_RE.lastIndex = 0; const t = PAN_MASKED_RE.test(k) || MASKED_IN_TEXT_RE.test(k); MASKED_IN_TEXT_RE.lastIndex = 0; return t; })) return true;
   return (Array.isArray(v) ? v : Object.values(v)).some(hasMaskedPan);
 }
 /* A save's records with their masked PANs put back from the server copy
@@ -388,6 +397,20 @@ function create(opts) {
       if (now.scope === 'all' && (!was || was.scope !== 'all')) reasons.push('scope_all_needs_admin_account');
       if (fields.includes('adminFlags') && flagGrantProblem(now.adminFlags, was && was.adminFlags).length) reasons.push('grants_flag_not_held');
       if (was) fields.forEach((k) => { const need = TEAM_FIELD_CAPABILITY[k]; if (need && !holds[need]) reasons.push('needs_' + need + ':' + k); });
+      /* Step 6b: a new member is not a way round those checks. Without
+         Manage Permissions a creator may give only rights they hold; HR
+         access needs HR admin; managers outside the creator's own team need
+         Manage Users. */
+      if (!was) {
+        const grants = now.perms && typeof now.perms === 'object' ? Object.keys(now.perms).some((m) => Object.keys(now.perms[m] || {}).some((a) => now.perms[m][a] && !can(p, m, a))) : false;
+        if (grants && !holds.managePermissions) reasons.push('grants_permission_not_held');
+        if (now.hrAccess && typeof now.hrAccess === 'object' && Object.values(now.hrAccess).some(Boolean) && !holds.hrAdmin) reasons.push('needs_hrAdmin:hrAccess');
+        const mgrs = [].concat(Array.isArray(now.managerIds) ? now.managerIds : [], now.parentUserId ? [now.parentUserId] : []);
+        if (mgrs.length && !holds.manageUsers) {
+          const mine = new Set([p.memberId].concat(descendants([...b.values()], p.memberId).map((x) => x.id)));
+          if (mgrs.some((x) => !mine.has(x))) reasons.push('needs_manageUsers:managers');
+        }
+      }
       if (reasons.length) out.push({ memberId: id, fields, reason: Array.from(new Set(reasons)).join(',') });
     }
     for (const [id] of b) {
@@ -512,6 +535,14 @@ function create(opts) {
     for (const [f, stores] of REF_FIELDS) {
       if (!r[f] || (onlyChangedFrom && onlyChangedFrom[f] === r[f])) continue;
       for (const st of stores) if (c.get(st, r[f]) && !c.visibleId(st, r[f])) return false;
+      /* a lead id also reaches the client it became: by the lead's own
+         convertedToClientId, and by a client's convertedFromLeadId (the
+         lead itself may be gone) */
+      if (f === 'leadId' || f === 'convertedFromLeadId') {
+        const lead = c.get('leads', r[f]);
+        if (lead && lead.convertedToClientId && c.get('clients', lead.convertedToClientId) && !c.visibleId('clients', lead.convertedToClientId)) return false;
+        if (c.list('clients').some((cl) => cl && cl.convertedFromLeadId === r[f] && !c.visibleId('clients', cl.id))) return false;
+      }
     }
     if (r.recordId && !(onlyChangedFrom && onlyChangedFrom.recordId === r.recordId && onlyChangedFrom.recordModule === r.recordModule)) {
       const st = MODULE_STORE[r.recordModule] || MODULE_STORE[r.module] || r.recordStore;
@@ -617,7 +648,7 @@ function create(opts) {
   const mayImport = (p) => can(p, 'Transactions', 'import') || can(p, 'CMS', 'import') || can(p, 'LMS', 'import');
   const SYSTEM = {
     systemState: { read: () => true, write: () => true },
-    assetUploads: { read: () => true, write: () => true },
+    assetUploads: { read: () => true, write: (p) => p.teamAdmin || can(p, 'CMS', 'edit') || canAdmin(p, 'manageModuleSettings') },   // step 6b: maCanUpload()
     importBatches: { read: (r, c) => c.p.teamAdmin || mayImport(c.p) || r.by === c.p.memberId, write: mayImport },
     importUndo: { read: (r, c) => c.p.teamAdmin || mayImport(c.p) || r.by === c.p.memberId, write: mayImport },
     importHistory: { read: (r, c) => c.p.teamAdmin || mayImport(c.p) || r.by === c.p.memberId, write: mayImport },

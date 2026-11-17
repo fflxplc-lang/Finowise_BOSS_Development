@@ -3212,7 +3212,8 @@ app.post('/api/apiconnectors/:id/call', checkApiKey, (req, res) => {
       url += sep + encodeURIComponent(String(auth.paramName || 'api_key')) + '=' + encodeURIComponent(secret);
     }
   }
-  const redact = secret ? [String(secret), encodeURIComponent(String(secret)), Buffer.from(String(auth.username || '') + ':' + secret).toString('base64')] : [];
+  const redact = secret ? [String(secret), encodeURIComponent(String(secret)), Buffer.from(String(auth.username || '') + ':' + secret).toString('base64'),
+    JSON.stringify(String(secret)).slice(1, -1), String(secret).replace(/[<>&'"]/g, (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'))] : [];
   apiConnFetch({ url, method: b.method || 'GET', headers, body: b.body, timeout: b.timeout, hosts, redact }, (r) => {
     auditLog.append(Object.assign(auditWho(req), { action: 'connector.call', target: 'apiconn:' + id, outcome: r.blocked ? 'deny' : 'ok',
       reason: r.blocked || ('HTTP ' + (r.status || 0)), fields: (() => { try { return [new URL(url).hostname]; } catch (e) { return []; } })() }));
@@ -4248,14 +4249,21 @@ function publicScope(token) {
     const converted = !lead && link.leadId
       ? clients.find((c) => c && (c.id === link.leadId || c.convertedFromLeadId === link.leadId))
       : null;
+    /* Step 6b: a lead's convertedToClientId is only believed when the client
+       agrees that it came from that lead; otherwise anyone able to write a
+       lead could name any client as "what it became". */
+    const convertedOf = (l) => {
+      if (!l || !l.convertedToClientId) return null;
+      const c = clients.find((x) => x && x.id === l.convertedToClientId);
+      return c && (c.convertedFromLeadId === l.id || c.leadId === l.id) ? c : null;
+    };
     /* Step 6b, every mode: a link is only as wide as its own client. One
        whose record is a different client, or a review of a different
        client, than the client it names is not a valid link: it serves
        nothing and accepts nothing. */
     if (link.recordModule === 'CMS' && link.clientId && link.recordId && link.clientId !== link.recordId) return null;
     const client = link.recordModule === 'CMS' ? clients.find((c) => c.id === link.recordId)
-      : converted
-      || (lead && lead.convertedToClientId ? clients.find((c) => c.id === lead.convertedToClientId) : null);
+      : converted || convertedOf(lead);
     const review = reviews.find((r) => r && (r.ctFormToken === token || (link.recordModule === 'RMS' && r.id === link.recordId))) || null;
     if (review && link.clientId && review.clientId && review.clientId !== link.clientId) return null;
     const rec = link.allocationId ? recs.find((r) => r.id === link.allocationId) : null;
@@ -4324,7 +4332,8 @@ function scrubForClient(record) {
 /* Step 6b: a client's link may fill in its record, never decide who owns
    it or what it is joined to. */
 const PUBLIC_KEEP_FIELDS = ['rmName', 'assignedTo', 'assignTo', 'branch', 'createdBy', 'ownerId', 'convertedToClientId', 'convertedFromLeadId',
-  'supportToken', 'ctFormToken', 'clientId', 'leadId', 'recordId', 'recordModule', 'deletedAt'];
+  'supportToken', 'ctFormToken', 'clientId', 'leadId', 'recordId', 'recordModule', 'deletedAt',
+  'token', 'allocationId', 'reviewId', 'queryId', 'projectId', 'iseqToken', 'iseqDocToken', 'planFormToken', 'userId'];
 function mergeFromClient(stored, incoming) {
   const out = Object.assign({}, stored, incoming, { id: stored.id });
   PUBLIC_KEEP_FIELDS.forEach((k) => { if (k in stored) out[k] = stored[k]; else delete out[k]; });
@@ -4541,6 +4550,15 @@ app.post('/api/public/patch', (req, res) => {
         : 'Some of what was sent is not valid: ' + wrong.map((w) => w.message).join(' ') });
   }
 
+  /* Rows created in this same request may name each other (a new lead and
+     the submission that came with it): every new row's id counts as this
+     link's own before references are checked. An id already on file is
+     never claimed this way. */
+  for (const [key, sentRows] of Object.entries(appends)) {
+    if (!PUBLIC_APPEND_KEYS.includes(key) || !Array.isArray(sentRows)) continue;
+    const existing = new Set(storeList(key).map((x) => x && x.id));
+    sentRows.forEach((row) => { if (row && typeof row === 'object' && row.id && !existing.has(row.id)) scope.ids.add(row.id); });
+  }
   for (const [key, sentRows] of Object.entries(appends)) {
     if (!PUBLIC_APPEND_KEYS.includes(key)) { refused.push('add to ' + key); continue; }
     if (!Array.isArray(sentRows) || !sentRows.length) continue;
@@ -4551,8 +4569,12 @@ app.post('/api/public/patch', (req, res) => {
       if (!row || typeof row !== 'object' || !row.id || have.has(row.id)) return;
       /* Step 6b: a row added through a link may only hang off that link's
          own records, and a submission only belongs to this link. */
-      const outside = ['leadId', 'clientId', 'reviewId', 'allocationId'].some((f) => row[f] && !scope.ids.has(row[f]));
-      if (outside || (row.token && row.token !== scope.token && key === 'docSubmissions')) { refused.push(key + '/' + row.id); return; }
+      const outside = ['leadId', 'clientId', 'reviewId', 'allocationId', 'queryId', 'recordId', 'convertedToClientId', 'convertedFromLeadId', 'projectId']
+        .some((f) => row[f] && !scope.ids.has(row[f]))
+        /* and the only member a link's rows may name is the person the link belongs to */
+        || ['assignTo', 'assignedTo', 'rmName', 'userId'].some((f) => row[f] && !(scope.owner && row[f] === scope.owner.id));
+      const ownToken = row.token === scope.token || (scope.link && scope.link.iseqToken && row.token === scope.link.iseqToken);   // the ISEQ that rides on an input sheet answers under its own token
+      if (outside || (row.token && !ownToken && key === 'docSubmissions')) { refused.push(key + '/' + row.id); return; }
       rows.push(row);
       list.push(row);
       have.add(row.id);
@@ -5125,6 +5147,8 @@ function memberOfUser(user) {
   const email = String(user.email || '').toLowerCase();
   const hits = email ? team.filter((t) => t && !t.deletedAt && t.email && String(t.email).trim().toLowerCase() === email) : [];
   if (hits.length !== 1) return null;
+  /* nor to a record that would make the account an Admin or firm-wide: those need a real link (Team Members) */
+  if (hits[0].role === accessControl.ADMIN_ROLE || hits[0].scope === 'all') return null;
   return userLinkedToMember.get(hits[0].id, user.id) ? null : hits[0];
 }
 

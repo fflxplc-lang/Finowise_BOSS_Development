@@ -350,6 +350,98 @@ secSuite(async (t) => {
     return 'always refused';
   });
 
+  /* ======== the third, fresh review (step 6b) ======== */
+  const patch = (tok, body) => fetch(enf.base + '/api/public/patch?token=' + tok, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  await t.step('R3-C1 a link cannot add a lead that claims another client, and a lead→client hop must be the real conversion', async () => {
+    admin = await enf.admin();
+    await linkTo('zz-tok-hhhhhhhhhhhhhhhh1');
+    await patch('zz-tok-hhhhhhhhhhhhhhhh1', { appends: { leads: [{ id: 'LMS-ZZEVIL1', leadName: 'ZZ', assignedTo: 'U-RMA', convertedToClientId: theirs.id }] } });
+    const added = (await admin.store('leads', [])).find((l) => l.id === 'LMS-ZZEVIL1');
+    /* the same lead put there directly (as report mode would let an RM), then a link to it */
+    const leads = await admin.store('leads', []);
+    await admin.save('leads', leads.filter((l) => l.id !== 'LMS-ZZEVIL1').concat([{ id: 'LMS-ZZEVIL2', leadName: 'ZZ', assignedTo: 'U-RMA', branch: own.branch, convertedToClientId: theirs.id }]));
+    const links = await admin.store('docLinks', []);
+    await admin.save('docLinks', links.concat([{ id: 'DL-ZZC1', token: 'zz-tok-iiiiiiiiiiiiiiii1', leadId: 'LMS-ZZEVIL2', type: 'X' }]));
+    const bj = await (await fetch(enf.base + '/api/public/bundle?token=zz-tok-iiiiiiiiiiiiiiii1')).json();
+    const servedClients = ((bj.store || {}).clients || []).map((c) => c.id);
+    const b = JSON.stringify(bj);
+    /* the planted lead row itself (its own convertedToClientId) is in its bundle; the other client's record is not */
+    const leak = servedClients.includes(theirs.id) || b.includes(theirs.email) || (theirs.mobile && b.includes(theirs.mobile)) || b.includes(theirs.cmsName);
+    if ((added && added.convertedToClientId === theirs.id) || leak) throw new Error(JSON.stringify({ added: !!added, servedClients, leak }));
+    return 'appended claim refused; a planted conversion serves nothing of the other client';
+  });
+
+  await t.step('R3-H1/L1 masked PANs are put back only where masking looks; a PAN beside _ = # is masked', async () => {
+    admin = await enf.admin();
+    const k4 = own.pan.slice(-4);
+    const bait = ['XXXXXX' + k4 + '-x', 'data:XXXXXX' + k4, 'XXXXXX' + k4 + '.', 'XXXXXX' + k4 + '/1', 'A'.repeat(210) + ' XXXXXX' + k4];
+    const list = await rmA.store('clients', []);
+    await rmA.save('clients', list.map((c) => (c.id === own.id ? Object.assign({}, c, { remarks: bait.join(' | '), extra: bait }) : c)));
+    const P = 'ZQZPQ4444Q';
+    const all = await admin.store('clients', []);
+    await admin.save('clients', all.map((c) => (c.id === own.id ? Object.assign({}, c, { notes2: ['pan=' + P, 'PAN#' + P, 'Ref:' + P + '_2'].join(' '), keyed: { [P + ' x']: 1 } }) : c)));
+    const view = (await rmA.get('/api/storage/clients')).text;
+    if (view.includes(own.pan) || view.includes(P)) throw new Error('full PAN in the RM view: ' + (view.includes(own.pan) ? 'own client' : 'text'));
+    return 'no full PAN in the RM’s view after the bait save; pan=/PAN#/_2 and a key with text masked';
+  });
+
+  await t.step('R3-M1 a link may not name a converted lead of another RM', async () => {
+    admin = await enf.admin();
+    const all = await admin.store('clients', []);
+    await admin.save('clients', all.map((c) => (c.id === theirs.id ? Object.assign({}, c, { convertedFromLeadId: 'LMS-ZZGONE' }) : c)));
+    const links = await rmA.store('docLinks', []);
+    const r = await rmA.save('docLinks', links.concat([{ id: 'DL-ZZM1', token: 'zz-tok-jjjjjjjjjjjjjjjj1', leadId: 'LMS-ZZGONE', type: 'X', createdBy: 'U-RMA' }]));
+    if (r.status !== 403) throw new Error(String(r.status));
+    return '403';
+  });
+
+  await t.step('R3-M2/M3 a link cannot re-point itself, and what it adds stays with its own record and owner', async () => {
+    admin = await enf.admin();
+    await linkTo('zz-tok-kkkkkkkkkkkkkkkk1');
+    const qs = await admin.store('queries', []);
+    await admin.save('queries', qs.concat([{ id: 'QRY-ZZOTHER', clientId: theirs.id, assignTo: 'U-RMB', subject: 'ZZ' }]));
+    const p1 = await patch('zz-tok-kkkkkkkkkkkkkkkk1', { updates: { docLinks: { 'DL-zz-tok-kkkkkkkkkkkkkkkk1': { allocationId: 'REC-ZZX', token: 'zz-new-token-xxxxxxxx' } } } });
+    const p2 = await patch('zz-tok-kkkkkkkkkkkkkkkk1', { appends: {
+      tasks: [{ id: 'DST-ZZM3', clientId: own.id, assignTo: 'U-RMB', taskType: 'ZZ' }],
+      notifications: [{ id: 'NTF-ZZM3', userId: 'U-RMB', title: 'Click here' }],
+      transactions: [{ id: 'TX-ZZM3', clientId: own.id, rmName: 'U-RMB', amount: 99999999 }],
+      queryReplies: [{ id: 'QR-ZZM3', queryId: 'QRY-ZZOTHER', text: 'ZZ' }],
+      communications: [{ id: 'COM-ZZM3', recordId: theirs.id, text: 'ZZ' }] } });
+    const link = (await admin.store('docLinks', [])).find((l) => l.id === 'DL-zz-tok-kkkkkkkkkkkkkkkk1');
+    const got = {};
+    for (const [k, id] of [['tasks', 'DST-ZZM3'], ['notifications', 'NTF-ZZM3'], ['transactions', 'TX-ZZM3'], ['queryReplies', 'QR-ZZM3'], ['communications', 'COM-ZZM3']])
+      got[k] = !!(await admin.store(k, [])).find((x) => x.id === id);
+    if (link.allocationId || link.token !== 'zz-tok-kkkkkkkkkkkkkkkk1' || Object.values(got).some(Boolean)) throw new Error(JSON.stringify({ p1: p1.status, p2: p2.status, alloc: link.allocationId, token: link.token, got }));
+    return 'link unchanged; a task or notification for another member, a transaction for another RM, a reply on another client’s query and a note on another client all refused';
+  });
+
+  await t.step('R3-M4 team identity: the email match never makes an account an Admin or firm-wide member; a new member gets the same capability checks', async () => {
+    admin = await enf.admin();
+    const team = await admin.store('team', []);
+    await admin.save('team', team.concat([
+      { id: 'U-ZZUNL', name: 'ZZ Unlinked Admin', role: 'Admin', scope: 'all', status: 'Active', email: 'zz-unl@zz.test' },
+      { id: 'U-ZZTC', name: 'ZZ Team Creator', role: 'Manager', scope: 'own', branch: 'A', status: 'Active', email: 'zz-tc@zz.test', perms: { Team: { view: 1, create: 1, edit: 1 } } }]));
+    const { execFileSync } = require('child_process');
+    execFileSync(process.execPath, [path.join(__dirname, '..', '..', 'scripts', 'user.js'), 'add', 'zz-unl@zz.test', 'Legacy-pass-456'],
+      { env: Object.assign({}, process.env, { CRM_USERS_DB: path.join(enf.dir, 'users.db') }), stdio: 'ignore' });
+    const leg = await enf.login('zz-unl@zz.test', 'Legacy-pass-456');      // no team link of its own; its email is on an Admin record
+    const seen = await visible(leg);
+    const tc = await seed.signIn(admin, 'U-ZZTC');
+    const t2 = await tc.store('team', []);
+    const r = await tc.save('team', t2.concat([{ id: 'U-ZZNEW', name: 'ZZ New', role: 'Executive', scope: 'own', branch: 'A', status: 'Active', email: 'zz-new@zz.test',
+      perms: { CMS: { view: 1, edit: 1 } }, hrAccess: { admin: true }, managerIds: ['U-ZZTC'] }]));
+    if (seen === data.clients.length || r.status !== 403) throw new Error(JSON.stringify({ seen, newMember: r.status }));
+    return 'email-matched account on an Admin record sees ' + seen + '; Team-create holder adding perms/HR admin/managers 403';
+  });
+
+  await t.step('R3-L3 upload index written only by those who may upload', async () => {
+    admin = await enf.admin();
+    const ex = await seed.signIn(admin, 'U-HR');                              // no CMS rights
+    const r = await ex.save('assetUploads', [{ id: 'UP-ZZL3', file: 'x' }]);
+    if (r.status !== 403) throw new Error(String(r.status));
+    return '403';
+  });
+
   /* ---------- suspected: SMTP to a metadata address ---------- */
   await t.step('(suspected) the mail connector never connects to a link-local or metadata address', async () => {
     admin = await enf.admin();
