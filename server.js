@@ -490,12 +490,14 @@ function httpsProbeJson(opts, cb) {
   cb = callOnce(cb);
   let target;
   try { target = new URL(opts.url); } catch (e) { return cb({ ok: false, message: 'That is not a valid URL.' }); }
-  if (target.protocol !== 'https:') return cb({ ok: false, message: 'Use an https:// endpoint.' });
-  const req = https.request({
-    hostname: target.hostname, port: target.port || 443,
+  const plain = target.protocol === 'http:' && opts.allowHttp;            // only the test provider base (CRM_AI_PROVIDER_TEST_BASE)
+  if (target.protocol !== 'https:' && !plain) return cb({ ok: false, message: 'Use an https:// endpoint.' });
+  const timeoutMs = Math.max(1000, Number(opts.timeout) || 15000);
+  const req = (plain ? http : https).request({
+    hostname: target.hostname, port: target.port || (plain ? 80 : 443),
     path: target.pathname + target.search, method: opts.method || 'GET',
     headers: Object.assign({ 'User-Agent': 'Finowise-CRM/1.0', 'Accept': 'application/json' }, opts.headers || {}),
-    timeout: 15000,
+    timeout: timeoutMs,
   }, (res) => {
     let data = '';
     res.on('close', () => { if (!res.complete) cb({ ok: false, message: 'Could not reach the provider — the connection closed before the reply was complete.' }); });
@@ -509,7 +511,7 @@ function httpsProbeJson(opts, cb) {
       cb({ ok, json, status: res.statusCode, message: ok ? 'OK' : ('HTTP ' + res.statusCode + (why ? ' — ' + why : '')) });
     });
   });
-  req.on('timeout', () => { req.destroy(); cb({ ok: false, message: 'The provider did not answer within 15 seconds.' }); });
+  req.on('timeout', () => { req.destroy(); cb({ ok: false, timeout: true, message: 'The provider did not answer within ' + Math.round(timeoutMs / 1000) + ' seconds.' }); });
   req.on('error', e => cb({ ok: false, message: 'Could not reach the provider — ' + e.message }));
   if (opts.body) req.write(opts.body);
   req.end();
@@ -2864,32 +2866,36 @@ function aiPrivacyHeaders(id) {
   if (id === 'claude') return { 'anthropic-version': '2023-06-01' };
   return {};
 }
-function aiProviderCall({ id, kind, config, secrets, system, messages, maxTokens, temperature }, cb) {
+/* Tests only: point the public providers at a local stand-in. Never set on a server. */
+const AI_TEST_BASE = String(process.env.CRM_AI_PROVIDER_TEST_BASE || '').replace(/\/+$/, '');
+function aiProviderCall({ id, kind, config, secrets, system, messages, maxTokens, temperature, timeoutMs, model: modelOverride }, cb) {
   const cap = Math.min(Number(maxTokens) || 1500, 4000);
   const temp = temperature === undefined ? 0.2 : Math.max(0, Math.min(1, Number(temperature) || 0));
   if (id === 'claude') {
-    const model = config.model;
+    const model = modelOverride || config.model;
     if (!model) return cb({ ok: false, message: 'No model is set on the Claude connector. Put the model identifier from your account’s documentation in its Model field.' });
     return httpsProbeJson({
-      url: 'https://api.anthropic.com/v1/messages',
+      timeout: timeoutMs, allowHttp: !!AI_TEST_BASE,
+      url: (AI_TEST_BASE || 'https://api.anthropic.com') + '/v1/messages',
       method: 'POST',
       headers: Object.assign({ 'x-api-key': secrets.apiKey || '', 'Content-Type': 'application/json' }, aiPrivacyHeaders(id)),
       body: JSON.stringify({ model, max_tokens: cap, temperature: temp,
         system: system || undefined, messages }),
     }, (r) => {
-      if (!r.ok) return cb({ ok: false, message: r.message });
+      if (!r.ok) return cb({ ok: false, status: r.status, timeout: r.timeout, message: r.message });
       const parts = (r.json && r.json.content) || [];
       const text = parts.filter(p => p && p.type === 'text').map(p => p.text).join('').trim();
       cb(text ? { ok: true, text } : { ok: false, message: 'The provider answered, but with nothing in it.' });
     });
   }
   if (id === 'gemini') {
-    const model = config.model;
+    const model = modelOverride || config.model;
     if (!model) return cb({ ok: false, message: 'No model is set on the Gemini connector. Put the model identifier from Google’s documentation in its Model field.' });
     const contents = messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: String(m.content || '') }] }));
     return httpsProbeJson({
-      url: 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model)
+      timeout: timeoutMs, allowHttp: !!AI_TEST_BASE,
+      url: (AI_TEST_BASE || 'https://generativelanguage.googleapis.com') + '/v1beta/models/' + encodeURIComponent(model)
          + ':generateContent?key=' + encodeURIComponent(secrets.apiKey || ''),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2897,7 +2903,7 @@ function aiProviderCall({ id, kind, config, secrets, system, messages, maxTokens
         generationConfig: { maxOutputTokens: cap, temperature: temp } },
         system ? { systemInstruction: { parts: [{ text: system }] } } : {})),
     }, (r) => {
-      if (!r.ok) return cb({ ok: false, message: r.message });
+      if (!r.ok) return cb({ ok: false, status: r.status, timeout: r.timeout, message: r.message });
       const cands = (r.json && r.json.candidates) || [];
       const text = ((cands[0] || {}).content || {}).parts
         ? cands[0].content.parts.map(p => p.text || '').join('').trim() : '';
@@ -2916,10 +2922,11 @@ function aiProviderCall({ id, kind, config, secrets, system, messages, maxTokens
     const headers = { 'Content-Type': 'application/json' };
     if (secrets.apiKey) headers.Authorization = 'Bearer ' + secrets.apiKey;
     return httpProbeJsonAny({
+      timeout: timeoutMs,
       url: base + '/chat/completions', method: 'POST', headers,
       body: JSON.stringify({ model, messages: msgs, max_tokens: cap, temperature: temp, stream: false }),
     }, (r) => {
-      if (!r.ok) return cb({ ok: false, message: r.message });
+      if (!r.ok) return cb({ ok: false, status: r.status, timeout: r.timeout, message: r.message });
       const ch = ((r.json && r.json.choices) || [])[0] || {};
       const text = String((ch.message && ch.message.content) || ch.text || '').trim();
       cb(text ? { ok: true, text } : { ok: false, message: 'The model answered, but with nothing in it.' });
@@ -2943,7 +2950,7 @@ function httpProbeJsonAny(opts, cb) {
     path: target.pathname + target.search,
     method: opts.method || 'GET',
     headers: Object.assign({ 'User-Agent': 'Finowise-BOSS/1.0', 'Accept': 'application/json' }, opts.headers || {}),
-    timeout: AI_TIMEOUT_MS,
+    timeout: Math.max(1000, Number(opts.timeout) || AI_TIMEOUT_MS),
   }, (res) => {
     let data = '';
     res.on('close', () => { if (!res.complete) cb({ ok: false, message: 'Could not reach the model server — the connection closed before the reply was complete.' }); });
@@ -2953,15 +2960,66 @@ function httpProbeJsonAny(opts, cb) {
       let json = null;
       try { json = JSON.parse(data); } catch (e) { /* reported below */ }
       const ok = res.statusCode >= 200 && res.statusCode < 300;
-      cb({ ok, json, message: ok ? 'ok'
+      cb({ ok, json, status: res.statusCode, message: ok ? 'ok'
         : 'The model server answered ' + res.statusCode + ' ' + (res.statusMessage || '')
           + (data ? ' — ' + data.trim().replace(/\s+/g, ' ').slice(0, 220) : '') });
     });
   });
-  req.on('timeout', () => { req.destroy(); cb({ ok: false, message: 'The model server did not answer within 60 seconds.' }); });
+  req.on('timeout', () => { req.destroy(); cb({ ok: false, timeout: true, message: 'The model server did not answer in time.' }); });
   req.on('error', (e) => cb({ ok: false, message: 'Could not reach the model server — ' + e.message }));
   if (opts.body) req.write(opts.body);
   req.end();
+}
+
+/* =====================================================================
+   RIA AI ALWAYS ANSWERS
+
+   A provider that is overloaded (HTTP 503 "high demand"), rate-limited
+   (429), failing (5xx), slow, or that answers with nothing used to reach
+   the person as a red error after up to 15 seconds, and the assistant's
+   record-planning step could hit that twice in one question. Now:
+
+     - each call has a time budget for what it is: 6 seconds to decide
+       which records to read or to write a report specification, 9 for an
+       answer or a rewrite (CRM_AI_PLAN_BUDGET_MS, CRM_AI_ANSWER_BUDGET_MS);
+     - Gemini answering 429/5xx or timing out on its model is tried once
+       more on a fast model (CRM_AI_GEMINI_FAST_MODEL, default
+       gemini-2.0-flash) if the budget still has room;
+     - whatever is left unanswered is answered here, by ria-builtin.js, from
+       the SOPs and records the page sent with the question (and, for total
+       AUM, the Dashboard's Live AUM figure for the person's own scope), and
+       returned as an ordinary answer.
+   ===================================================================== */
+const RiaBuiltin = require('./ria-builtin');
+const AI_PLAN_BUDGET_MS = Math.max(2000, Number(process.env.CRM_AI_PLAN_BUDGET_MS) || 6000);
+const AI_ANSWER_BUDGET_MS = Math.max(3000, Number(process.env.CRM_AI_ANSWER_BUDGET_MS) || 9000);
+const AI_GEMINI_FAST_MODEL = String(process.env.CRM_AI_GEMINI_FAST_MODEL || 'gemini-2.0-flash');
+function aiAnswerWithin(params, budgetMs, cb) {
+  const t0 = Date.now();
+  aiProviderCall(Object.assign({}, params, { timeoutMs: budgetMs }), (r) => {
+    const left = budgetMs - (Date.now() - t0);
+    const fast = params.id === 'gemini' && String((params.config || {}).model || '') !== AI_GEMINI_FAST_MODEL ? AI_GEMINI_FAST_MODEL : '';
+    if (r.ok || !fast || !RiaBuiltin.retryable(r) || left < 2500) return cb(Object.assign({ tries: 1 }, r));
+    aiProviderCall(Object.assign({}, params, { timeoutMs: left, model: fast }), (r2) => cb(Object.assign({ tries: 2, first: r.status || (r.timeout ? 'timeout' : 'error') }, r2, r2.ok ? { model: fast } : {})));
+  });
+}
+/* A total-AUM question that reaches the fallback is answered with the
+   Dashboard's own figure for the person's scope, as GET /api/ai/aum does. */
+function aiAumForFallback(req, question) {
+  if (!/\baum\b|assets under management/i.test(String(question || ''))) return null;
+  try {
+    const user = signedInUser(req);
+    if (!user) return null;
+    const s = aumStores();
+    const scope = aumScopeFor(user, s);
+    if (scope.refuse) return { ok: false, message: scope.message };
+    const mine = new Set(scope.clients.map(c => c.id));
+    const input = { clients: scope.clients, holdings: s.holdings, sips: s.sips,
+      txns: BookAum.eligibleTxns(s.transactions).filter(t => mine.has(t.clientId)) };
+    const sum = BookAum.aumSummary(BookAum.bookRows(input), input);
+    return { ok: true, total: sum.total, scope: { kind: scope.kind, label: scope.label },
+      source: 'Dashboard Live AUM logic (platform reports first, otherwise completed BOSS transactions with redemptions deducted).' };
+  } catch (e) { return null; }
 }
 
 // POST /api/ai/chat  { connector, system?, messages:[{role,content}], maxTokens?, temperature? }
@@ -2998,16 +3056,29 @@ app.post('/api/ai/chat', checkApiKey, (req, res) => {
     return res.status(413).json({ ok: false, reason: 'too_big',
       message: 'That is ' + Math.round(size / 1000) + 'KB of context. Narrow the request — a filter, a shorter period, fewer records — so only what the task needs is sent.' });
 
-  aiProviderCall({ id, kind: CONNECTOR_KIND[id], config: c.config || {}, secrets: c.secrets || {},
-    system: body.system ? String(body.system) : '', messages,
-    maxTokens: body.maxTokens, temperature: body.temperature }, (r) => {
+  const system = body.system ? String(body.system) : '';
+  const callKind = RiaBuiltin.classify(system);
+  const budget = callKind === 'plan' || callKind === 'report' ? AI_PLAN_BUDGET_MS : AI_ANSWER_BUDGET_MS;
+  aiAnswerWithin({ id, kind: CONNECTOR_KIND[id], config: c.config || {}, secrets: c.secrets || {},
+    system, messages, maxTokens: body.maxTokens, temperature: body.temperature }, budget, (r) => {
     /* What goes in the log: who, through what, how big, how long, and whether
        it worked. Not the prompt, not the answer, not a record id. */
-    console.log('[ai] #' + seq + ' ' + id + ' ' + (r.ok ? 'ok' : 'failed')
-      + ' in=' + size + 'ch out=' + (r.ok ? String(r.text).length : 0) + 'ch '
-      + (Date.now() - t0) + 'ms');
-    if (!r.ok) return res.status(502).json({ ok: false, reason: 'provider', message: r.message });
-    res.json({ ok: true, text: r.text, connector: id, reach: p.reach, via: p.by || p.reach });
+    const tail = ' in=' + size + 'ch ' + callKind + ' tries=' + (r.tries || 1) + (r.first ? ' first=' + r.first : '') + ' ' + (Date.now() - t0) + 'ms';
+    if (r.ok) {
+      console.log('[ai] #' + seq + ' ' + id + ' ok out=' + String(r.text).length + 'ch' + tail);
+      return res.json({ ok: true, text: r.text, connector: id, reach: p.reach, via: p.by || p.reach });
+    }
+    /* The provider could not answer: BOSS answers from what it was given. */
+    let text;
+    try {
+      const q = callKind === 'chat' ? ((messages[messages.length - 1].content.match(/Question:\s*([\s\S]*)$/) || [])[1] || messages[messages.length - 1].content) : '';
+      text = RiaBuiltin.answer({ system, messages, aum: callKind === 'chat' ? aiAumForFallback(req, q) : null });
+    } catch (e) {
+      console.error('[ai] #' + seq + ' built-in answer failed: ' + (e && e.message));
+      text = 'The AI service is busy right now. Please ask again in a minute.';
+    }
+    console.log('[ai] #' + seq + ' ' + id + ' fallback (' + (r.status ? 'HTTP ' + r.status : r.timeout ? 'timeout' : 'no answer') + ') out=' + String(text).length + 'ch' + tail);
+    res.json({ ok: true, text, connector: id, reach: p.reach, via: 'builtin', fallback: true });
   });
 });
 // GET /api/ai/status -> which connectors the assistant may actually use, and why not where it may not.
