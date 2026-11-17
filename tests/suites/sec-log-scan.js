@@ -1,4 +1,4 @@
-/* NOTHING SENSITIVE IN LOGS, AUDIT FILES, ERRORS OR AT REST — PHASE 1, STEP 3.
+/* NOTHING SENSITIVE IN LOGS, AUDIT FILES, ERRORS OR AT REST — PHASE 1, STEPS 3 AND 6.
 
    Known synthetic values are pushed through the server (PANs, an Aadhaar
    number, mobile numbers, a generated password), including on the paths
@@ -29,6 +29,7 @@ secSuite(async (t) => {
   let c = 0; ('29876543210' + '0').split('').reverse().forEach((ch, i) => { c = D[c][P[i % 8][Number(ch)]]; });
   const AAD = '29876543210' + [0,4,3,2,1,5,6,7,8,9][c];
   const MOBILES = ['9811122233', '9822233344'];
+  let againSrv = null;
 
   await t.step('sensitive values are pushed through allowed and refused paths', async () => {
     const list = await rmA.store('clients', []);
@@ -77,11 +78,56 @@ secSuite(async (t) => {
     const db = new DatabaseSync(path.join(srv.dir, 'users.db'));
     db.prepare('UPDATE users SET issued_password = ? WHERE email = ?').run(plain, seed.email('U-EXEC'));
     db.close();
-    const again = await t.startServer({ CRM_ACCESS_MODE: 'enforce' }, { dir: srv.dir });
+    const again = againSrv = await t.startServer({ CRM_ACCESS_MODE: 'enforce' }, { dir: srv.dir });
     const a2 = await again.admin();
     const row = new DatabaseSync(path.join(srv.dir, 'users.db')).prepare('SELECT issued_password FROM users WHERE email = ?').get(seed.email('U-EXEC'));
     const shown = ((await a2.get('/api/users')).json.users || []).find((u) => u.email === seed.email('U-EXEC'));
     if (!/^enc1:/.test(row.issued_password) || shown.issuedPassword !== plain) throw new Error(JSON.stringify({ stored: String(row.issued_password).slice(0, 8), shown: shown.issuedPassword }));
     return 'sealed on restart ("' + row.issued_password.slice(0, 5) + '…"); the administrator still reads it';
+  });
+
+  /* Step 6: after connector secrets, an SMTP password, an assistant request
+     carrying its own key, sessions and passwords have all been through the
+     server, every file it wrote is searched. Each kind of value may live in
+     one place only: PANs and phone numbers in data.json (the records
+     themselves), connector secrets in connections.json (0600), Aadhaar in
+     the vault, encrypted. Passwords and session cookies: nowhere. */
+  await t.step('every file at rest, the log and the audit trail: each value only where it belongs', async () => {
+    const SECRETS = { ai: 'zz-final-ai-key-5566778899', smtp: 'zz-final-smtp-pass-1122', bodyKey: 'zz-body-key-should-vanish' };
+    const a2 = await againSrv.admin();
+    await a2.put('/api/connections/claude', { enabled: true, config: { model: 'zz', privacyVerified: true }, secrets: { apiKey: SECRETS.ai } });
+    await a2.put('/api/connections/email', { enabled: true, config: { host: 'smtp.zz.test', username: 'm@zz.test', fromEmail: 'o@zz.test' }, secrets: { password: SECRETS.smtp } });
+    await a2.post('/api/ai/chat', { connector: 'claude', apiKey: SECRETS.bodyKey, messages: [{ role: 'user', content: 'ZZ' }] });
+    const rmc = await againSrv.login(seed.email('U-EXEC'), 'Passw0rd-exec-1');
+    await rmc.get('/api/storage/clients');
+    await new Promise((r) => setTimeout(r, 1200));                                // let the coalesced writes land
+    const read = (f) => (fs.existsSync(path.join(srv.dir, f)) ? fs.readFileSync(path.join(srv.dir, f)).toString('latin1') : '');
+    const auditDir = path.join(srv.dir, 'audit');
+    const files = { 'data.json': read('data.json'), 'users.db': read('users.db') + read('users.db-wal'), 'connections.json': read('connections.json'),
+      'aadhaar-vault.json': read('aadhaar-vault.json'), audit: fs.readdirSync(auditDir).map((f) => fs.readFileSync(path.join(auditDir, f), 'utf8')).join(''),
+      log: srv.log() + againSrv.log(), errors: errors.join('\n') };
+    const cookies = [a2.cookie, rmc.cookie, admin.cookie].map((c) => String(c).split('=')[1]).filter(Boolean);
+    const pans = data.clients.map((x) => x.pan).filter(Boolean);
+    const rules = [
+      ['account passwords', ['testpassword1', 'Passw0rd-exec-1', 'Passw0rd-u-rma', generated, 'ZzPlainOld9876'].filter(Boolean), []],
+      ['session cookies', cookies, []],
+      ['connector secrets', [SECRETS.ai, SECRETS.smtp], ['connections.json']],
+      ['a key sent in a request body', [SECRETS.bodyKey], []],
+      ['Aadhaar digits', [AAD], []],
+      ['PANs', pans, ['data.json']],
+      ['phone numbers', MOBILES, ['data.json']],
+    ];
+    const bad = [];
+    for (const [what, values, allowed] of rules) {
+      for (const [f, text] of Object.entries(files)) {
+        if (allowed.includes(f)) continue;
+        const hit = values.find((v) => v && text.includes(v));
+        if (hit) bad.push(what + ' in ' + f + ' (' + hit.slice(0, 4) + '…)');
+      }
+    }
+    const mode = (fs.statSync(path.join(srv.dir, 'connections.json')).mode & 0o777).toString(8);
+    const present = files['connections.json'].includes(SECRETS.ai) && files['data.json'].includes(pans[0]);
+    if (bad.length || mode !== '600' || !present) throw new Error(bad.join('; ') + ' mode=' + mode + ' present=' + present);
+    return rules.length + ' kinds of value × ' + Object.keys(files).length + ' places (data.json, users.db+WAL, connections.json, vault, audit, log, errors): each only where it belongs; connections.json is 0600';
   });
 });

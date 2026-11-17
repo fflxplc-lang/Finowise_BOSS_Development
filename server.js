@@ -56,6 +56,9 @@ const USERS_DB_FILE = process.env.CRM_USERS_DB || path.join(path.dirname(DB_FILE
 const usersDb = new DatabaseSync(USERS_DB_FILE);
 usersDb.exec('PRAGMA journal_mode = WAL');
 usersDb.exec('PRAGMA busy_timeout = 5000');
+// Phase 1, step 6: bytes a write replaces or deletes are zeroed, not left in
+// free space where a copy of the file could still show them.
+usersDb.exec('PRAGMA secure_delete = ON');
 usersDb.exec(`CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -145,6 +148,14 @@ function openIssued(stored) {
   const seal = usersDb.prepare('UPDATE users SET issued_password = ? WHERE id = ?');
   plainRows.forEach((r) => seal.run(sealIssued(r.issued_password), r.id));
   if (plainRows.length) console.log('[accounts] sealed ' + plainRows.length + ' generated password(s) that were stored in plain text');
+  /* Phase 1, step 6: sealing in place is not enough on its own. SQLite
+     keeps the old bytes in the write-ahead log and in free space, so a
+     plain-text password written by older code (or cleared at sign-in by
+     it) could still be read out of the file. At start-up the log is
+     folded in and emptied and the file rebuilt, which leaves no copy.
+     users.db is small (accounts and a week of sessions): milliseconds. */
+  try { usersDb.exec('PRAGMA wal_checkpoint(TRUNCATE)'); usersDb.exec('VACUUM'); usersDb.exec('PRAGMA wal_checkpoint(TRUNCATE)'); }
+  catch (e) { console.error('[accounts] could not compact users.db this time (' + (e.code || e.message) + '); it will be tried at the next start'); }
 }
 
 // A password somebody has to read off a screen and type once. No look-alike
