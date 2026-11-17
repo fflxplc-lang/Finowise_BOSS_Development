@@ -44,7 +44,8 @@ secSuite(async (t) => {
 
   await t.step('an RM cannot edit another RM’s client by putting its id in the payload', async () => {
     const mine = await rmA.store('clients', []);
-    const forged = mine.concat([Object.assign({}, data.clients.find((c) => c.id === bClient), { mobile: '9111111111', cmsName: 'ZZ Hijacked' })]);
+    /* the forged record takes the place of the placeholder the RM was shown for it (one copy of the id, so the scope rule is what decides) */
+    const forged = mine.filter((c) => c.id !== bClient).concat([Object.assign({}, data.clients.find((c) => c.id === bClient), { mobile: '9111111111', cmsName: 'ZZ Hijacked' })]);
     const r = await rmA.save('clients', forged);
     if (r.status !== 403 || !(r.json.reasons || []).includes('edit_outside_scope')) throw new Error(r.status + ' ' + r.text.slice(0, 200));
     await unchanged('forged id');

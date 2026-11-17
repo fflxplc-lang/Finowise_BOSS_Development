@@ -94,53 +94,97 @@ const PAN_MASKED_RE = /^X{6}([0-9]{3}[A-Za-z])$/;
 function maskPan(v) { return 'XXXXXX' + String(v).trim().slice(-4).toUpperCase(); }
 function isFullPan(v) { return typeof v === 'string' && PAN_FULL_RE.test(v.trim()); }
 function isMaskedPan(v) { return typeof v === 'string' && PAN_MASKED_RE.test(v.trim()); }
-/* Copy-on-write walk: returns the same object when nothing needed masking. */
+/* Step 6b: a PAN inside free text ("PAN of spouse ABCDE1234F") is masked
+   too. Only text is searched, i.e. a string with a separator in it; a
+   long run of base64 (a file, an image) is left alone, since a PAN-shaped
+   run inside it is not a PAN and changing it would corrupt the file. */
+const PAN_IN_TEXT_RE = /\b[A-Za-z]{5}[0-9]{4}[A-Za-z]\b/g;
+const MASKED_IN_TEXT_RE = /\bX{6}([0-9]{3}[A-Za-z])\b/g;
+function isText(s) {
+  if (s.length < 11 || !/[\s,;:()]/.test(s) || /^data:/i.test(s)) return false;
+  return !(s.length > 200 && /^[A-Za-z0-9+/=\s]+$/.test(s));
+}
+function maskText(s, counter) {
+  if (!isText(s)) return s;
+  return s.replace(PAN_IN_TEXT_RE, (m) => { counter.n++; return maskPan(m); });
+}
+/* Copy-on-write walk: returns the same object when nothing needed masking.
+   Whole values, PANs inside text, and object keys that are PANs. */
 function maskPansDeep(v, counter) {
-  if (typeof v === 'string') { if (isFullPan(v)) { counter.n++; return maskPan(v); } return v; }
+  if (typeof v === 'string') { if (isFullPan(v)) { counter.n++; return maskPan(v); } return maskText(v, counter); }
   if (!v || typeof v !== 'object') return v;
   let copy = null;
   if (Array.isArray(v)) {
     v.forEach((x, i) => { const y = maskPansDeep(x, counter); if (y !== x) { if (!copy) copy = v.slice(); copy[i] = y; } });
-  } else {
-    Object.keys(v).forEach((k) => { const y = maskPansDeep(v[k], counter); if (y !== v[k]) { if (!copy) copy = Object.assign({}, v); copy[k] = y; } });
+    return copy || v;
   }
+  let renamed = false;
+  Object.keys(v).forEach((k) => {
+    const y = maskPansDeep(v[k], counter);
+    const k2 = isFullPan(k) ? maskPan(k) : k;
+    if (k2 !== k) { counter.n++; renamed = true; }
+    if (y !== v[k] || k2 !== k) { if (!copy) copy = Object.assign({}, v); if (k2 !== k) { delete copy[k]; } copy[k2] = y; }
+  });
+  void renamed;
   return copy || v;
 }
 /* Every full PAN in a stored record, by its last four. */
+function notePan(pan, out) { const k = pan.trim().slice(-4).toUpperCase(); const s = out.get(k) || new Set(); s.add(pan.trim()); out.set(k, s); }
 function pansByLast4(v, out) {
   out = out || new Map();
   if (typeof v === 'string') {
-    if (isFullPan(v)) { const k = v.trim().slice(-4).toUpperCase(); const s = out.get(k) || new Set(); s.add(v.trim().toUpperCase()); out.set(k, s); }
-  } else if (v && typeof v === 'object') (Array.isArray(v) ? v : Object.values(v)).forEach((x) => pansByLast4(x, out));
+    if (isFullPan(v)) notePan(v, out);
+    else if (isText(v)) (v.match(PAN_IN_TEXT_RE) || []).forEach((m) => notePan(m, out));
+  } else if (v && typeof v === 'object') {
+    if (!Array.isArray(v)) Object.keys(v).forEach((k) => { if (isFullPan(k)) notePan(k, out); });
+    (Array.isArray(v) ? v : Object.values(v)).forEach((x) => pansByLast4(x, out));
+  }
   return out;
 }
 /* Put the stored PAN back wherever a masked one came in. */
+function restoreOne(masked4, last4) {
+  const hit = last4 && last4.get(String(masked4).toUpperCase());
+  return hit && hit.size === 1 ? [...hit][0] : null;
+}
 function restorePansDeep(v, last4, counter) {
   if (typeof v === 'string') {
     const m = v.trim().match(PAN_MASKED_RE);
-    if (!m) return v;
-    const hit = last4 && last4.get(m[1].toUpperCase());
-    if (hit && hit.size === 1) { counter.restored++; return [...hit][0]; }
-    counter.unresolved++; return v;
+    if (m) {
+      const full = restoreOne(m[1], last4);
+      if (full) { counter.restored++; return full; }
+      counter.unresolved++; return v;
+    }
+    /* a masked PAN inside text: put back when it is certain which; left as
+       it is otherwise (the text then simply says what the reader saw) */
+    if (!MASKED_IN_TEXT_RE.test(v)) return v;
+    MASKED_IN_TEXT_RE.lastIndex = 0;
+    return v.replace(MASKED_IN_TEXT_RE, (all, k4) => { const full = restoreOne(k4, last4); if (full) { counter.restored++; return full; } return all; });
   }
   if (!v || typeof v !== 'object') return v;
   let copy = null;
   if (Array.isArray(v)) {
     v.forEach((x, i) => { const y = restorePansDeep(x, last4, counter); if (y !== x) { if (!copy) copy = v.slice(); copy[i] = y; } });
-  } else {
-    Object.keys(v).forEach((k) => { const y = restorePansDeep(v[k], last4, counter); if (y !== v[k]) { if (!copy) copy = Object.assign({}, v); copy[k] = y; } });
+    return copy || v;
   }
+  Object.keys(v).forEach((k) => {
+    const y = restorePansDeep(v[k], last4, counter);
+    const km = k.match(PAN_MASKED_RE);
+    const k2 = km ? (restoreOne(km[1], last4) || k) : k;
+    if (k2 !== k) counter.restored++;
+    if (y !== v[k] || k2 !== k) { if (!copy) copy = Object.assign({}, v); if (k2 !== k) delete copy[k]; copy[k2] = y; }
+  });
   return copy || v;
 }
 function hasMaskedPan(v) {
-  if (typeof v === 'string') return isMaskedPan(v);
+  if (typeof v === 'string') { if (isMaskedPan(v)) return true; MASKED_IN_TEXT_RE.lastIndex = 0; const t = MASKED_IN_TEXT_RE.test(v); MASKED_IN_TEXT_RE.lastIndex = 0; return t; }
   if (!v || typeof v !== 'object') return false;
+  if (!Array.isArray(v) && Object.keys(v).some((k) => PAN_MASKED_RE.test(k))) return true;
   return (Array.isArray(v) ? v : Object.values(v)).some(hasMaskedPan);
 }
 /* A save's records with their masked PANs put back from the server copy
    of the same record (matched by id; a store that is one object is matched
    as a whole). {value, restored, unresolved, changed}. */
-function restoreMaskedPans(curValue, nextValue, linked) {
+function restoreMaskedPans(curValue, nextValue, linked, mayUse) {
   const counter = { restored: 0, unresolved: 0 };
   if (!hasMaskedPan(nextValue)) return { value: nextValue, restored: 0, unresolved: 0, changed: false };
   let value = nextValue;
@@ -148,7 +192,12 @@ function restoreMaskedPans(curValue, nextValue, linked) {
     const byId = new Map((Array.isArray(curValue) ? curValue : []).filter((r) => r && r.id).map((r) => [r.id, r]));
     value = nextValue.map((r) => {
       if (!hasMaskedPan(r)) return r;
-      const was = r && r.id ? byId.get(r.id) : null;
+      /* Step 6b: the stored copy is a source only if the writer may read it
+         (mayUse); otherwise the masked value cannot be traced, and the save
+         is refused exactly as for a wrong last four, so a refusal says
+         nothing about anybody else's PAN. */
+      let was = r && r.id ? byId.get(r.id) : null;
+      if (was && mayUse && !mayUse(was)) return restorePansDeep(r, null, counter);
       /* The record's own stored copy first; then the client or lead it hangs
          off (a form pre-filled from the client carries the client's PAN). */
       const map = was ? pansByLast4(was) : new Map();
@@ -210,7 +259,9 @@ function create(opts) {
   function defaultRole(cfg) {                                                 // defaultRole() H:6196
     const roles = roleList(cfg);
     const junior = DEFAULT_ROLES.filter((r) => r !== ADMIN_ROLE).slice(-1)[0];
-    return roles.find((r) => norm(r) === norm(junior)) || roles.find((r) => r !== ADMIN_ROLE) || ADMIN_ROLE;
+    /* Step 6b: never Admin. A role list with no other role used to make
+       every member without a role of their own a team Admin. */
+    return roles.find((r) => norm(r) === norm(junior)) || roles.find((r) => r !== ADMIN_ROLE) || junior;
   }
   function roleOf(m, cfg) { return (m && m.role) || defaultRole(cfg); }      // roleOf() H:6238
   function descendants(list, id) {                                            // userDescendants() H:6246
@@ -224,10 +275,22 @@ function create(opts) {
   }
 
   /* ---- who is asking ---- */
+  /* Step 6b: the member an account is, or why it has none. Two team
+     records with one id make the account ambiguous: it gets no member,
+     never whichever copy happens to come first. An Inactive or deleted
+     record gives no member either. */
+  function memberState(user) {
+    const m = memberOfUser(user) || null;
+    if (!m) return { member: null, state: 'none' };
+    const copies = team().filter((t) => t && t.id === m.id).length;
+    if (copies > 1) return { member: null, state: 'ambiguous' };
+    if (m.status === 'Inactive' || m.deletedAt) return { member: null, state: 'inactive', id: m.id };
+    return { member: m, state: 'ok' };
+  }
   function principal(user) {
     if (!user) return null;
     const cfg = config();
-    const member = memberOfUser(user) || null;
+    const member = memberState(user).member;
     const role = member ? roleOf(member, cfg) : '';
     const teamAdmin = !!member && role === ADMIN_ROLE;
     const scope = member ? (member.scope || 'own') : 'none';
@@ -424,6 +487,20 @@ function create(opts) {
     return false;
   }
   const clientOf = (r, c) => (r && r.clientId ? c.get('clients', r.clientId) : null) || {};
+  /* Step 6b: EVERY record a linked record names must be the writer's. The
+     read rule above takes the first reference it finds, so a link naming
+     its own client and somebody else's record passed it. On a write,
+     each named record that exists must be visible. */
+  const REF_FIELDS = [['clientId', 'clients'], ['leadId', 'leads'], ['reviewId', 'reviews'], ['queryId', 'queries'], ['allocationId', 'recommendations']];
+  function refsOk(r, c) {
+    if (!r || typeof r !== 'object' || c.p.admin) return true;
+    for (const [f, st] of REF_FIELDS) if (r[f] && c.get(st, r[f]) && !c.visibleId(st, r[f])) return false;
+    if (r.recordId) {
+      const st = MODULE_STORE[r.recordModule] || MODULE_STORE[r.module] || r.recordStore;
+      for (const k of (st ? [st] : ['clients', 'leads', 'reviews'])) if (c.get(k, r.recordId) && !c.visibleId(k, r.recordId)) return false;
+    }
+    return true;
+  }
 
   /* The page's rule for each record store (R). */
   const RECORD_RULES = {
@@ -452,8 +529,10 @@ function create(opts) {
     campaigns: (r, c) => c.scopeOk(r.createdBy, r.branch),
     campaignRecipients: (r, c) => (r.campaignId && c.get('campaigns', r.campaignId)) ? c.visibleId('campaigns', r.campaignId) : linkedVisible(r, c),
   };
-  ['moms', 'insPolicies', 'clientDocuments', 'clientGoals', 'clientFeedback', 'docLinks', 'docSubmissions', 'approvals',
-    'complianceItems', 'aumMonthly', 'reviewEdits', 'reviewReports'].forEach((k) => { RECORD_RULES[k] = linkedVisible; });
+  const LINKED = ['moms', 'insPolicies', 'clientDocuments', 'clientGoals', 'clientFeedback', 'docLinks', 'docSubmissions', 'approvals',
+    'complianceItems', 'aumMonthly', 'reviewEdits', 'reviewReports'];
+  LINKED.forEach((k) => { RECORD_RULES[k] = linkedVisible; });
+  const LINKED_SET = new Set(LINKED);          // campaign recipients follow their campaign, not the client (a campaign may reach the firm)
 
   /* Member and HR stores (M). */
   function memberRule(managerToo) {
@@ -526,7 +605,19 @@ function create(opts) {
     apiSyncRuns: { read: (r, c) => c.p.teamAdmin || canAdmin(c.p, 'manageModuleSettings'), write: (p) => canAdmin(p, 'manageModuleSettings') },
   };
   /* Keys made per upload: they follow the upload index. */
-  const DYNAMIC = /^(maRows|maFile|reviewFile)\./;
+  /* Step 6b: the page's keys are assetRows.<upload> and assetFile.<upload>
+     (maRows/maFile were never used). Upload rows follow CMS access, as on
+     the page (maVisibleFilter H: multi-asset.js 1003: CMS viewers load
+     them, CMS editors and module-settings holders write them); a review
+     file follows its review report. */
+  const DYNAMIC = /^(maRows|maFile|assetRows|assetFile|reviewFile)\./;
+  function dynamicAllowed(p, key, write) {
+    if (!p) return false;
+    if (p.admin || p.teamAdmin) return true;
+    const m = key.match(/^reviewFile\.(.+)$/);
+    if (m) { const c = context(p); return !c.get('reviewReports', m[1]) ? false : c.visibleId('reviewReports', m[1]); }
+    return write ? (can(p, 'CMS', 'edit') || canAdmin(p, 'manageModuleSettings')) : can(p, 'CMS', 'view');
+  }
 
   function classOf(key) {
     if (RECORD_RULES[key]) return 'R';
@@ -567,6 +658,7 @@ function create(opts) {
     const out = { cls: classOf(key), hidden: 0, stubs: 0, masked: 0, refused: false, value: raw, maskCounter: { n: 0 } };
     if (raw === undefined || !p || p.admin || UNSCOPED) return out;
     if (!out.cls) { out.refused = true; out.value = undefined; return out; }    // a store with no rule
+    if (DYNAMIC.test(key) && !dynamicAllowed(p, key, false)) { out.refused = true; out.value = undefined; return out; }
     const v = parsedRaw(key, raw);
     if (v === undefined) return out;
     const c = context(p);
@@ -584,8 +676,7 @@ function create(opts) {
       if (changed || masked !== shown) out.value = JSON.stringify(masked);
       return out;
     }
-    if (out.cls === 'S') return out;
-    if (!Array.isArray(v)) {                       // a store that is one object: masked, not filtered
+    if (!Array.isArray(v) || out.cls === 'S') {    // a store that is one object, or settings: masked, not filtered
       const m = maskPansDeep(v, out.maskCounter);
       out.masked = out.maskCounter.n;
       if (m !== v) out.value = JSON.stringify(m);
@@ -682,11 +773,14 @@ function create(opts) {
     if (!p) { res.violations.push({ id: '', reason: 'not_signed_in' }); return res; }
     if (p.admin || UNSCOPED) return res;
     if (!res.cls) { res.violations.push({ id: '', reason: 'store_has_no_rule' }); return res; }
+    if (DYNAMIC.test(key) && !dynamicAllowed(p, key, true)) { res.violations.push({ id: '', reason: 'write_needs_permission' }); return res; }
     const cur = parsedRaw(key, curRaw);
     const c = context(p);
 
     if (res.cls === 'S') {
       if (JSON.stringify(cur) !== JSON.stringify(nextValue) && !SETTINGS_WRITE[key](p)) res.violations.push({ id: '', reason: 'settings_write_not_allowed' });
+      /* Step 6b: the list of roles decides who is an Admin by default: the administrator account's call alone. */
+      if (key === 'config' && JSON.stringify((cur || {}).roles) !== JSON.stringify((nextValue || {}).roles)) res.violations.push({ id: '', reason: 'roles_need_admin_account' });
       return res;
     }
     if (!Array.isArray(nextValue)) {
@@ -743,6 +837,7 @@ function create(opts) {
       const was = curMap.get(k);
       if (was && JSON.stringify(was) === JSON.stringify(r)) continue;
       const id = r && r.id ? r.id : '';
+      if (LINKED_SET.has(key) && !refsOk(r, c)) { res.violations.push({ id, reason: 'reference_outside_scope' }); continue; }
       if (!was) {
         if (!rule(r) && !CREATE_FOR_OTHERS.has(key)) res.violations.push({ id, reason: 'create_outside_scope' });
         else if (module && !can(p, module, 'create')) res.advisory.push({ id, reason: 'module_create_right' });
@@ -868,6 +963,62 @@ function create(opts) {
      mailExternal flag. A campaign or drip send needs Campaigns permission.
      Free-form compose is capped at 20 recipients a message. */
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  /* Step 6b, every mode: A PLACEHOLDER NEVER REPLACES A RECORD. A
+     "Restricted record" row a person was shown stands for the stored record
+     it hides: in a save it means "that record, unchanged". One whose id is
+     not on file is dropped. (The shrink guard then counts real records.) */
+  function resolveStubs(key, curRaw, nextValue) {
+    if (!Array.isArray(nextValue) || !nextValue.some((r) => r && r._stub)) return { value: nextValue, stubs: 0 };
+    const cur = parsedRaw(key, curRaw);
+    const byId = new Map((Array.isArray(cur) ? cur : []).filter((r) => r && r.id).map((r) => [r.id, r]));
+    let stubs = 0;
+    const value = [];
+    nextValue.forEach((r) => {
+      if (!(r && r._stub)) { value.push(r); return; }
+      stubs++;
+      const was = r.id ? byId.get(r.id) : null;
+      if (was && !was._stub) value.push(was);
+    });
+    return { value, stubs };
+  }
+  /* Step 6b, every mode: NO NEW DUPLICATE IDS. Two records with one id let
+     a save carry a copy that one check reads and another ignores (the team
+     record a person escalated in a second copy). A save may not add a
+     duplicate id to any list, nor a second team record bound to the same
+     email. Duplicates already on file are not made worse, nor refused. */
+  function duplicates(key, curRaw, nextValue) {
+    const out = { ids: [], emails: [] };
+    if (!Array.isArray(nextValue)) return out;
+    const cur = parsedRaw(key, curRaw);
+    const before = Array.isArray(cur) ? cur : [];
+    const count = (list, f) => { const m = new Map(); list.forEach((r) => { const v = r && f(r); if (v) m.set(v, (m.get(v) || 0) + 1); }); return m; };
+    const idNow = count(nextValue, (r) => (typeof r === 'object' ? r.id : '')), idWas = count(before, (r) => (typeof r === 'object' ? r.id : ''));
+    for (const [id, n] of idNow) if (n > 1 && n > (idWas.get(id) || 0)) out.ids.push(String(id));
+    if (key === 'team') {
+      const live = (r) => r && typeof r === 'object' && !r.deletedAt && r.email ? String(r.email).trim().toLowerCase() : '';
+      const eNow = count(nextValue, live), eWas = count(before, live);
+      for (const [e, n] of eNow) if (n > 1 && n > (eWas.get(e) || 0)) out.emails.push(e);
+    }
+    return out;
+  }
+  /* For the masked-PAN restore: may this person read that record? */
+  function readableFor(p) {
+    if (!p || p.admin || UNSCOPED) return () => true;
+    const c = context(p);
+    return (key, rec) => !!rec && classOf(key) === 'R' && readable(key, rec, c);
+  }
+  /* Step 6b: the addresses a record vouches for are its email fields, not
+     any text in it (an address typed into remarks is not a recipient). */
+  function emailFieldsIn(v, out, depth) {
+    if (!v || typeof v !== 'object' || depth > 4) return out;
+    if (Array.isArray(v)) { v.forEach((x) => emailFieldsIn(x, out, depth + 1)); return out; }
+    Object.keys(v).forEach((k) => {
+      const x = v[k];
+      if (typeof x === 'string' && /e-?mail/i.test(k)) emailsIn(x, out);
+      else if (x && typeof x === 'object') emailFieldsIn(x, out, depth + 1);
+    });
+    return out;
+  }
   function emailsIn(v, out) {
     if (typeof v === 'string') { const t = v.trim().toLowerCase(); if (EMAIL_RE.test(t)) out.add(t); }
     else if (v && typeof v === 'object') (Array.isArray(v) ? v : Object.values(v)).forEach((x) => emailsIn(x, out));
@@ -878,13 +1029,15 @@ function create(opts) {
     if (p.admin) return { ok: true };
     const reasons = [];
     if ((kind === 'campaign' || kind === 'drip') && !(can(p, 'Campaigns', 'edit') || can(p, 'Campaigns', 'create'))) reasons.push('needs_campaigns_permission');
-    if (kind === 'compose' && addresses.length > 20) reasons.push('too_many_recipients');
+    /* Step 6b: the recipient cap holds for every kind a request may claim,
+       except campaign and drip sends, which need Campaigns permission. */
+    if (kind !== 'campaign' && kind !== 'drip' && addresses.length > 20) reasons.push('too_many_recipients');
     if (!canAdmin(p, 'mailExternal')) {
       const c = context(p);
       const ok = new Set();
       emailsIn(p.email, ok);
       team().forEach((m) => { if (m) ['email', 'personalEmail', 'officialEmail'].forEach((k) => emailsIn(m[k], ok)); });
-      ['clients', 'leads', 'campaignRecipients'].forEach((k) => { for (const r of c.list(k)) if (r && readable(k, r, c)) emailsIn(r, ok); });
+      ['clients', 'leads', 'campaignRecipients'].forEach((k) => { for (const r of c.list(k)) if (r && readable(k, r, c)) emailFieldsIn(r, ok, 0); });
       const outside = addresses.filter((a) => !ok.has(String(a).trim().toLowerCase()));
       if (outside.length) reasons.push('recipient_outside_scope');
     }
@@ -900,6 +1053,7 @@ function create(opts) {
   return {
     MODE, UNSCOPED, ADMIN_ROLE, ADMIN_FLAGS, USER_FLAGS, TEAM_PROTECTED, TEAM_PRIVATE,
     panMatch, mayMatchPans, aadhaarDecision, mailDecision, mayUseAi, changeSummary,
+    memberState, resolveStubs, duplicates, readableFor,
     principal, can, canAdmin, hrAdmin, inScope, teamViolations,
     classOf, readView, mergeWrite, shrinkCheck,
     roleOf: (m) => roleOf(m, config()), descendants: (id) => descendants(team(), id),

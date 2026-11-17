@@ -1,0 +1,257 @@
+/* THE INDEPENDENT REVIEW'S FINDINGS, AS TESTS — PHASE 1, STEP 6b.
+
+   Each step is a finding from docs/phase1/B2C-STEP6.md §8, written as
+   the attack the reviewer ran and asserting what the spec says should
+   happen. They were written before the fixes and failed then; each now
+   guards its fix. Synthetic data only. */
+const fs = require('fs');
+const path = require('path');
+const { secSuite } = require('../lib/sec-http');
+const seed = require('../lib/sec-seed');
+const smtp = require('../lib/smtp');
+const guard = require('../../outbound-guard');
+const AC = require('../../access-control');
+
+secSuite(async (t) => {
+  const data = seed.build(30);
+  data.config = Object.assign({}, data.config || {});
+  const enf = await t.startServer({ CRM_ACCESS_MODE: 'enforce' });
+  let admin = await enf.admin();
+  await seed.load(admin, data);
+  const rmA = await seed.signIn(admin, 'U-RMA');
+  const own = data.clients.find((c) => c.rmName === 'U-RMA' && c.pan);
+  const theirs = data.clients.find((c) => c.rmName === 'U-RMB' && c.pan);
+  const theirLead = data.leads.find((l) => l.assignedTo === 'U-RMC');            // another branch's RM
+  const visible = async (c) => (await c.store('clients', [])).filter((x) => !x._stub).length;
+
+  /* ---------- #1 duplicate team ids ---------- */
+  await t.step('#1 a second copy of one’s own team record is refused, in either mode; the lookup cannot be shadowed', async () => {
+    const team = await rmA.store('team', []);
+    const me = team.find((m) => m.id === 'U-RMA');
+    const before = await visible(rmA);
+    const r = await rmA.save('team', [Object.assign({}, me, { role: 'Admin', scope: 'all' })].concat(team));
+    const after = await visible(rmA);
+    const stored = (await admin.store('team', [])).filter((m) => m.id === 'U-RMA').length;
+    /* report mode refuses it too (a duplicate id is never valid data) */
+    const rep = await t.startServer({});
+    const ra = await rep.admin(); await seed.load(ra, data);
+    const rr = await seed.signIn(ra, 'U-RMA');
+    const t2 = await rr.store('team', []);
+    const r2 = await rr.save('team', [Object.assign({}, t2.find((m) => m.id === 'U-RMA'), { role: 'Admin', scope: 'all' })].concat(t2));
+    const stored2 = (await ra.store('team', [])).filter((m) => m.id === 'U-RMA').length;
+    /* a team that already holds two records with one id (old data): the account gets no member, not the first copy */
+    const ac = AC.create({ storeRaw: (k) => (k === 'team' ? JSON.stringify([{ id: 'X', role: 'Admin', scope: 'all' }, { id: 'X', role: 'RM' }]) : undefined),
+      memberOfUser: () => null, env: {}, warn: () => {} });
+    const pr = ac.principal({ id: 9, role: 'user', member_id: 'X', email: 'x@x' });
+    if (r.status === 200 || after !== before || stored !== 1 || r2.status === 200 || stored2 !== 1 || pr.member || pr.teamAdmin)
+      throw new Error(JSON.stringify({ enforce: r.status, before, after, stored, report: r2.status, stored2, member: !!pr.member }));
+    return 'enforce ' + r.status + ', report ' + r2.status + '; still one U-RMA; clients seen ' + before + ' → ' + after + '; an ambiguous team gives no member';
+  });
+
+  await t.step('#1 a second team record bound to the same email is refused', async () => {
+    const team = await admin.store('team', []);
+    const r = await admin.save('team', team.concat([{ id: 'U-ZZDUP', name: 'ZZ Dup', role: 'RM', email: seed.email('U-RMA'), status: 'Active' }]));
+    if (r.status === 200) throw new Error('accepted');
+    return r.status + ' — ' + String(r.json && (r.json.error || r.json.message)).slice(0, 70);
+  });
+
+  /* ---------- #2 document links ---------- */
+  await t.step('#2 enforce: a link naming another RM’s client or lead is refused, whichever field names it', async () => {
+    const links = await rmA.store('docLinks', []);
+    const a = await rmA.save('docLinks', links.concat([{ id: 'DL-ZZ1', token: 'zz-tok-aaaaaaaaaaaaaaaa1', clientId: own.id, recordModule: 'CMS', recordId: theirs.id }]));
+    const b = await rmA.save('docLinks', links.concat([{ id: 'DL-ZZ2', token: 'zz-tok-aaaaaaaaaaaaaaaa2', clientId: own.id, leadId: theirLead.id }]));
+    if (a.status !== 403 || b.status !== 403) throw new Error(a.status + ' / ' + b.status);
+    return 'recordId of another RM’s client 403; leadId of another RM’s lead 403';
+  });
+
+  await t.step('#2 any mode: a link whose record is not its own client serves nothing', async () => {
+    const links = await admin.store('docLinks', []);
+    await admin.save('docLinks', links.concat([{ id: 'DL-ZZ3', token: 'zz-tok-bbbbbbbbbbbbbbbb3', clientId: own.id, recordModule: 'CMS', recordId: theirs.id }]));
+    const b = await fetch(enf.base + '/api/public/bundle?token=zz-tok-bbbbbbbbbbbbbbbb3');
+    const txt = await b.text();
+    if (b.status === 200 || txt.includes(theirs.pan)) throw new Error(b.status + ' leaks=' + txt.includes(theirs.pan));
+    return 'bundle ' + b.status + '; nothing of the other client';
+  });
+
+  await t.step('#2 the client-link page shows PANs masked, and a masked PAN sent back keeps the real one', async () => {
+    const links = await admin.store('docLinks', []);
+    await admin.save('docLinks', links.concat([{ id: 'DL-ZZ4', token: 'zz-tok-cccccccccccccccc4', clientId: own.id, recordModule: 'CMS', recordId: own.id }]));
+    const b = await (await fetch(enf.base + '/api/public/bundle?token=zz-tok-cccccccccccccccc4')).json();
+    const shown = (b.store && b.store.clients && b.store.clients[0]) || (b.clients && b.clients[0]) || {};
+    const text = JSON.stringify(b);
+    const masked = 'XXXXXX' + own.pan.slice(-4);
+    const p = await fetch(enf.base + '/api/public/patch?token=zz-tok-cccccccccccccccc4', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: { clients: { [own.id]: Object.assign({}, shown, { city: 'ZZ Link City' }) } },
+        appends: { docSubmissions: [{ id: 'DS-ZZ4', token: 'zz-tok-cccccccccccccccc4', clientId: own.id, answers: { pan: masked } }] } }) });
+    const after = (await admin.store('clients', [])).find((c) => c.id === own.id);
+    const sub = (await admin.store('docSubmissions', [])).find((s) => s.id === 'DS-ZZ4');
+    if (text.includes(own.pan) || shown.pan !== masked || p.status !== 200 || after.pan !== own.pan || after.city !== 'ZZ Link City' || !sub || sub.answers.pan !== own.pan)
+      throw new Error(JSON.stringify({ leak: text.includes(own.pan), shown: shown.pan, patch: p.status, stored: after.pan, city: after.city, sub: sub && sub.answers.pan }));
+    return 'bundle shows ' + masked + '; the update and the submission sent the masked PAN back and the real PAN stayed';
+  });
+
+  /* ---------- #3 masked PAN restore ---------- */
+  await t.step('#3 a masked PAN is restored only from a record the writer may read; no last-four oracle', async () => {
+    const list = await rmA.store('clients', []);
+    const right = await rmA.save('clients', list.concat([{ id: 'CMS-ZZC1', rmName: 'U-RMA', branch: own.branch, cmsName: 'ZZ Copy', recordId: theirs.id, pan: 'XXXXXX' + theirs.pan.slice(-4) }]));
+    const wrong = await rmA.save('clients', list.concat([{ id: 'CMS-ZZC2', rmName: 'U-RMA', branch: own.branch, cmsName: 'ZZ Copy', recordId: theirs.id, pan: 'XXXXXX999Q' }]));
+    const all = await admin.store('clients', []);
+    const copied = all.filter((c) => c.pan === theirs.pan).length;
+    if (right.status === 200 || right.status !== wrong.status || right.text !== wrong.text || copied !== 1)
+      throw new Error(JSON.stringify({ right: right.status, wrong: wrong.status, same: right.text === wrong.text, copies: copied }));
+    return 'right last four ' + right.status + ', wrong last four ' + wrong.status + ' (identical answers); the other client’s PAN exists once';
+  });
+
+  /* ---------- #4 PANs inside text, as keys, in settings ---------- */
+  await t.step('#4 PANs inside free text, as object keys and in settings are masked, and survive a save', async () => {
+    const PAN_IN = 'ZQZPT4321T';
+    const all = await admin.store('clients', []);
+    await admin.save('clients', all.map((c) => (c.id === own.id ? Object.assign({}, c, { notes: 'PAN of spouse ' + PAN_IN + ' noted', panIndex: { [PAN_IN]: 'spouse' } }) : c)));
+    const s = await admin.store('settings', {});
+    await admin.save('settings', Object.assign({}, s, { zzContact: { pan: PAN_IN } }));
+    const r = await rmA.get('/api/storage/clients');
+    const rs = await rmA.get('/api/storage/settings');
+    const mine = (await rmA.store('clients', [])).find((c) => c.id === own.id);
+    const leak = r.text.includes(PAN_IN) || rs.text.includes(PAN_IN);
+    await rmA.save('clients', (await rmA.store('clients', [])).map((c) => (c.id === own.id ? Object.assign({}, c, { city: 'ZZ Note City' }) : c)));
+    const after = (await admin.store('clients', [])).find((c) => c.id === own.id);
+    if (leak || !/XXXXXX321T/.test(mine.notes) || !after.notes.includes(PAN_IN) || !after.panIndex[PAN_IN] || after.city !== 'ZZ Note City')
+      throw new Error(JSON.stringify({ leak, shown: mine.notes, keys: Object.keys(mine.panIndex || {}), stored: after.notes, storedKeys: Object.keys(after.panIndex || {}) }));
+    return 'RM sees "' + mine.notes + '" and key ' + Object.keys(mine.panIndex)[0] + '; settings masked; after the RM’s save the stored text and key still hold the PAN';
+  });
+
+  /* ---------- #5 Reply-To ---------- */
+  const mailPort = Number(process.env.BOSS_PORT || 3000) + 670;
+  const mail = smtp.start(mailPort); await mail.ready;
+  admin = await enf.admin();
+  await admin.put('/api/connections/email', { enabled: true, config: smtp.connector(mailPort) });
+  await admin.post('/api/connections/email/test', {});
+  await t.step('#5 Reply-To cannot carry extra headers', async () => {
+    const n = mail.received.length;
+    const bad = await admin.post('/api/mail/send', { to: own.email, subject: 'ZZ', body: 'ZZ', replyTo: 'a@x.test\r\nFrom: "CEO" <ceo@firm.test>\r\nBcc: z@evil.test' }, { 'X-CRM-Mail': 'compose' });
+    const good = await admin.post('/api/mail/send', { to: own.email, subject: 'ZZ', body: 'ZZ', replyTo: 'replies@zz.test' }, { 'X-CRM-Mail': 'compose' });
+    const raws = mail.received.slice(n).map((m) => m.body);
+    const injected = raws.some((x) => (x.match(/\r\nFrom:/gi) || []).length > 0 && /ceo@firm\.test/.test(x));
+    if (bad.status !== 400 || good.status !== 200 || injected || !raws.some((x) => /Reply-To: replies@zz\.test/.test(x))) throw new Error([bad.status, good.status, injected].join(' / '));
+    return 'CRLF in Reply-To → 400, nothing sent; a plain address → 200 with Reply-To';
+  });
+
+  /* ---------- #6 outbound guard ---------- */
+  await t.step('#6 every spelling of a loopback, private, link-local or metadata address is refused', async () => {
+    const urls = ['https://[::ffff:169.254.169.254]/', 'https://[::ffff:a9fe:a9fe]/', 'https://[::ffff:127.0.0.1]/', 'https://[::ffff:7f00:1]/',
+      'https://[::127.0.0.1]/', 'https://[::7f00:1]/', 'https://[::ffff:0:127.0.0.1]/', 'https://[64:ff9b::7f00:1]/', 'https://[64:ff9b::a9fe:a9fe]/',
+      'https://[2002:7f00:1::]/', 'https://[2002:a9fe:a9fe::]/', 'https://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/', 'https://[fec0::1]/',
+      'https://[fd00:ec2::254]/', 'https://[::]/', 'https://2130706433/', 'https://0x7f.1/', 'https://017700000001/', 'https://0x7f000001/',
+      'https://127.1/', 'https://0/', 'https://169.254.169.254./'];
+    const passed = [];
+    for (const u of urls) { const h = new URL(u).hostname; const r = await guard.check(u, { hosts: [h] }); if (r.ok) passed.push(u); }
+    /* and the firm's own model, allowed private addresses, still never gets metadata */
+    const own2 = await guard.check('https://[::ffff:a9fe:a9fe]/', { hosts: ['[::ffff:a9fe:a9fe]'], allowPrivate: true });
+    if (passed.length || own2.ok) throw new Error('allowed: ' + passed.join(' ') + (own2.ok ? ' + metadata for the own model' : ''));
+    return urls.length + ' spellings refused (mapped, compatible, translated, NAT64, 6to4, Teredo, site-local, integer/octal/hex IPv4); metadata refused even for the own model';
+  });
+
+  /* ---------- #9 compose limits ---------- */
+  await t.step('#9 the recipient limit holds whatever kind of send the request claims; an address typed into remarks is not a recipient', async () => {
+    const many = data.clients.filter((c) => c.rmName === 'U-RMA').map((c) => c.email);
+    while (many.length < 21) many.push(seed.email('U-RMA'));
+    const all = await admin.store('clients', []);
+    await admin.save('clients', all.map((c) => (c.id === own.id ? Object.assign({}, c, { remarks: 'also try outsider@evil.test' }) : c)));
+    const a = await rmA.post('/api/mail/send', { to: many.join(','), subject: 'ZZ', body: 'ZZ' }, { 'X-CRM-Mail': 'template' });
+    const b = await rmA.post('/api/mail/send', { to: 'outsider@evil.test', subject: 'ZZ', body: 'ZZ' }, { 'X-CRM-Mail': 'template' });
+    const c = await rmA.post('/api/mail/send', { to: own.email, subject: 'ZZ', body: 'ZZ' }, { 'X-CRM-Mail': 'template' });
+    if (a.status !== 403 || b.status !== 403 || c.status !== 200) throw new Error([a.status, b.status, c.status].join(' / '));
+    return '21 recipients claimed as template 403; address only in remarks 403; the client’s own email 200';
+  });
+  await mail.close();
+
+  /* ---------- #10 default role ---------- */
+  await t.step('#10 a role list cannot make Admin the default role; a non-admin cannot change the role list', async () => {
+    const team = await admin.store('team', []);
+    await admin.save('team', team.map((m) => (m.id === 'U-RMC' ? Object.assign({}, m, { role: '' }) : m)));
+    const cfg = await admin.store('config', {});
+    await admin.save('config', Object.assign({}, cfg, { roles: ['Admin'] }));
+    const rmC = await seed.signIn(admin, 'U-RMC');
+    const seen = await visible(rmC);
+    const ownC = data.clients.filter((c) => c.rmName === 'U-RMC').length;
+    await admin.save('config', cfg);
+    const ops = await seed.signIn(admin, 'U-OPS');                                 // holds an admin flag, may write settings
+    const r = await ops.save('config', Object.assign({}, cfg, { roles: ['Admin', 'RM'] }));
+    if (seen !== ownC || r.status === 200) throw new Error(JSON.stringify({ seen, ownC, rolesWrite: r.status }));
+    return 'empty-role RM with roles=[Admin]: sees own ' + seen + ' (not all); settings writer changing roles: ' + r.status;
+  });
+
+  /* ---------- #11 placeholders ---------- */
+  await t.step('#11 placeholder records never replace real ones, in either mode', async () => {
+    const all = await admin.store('clients', []);
+    const stubs = all.map((c) => ({ id: c.id, _stub: true, cmsName: 'Restricted record' }));
+    const e = await rmA.save('clients', stubs);
+    const rep = await t.startServer({});
+    const ra = await rep.admin(); await seed.load(ra, data);
+    const rr = await seed.signIn(ra, 'U-RMA');
+    const r = await rr.save('clients', stubs);
+    const afterE = (await admin.store('clients', [])).filter((c) => c._stub || c.cmsName === 'Restricted record').length;
+    const afterR = (await ra.store('clients', [])).filter((c) => c._stub || c.cmsName === 'Restricted record').length;
+    if (afterE || afterR) throw new Error(JSON.stringify({ enforce: e.status, report: r.status, afterE, afterR }));
+    return 'enforce ' + e.status + ', report ' + r.status + '; no placeholder stored, every client intact';
+  });
+
+  /* ---------- #12 dynamic keys, reserved keys ---------- */
+  await t.step('#12 upload rows follow CMS access (PANs masked); reserved store names are refused', async () => {
+    admin = await enf.admin();
+    await admin.save('assetUploads', [{ id: 'UP-ZZ1', file: 'zz.xlsx' }]);
+    await admin.save('assetRows.UP-ZZ1', [{ client_name: 'ZZ', pan: own.pan }]);
+    const rows = await rmA.get('/api/storage/assetRows.UP-ZZ1');
+    const exec = await seed.signIn(admin, 'U-EXEC');                       // no CMS view
+    const ex = await exec.get('/api/storage/assetRows.UP-ZZ1');
+    const proto = await admin.save('__proto__', { x: 1 });
+    const ctor = await admin.save('constructor', { x: 1 });
+    const has = await admin.get('/api/storage/hasOwnProperty');
+    if (rows.status !== 200 || rows.text.includes(own.pan) || ex.status !== 403 || proto.status !== 400 || ctor.status !== 400 || has.status !== 404)
+      throw new Error([rows.status, rows.text.includes(own.pan), ex.status, proto.status, ctor.status, has.status].join(' / '));
+    return 'RM with CMS view 200 (PAN masked); no CMS view 403; __proto__/constructor 400; hasOwnProperty 404';
+  });
+
+  /* ---------- #8 inactive team record ---------- */
+  await t.step('#8 a team record set Inactive or deleted ends that person’s access, even without the account sync; the administrator account is not locked out', async () => {
+    admin = await enf.admin();
+    const tl = await seed.signIn(admin, 'U-TL');
+    const team = await admin.store('team', []);
+    await admin.save('team', team.map((m) => (m.id === 'U-TL' ? Object.assign({}, m, { status: 'Inactive' }) : m)));
+    const s = await tl.get('/api/session');
+    let relog = 'refused'; try { await enf.login(seed.email('U-TL'), 'Passw0rd-u-tl'); relog = 'signed in'; } catch (e) { /* refused */ }
+    const adm2 = await enf.admin();
+    const still = (await adm2.get('/api/session')).status;
+    if (s.status !== 401 || relog !== 'refused' || still !== 200) throw new Error(JSON.stringify({ session: s.status, relog, admin: still }));
+    return 'session 401 (' + s.json.session + '); sign-in refused; administrator account unaffected';
+  });
+
+  /* ---------- #7 attempt limit ---------- */
+  await t.step('#7 a successful sign-in with one’s own account does not reset the limit on guesses at another', async () => {
+    const lim = await t.startServer({});
+    const a = await lim.admin();
+    await a.save('team', seed.build(5).team);
+    await seed.signIn(a, 'U-RMA');
+    const post = (email, password) => fetch(lim.base + '/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email, password }).toString() }).then((r) => r.status);
+    const st = [];
+    for (let round = 0; round < 4 && !st.includes(429); round++) {
+      for (let i = 0; i < 6; i++) st.push(await post('test@finowise.test', 'guess-' + round + '-' + i));
+      await post(seed.email('U-RMA'), 'Passw0rd-u-rma');
+    }
+    await lim.stop();
+    if (!st.includes(429)) throw new Error(st.join(','));
+    return 'guesses at the administrator: ' + st.join(',') + ' — 429 after ' + st.indexOf(429) + ', despite own sign-ins in between';
+  });
+
+  /* ---------- suspected: SMTP to a metadata address ---------- */
+  await t.step('(suspected) the mail connector never connects to a link-local or metadata address', async () => {
+    admin = await enf.admin();
+    await admin.put('/api/connections/email', { enabled: true, config: { host: '169.254.169.254', port: 25, fromEmail: 'o@zz.test' } });
+    const t0 = Date.now();
+    const r = await admin.post('/api/connections/email/test', {});
+    const ms = Date.now() - t0;
+    if (r.json.ok || !/may never be reached|link-local|metadata/i.test(r.json.message || '') || ms > 3000) throw new Error(ms + ' ms ' + JSON.stringify(r.json).slice(0, 160));
+    return 'refused in ' + ms + ' ms: "' + String(r.json.message).slice(0, 60) + '…"';
+  });
+});

@@ -6457,7 +6457,9 @@ function roleNorm(x){ return String(x === null || x === undefined ? '' : x).trim
 function defaultRole(){
   const roles = roleList();
   const junior = defaultRoles().filter(r=>r !== ADMIN_ROLE).slice(-1)[0];
-  return roles.find(r=>roleNorm(r) === roleNorm(junior)) || roles.find(r=>r !== ADMIN_ROLE) || ADMIN_ROLE;
+  // Never Admin (Phase 1, step 6b): a role list with no other role in it
+  // must not make every member without a role of their own an Admin.
+  return roles.find(r=>roleNorm(r) === roleNorm(junior)) || roles.find(r=>r !== ADMIN_ROLE) || junior;
 }
 /* EVERYWHERE A ROLE IS NAMED, IN ONE PLACE.
 

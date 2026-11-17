@@ -85,7 +85,9 @@ async function startServer(env, opts) {
     { cwd: ROOT, env: Object.assign({}, process.env, { CRM_USERS_DB: usersDb }), stdio: 'ignore' });
   if (!(opts && opts.dir)) { run(['add', signIn.EMAIL, signIn.PASSWORD]); run(['role', signIn.EMAIL, 'admin']); }
   const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
-    env: Object.assign({}, process.env, env || {}, { PORT: String(port), CRM_DB_FILE: path.join(dir, 'data.json'),
+    /* A server a suite starts runs in the mode the suite asks for, report
+       when it names none, whatever mode the runner itself was started in. */
+    env: Object.assign({}, process.env, { CRM_ACCESS_MODE: 'report' }, env || {}, { PORT: String(port), CRM_DB_FILE: path.join(dir, 'data.json'),
       CRM_USERS_DB: usersDb, CRM_CONNECTIONS_FILE: path.join(dir, 'connections.json'), CRM_REMINDERS: 'manual',
       CRM_BUSINESS_TZ: 'UTC', CRM_PIN_LOOKUP_URL: 'http://127.0.0.1:9/', CRM_IFSC_LOOKUP_URL: 'http://127.0.0.1:9/' }) });
   let log = '';
@@ -124,6 +126,19 @@ function secSuite(body) {
     },
   };
   (async () => {
+    /* The runner's own server is in whatever mode the run uses. A security
+       suite tests both modes on servers of its own, and its report-mode
+       steps use the runner's server; when the run is in enforce mode those
+       steps get a report-mode server of their own instead (step 6b). */
+    if (process.env.CRM_ACCESS_MODE === 'enforce') {
+      try {
+        const own = await startServer({ CRM_ACCESS_MODE: 'report' });
+        t.base = own.base;
+        t.anonymous = () => client('', '', '', own.base);
+        t.admin = own.admin;
+        t.login = own.login;
+      } catch (e) { errors.push('SUITE CRASHED  could not start its report-mode server: ' + e.message); }
+    }
     try { await body(t); }
     catch (e) { const msg = 'SUITE CRASHED  ' + (e && e.stack || e); console.log(msg); errors.push(msg); }
     for (const s of started) {

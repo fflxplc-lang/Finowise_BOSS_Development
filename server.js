@@ -485,14 +485,26 @@ function smtpSession({ host, port, secure, username, password, message }, cb) {
     }
   };
 
-  try {
-    socket = secure
-      ? tls.connect({ host, port, servername: host, rejectUnauthorized: false }, start)
-      : net.connect({ host, port }, start);
-    socket.once('error', (e) => fail('Could not reach ' + host + ':' + port + ' — ' + e.message));
-  } catch (e) {
-    fail('Could not open a connection — ' + e.message);
-  }
+  /* Step 6b: the SMTP host is resolved once and classified like any other
+     outbound address. A private relay is a normal set-up and is allowed;
+     link-local, cloud metadata and reserved addresses never are. The
+     connection goes to the address that was checked. */
+  const lookupHost = (cb2) => (net.isIP(host) ? cb2(null, host, net.isIP(host))
+    : require('dns').lookup(host, { verbatim: true }, cb2));
+  lookupHost((err, address, family) => {
+    if (done) return;
+    if (err || !address) return fail('Could not find ' + host + ' — ' + (err ? err.code || err.message : 'no address'));
+    if (outbound.classify(address) === 'always')
+      return fail('That address (a link-local, metadata or reserved address) may never be reached.');
+    try {
+      socket = secure
+        ? tls.connect({ host: address, port, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: false }, start)
+        : net.connect({ host: address, port, family }, start);
+      socket.once('error', (e) => fail('Could not reach ' + host + ':' + port + ' — ' + e.message));
+    } catch (e) {
+      fail('Could not open a connection — ' + e.message);
+    }
+  });
 }
 // Turn an SMTP reply into something worth reading.
 function smtpExplain(stage, code, text) {
@@ -734,9 +746,24 @@ function sessionOf(req) {
         action: 'session.end', target: 'session', outcome: 'ended', reason: checked.reason });
     } catch (e) { /* the audit trail is best effort here; the session is closed either way */ }
   }
+  /* Step 6b, every mode: a team record set Inactive (or deleted) ends that
+     person's access as account deactivation does, even when nobody ran
+     the account sync (only an administrator can). Not for the
+     administrator account, whose access is its own and which a team
+     edit must never be able to lock out. */
+  if (checked.ok && memberInactive(checked.user)) {
+    sessions.close(checked.row, 'member_inactive');
+    auditLog.append({ userId: checked.user.id, email: checked.user.email || '', memberId: checked.user.member_id || '',
+      action: 'session.end', target: 'session', outcome: 'ended', reason: 'member_inactive' });
+    req._crmSession = { ok: false, reason: 'member_inactive', row: checked.row, token };
+    return req._crmSession;
+  }
   checked.token = token;
   req._crmSession = checked;
   return checked;
+}
+function memberInactive(user) {
+  return !!user && user.role !== 'admin' && accessControl.memberState(user).state === 'inactive';
 }
 function signedInUser(req) {
   const checked = sessionOf(req);
@@ -750,18 +777,43 @@ function isSignedIn(req) {
 
 // Slow down password guessing. In-memory and per-process, which is all this
 // single-process deployment needs.
+/* Step 6b: counted three ways in each ten-minute window, so a correct
+   sign-in with one's own account can no longer wipe the count of guesses
+   at somebody else's: per address and account (8), per account from any
+   address (20), and per address (30, never reset by a success, so many
+   accounts cannot be tried from one place either). A success clears only
+   its own account's counts. */
 const attempts = new Map();
-const MAX_ATTEMPTS = 8, ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
-function tooManyAttempts(ip) {
-  const rec = attempts.get(ip);
-  if (!rec) return false;
-  if (Date.now() - rec.first > ATTEMPT_WINDOW_MS) { attempts.delete(ip); return false; }
-  return rec.count >= MAX_ATTEMPTS;
+const ATTEMPT_WINDOW_MS = 10 * 60 * 1000, LIMIT_PAIR = 8, LIMIT_ACCOUNT = 20, LIMIT_IP = 30;
+function attemptKeys(ip, email) {
+  const e = String(email || '').trim().toLowerCase();
+  return { ip: 'ip\u0000' + ip, pair: e ? 'pair\u0000' + ip + '\u0000' + e : '', acct: e ? 'acct\u0000' + e : '' };
 }
-function noteFailure(ip) {
-  const rec = attempts.get(ip);
-  if (!rec || Date.now() - rec.first > ATTEMPT_WINDOW_MS) attempts.set(ip, { count: 1, first: Date.now() });
+function attemptCount(k) {
+  const rec = k ? attempts.get(k) : null;
+  if (!rec) return 0;
+  if (Date.now() - rec.first > ATTEMPT_WINDOW_MS) { attempts.delete(k); return 0; }
+  return rec.count;
+}
+function attemptBump(k) {
+  if (!k) return;
+  const rec = attempts.get(k);
+  if (!rec || Date.now() - rec.first > ATTEMPT_WINDOW_MS) attempts.set(k, { count: 1, first: Date.now() });
   else rec.count++;
+  if (attempts.size > 20000) for (const [key, r] of attempts) if (Date.now() - r.first > ATTEMPT_WINDOW_MS) attempts.delete(key);
+}
+function tooManyAttempts(ip, email) {
+  const k = attemptKeys(ip, email);
+  return attemptCount(k.ip) >= LIMIT_IP || attemptCount(k.pair) >= LIMIT_PAIR || attemptCount(k.acct) >= LIMIT_ACCOUNT;
+}
+function noteFailure(ip, email) {
+  const k = attemptKeys(ip, email);
+  attemptBump(k.ip); attemptBump(k.pair); attemptBump(k.acct);
+}
+function noteSuccess(ip, email) {
+  const k = attemptKeys(ip, email);
+  if (k.pair) attempts.delete(k.pair);
+  if (k.acct) attempts.delete(k.acct);
 }
 
 // Only ever redirect back to a path on this site, never to an absolute URL
@@ -907,7 +959,7 @@ app.post('/login', (req, res) => {
   const ip = req.ip || 'unknown';
   res.set('Cache-Control', 'no-store');
 
-  if (tooManyAttempts(ip)) {
+  if (tooManyAttempts(ip, String((req.body || {}).email || ''))) {
     auditSignInFailure(null, 'too_many_attempts');
     return res.status(429).type('html')
       .send(loginPage({ error: 'Too many attempts. Wait a few minutes and try again.', next,
@@ -918,20 +970,20 @@ app.post('/login', (req, res) => {
   const user = findUserByEmail.get(email);
   // A member who has been deactivated in the CRM cannot sign in. Same message
   // as a wrong password, so the page still says nothing about who exists.
-  if (user && user.active === 0) {
-    noteFailure(ip);
-    auditSignInFailure(user, 'deactivated');
+  if (user && (user.active === 0 || memberInactive(user))) {
+    noteFailure(ip, email);
+    auditSignInFailure(user, user.active === 0 ? 'deactivated' : 'member_inactive');
     return res.status(401).type('html')
       .send(loginPage({ error: 'That email and password do not match.', next, email }));
   }
   // One message for both cases, so this cannot be used to discover which emails exist.
   if (!user || !passwordMatches(password, user.password_hash)) {
-    noteFailure(ip);
+    noteFailure(ip, email);
     auditSignInFailure(user, user ? 'wrong_password' : 'no_such_account');
     return res.status(401).type('html')
       .send(loginPage({ error: 'That email and password do not match.', next, email }));
   }
-  attempts.delete(ip);
+  noteSuccess(ip, email);
   if (user.two_factor) {
     // The password was right; the session waits for the emailed code.
     const ch = newOtpChallenge(user, 'login', next);
@@ -1113,16 +1165,16 @@ app.post('/login/otp', (req, res) => {
   if (!ch) return otpRestart(res, 'That sign-in has expired. Sign in again to get a new code.');
   const why = checkOtp(ch, (req.body || {}).code);
   if (why === 'expired') { otpChallenges.delete(ch.id); return otpRestart(res, 'That code has expired. Sign in again to get a new one.'); }
-  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip); auditSignInFailure(findUserById.get(ch.userId), 'code_locked'); return otpRestart(res, 'Too many wrong codes. Sign in again to get a new one.'); }
+  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip, ch.email); auditSignInFailure(findUserById.get(ch.userId), 'code_locked'); return otpRestart(res, 'Too many wrong codes. Sign in again to get a new one.'); }
   if (why) {
-    noteFailure(ip);
+    noteFailure(ip, ch.email);
     auditSignInFailure(findUserById.get(ch.userId), 'wrong_code');
     return res.status(401).type('html').send(otpPage({ ch,
       error: 'That code is not right. ' + (OTP_MAX_TRIES - ch.tries) + ' tr' + (OTP_MAX_TRIES - ch.tries === 1 ? 'y' : 'ies') + ' left.' }));
   }
   otpChallenges.delete(ch.id);
   const user = findUserById.get(ch.userId);
-  if (!user || user.active === 0) return otpRestart(res, 'That email and password do not match.');
+  if (!user || user.active === 0 || memberInactive(user)) return otpRestart(res, 'That email and password do not match.');
   res.clearCookie(OTP_COOKIE, { path: '/login' });
   completeSignIn(req, res, user, ch.next);
 });
@@ -1151,19 +1203,19 @@ app.post('/login/otp/resend', (req, res) => {
 app.post('/login/json', (req, res) => {
   res.set('Cache-Control', 'no-store');
   const ip = req.ip || 'unknown';
-  if (tooManyAttempts(ip)) {
+  if (tooManyAttempts(ip, String((req.body || {}).email || ''))) {
     auditSignInFailure(null, 'too_many_attempts');
     return res.status(429).json({ ok: false, message: 'Too many attempts. Wait a few minutes and try again.' });
   }
   const body = req.body || {};
   const email = String(body.email || '').trim();
   const user = findUserByEmail.get(email);
-  if (!user || user.active === 0 || !passwordMatches(String(body.password || ''), user.password_hash)) {
-    noteFailure(ip);
+  if (!user || user.active === 0 || memberInactive(user) || !passwordMatches(String(body.password || ''), user.password_hash)) {
+    noteFailure(ip, email);
     auditSignInFailure(user, !user ? 'no_such_account' : user.active === 0 ? 'deactivated' : 'wrong_password');
     return res.status(401).json({ ok: false, message: 'That email and password do not match.' });
   }
-  attempts.delete(ip);
+  noteSuccess(ip, email);
   const expect = String(body.expect || '').trim().toLowerCase();
   if (expect && String(user.email).toLowerCase() !== expect) {
     return res.status(409).json({ ok: false, reason: 'different_account',
@@ -1194,15 +1246,15 @@ app.post('/login/otp/json', (req, res) => {
   if (!ch) return restart('That sign-in has expired. Enter your password again for a new code.');
   const why = checkOtp(ch, (req.body || {}).code);
   if (why === 'expired') { otpChallenges.delete(ch.id); return restart('That code has expired. Enter your password again for a new one.'); }
-  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip); auditSignInFailure(findUserById.get(ch.userId), 'code_locked'); return restart('Too many wrong codes. Enter your password again for a new one.'); }
+  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip, ch.email); auditSignInFailure(findUserById.get(ch.userId), 'code_locked'); return restart('Too many wrong codes. Enter your password again for a new one.'); }
   if (why) {
-    noteFailure(ip);
+    noteFailure(ip, ch.email);
     auditSignInFailure(findUserById.get(ch.userId), 'wrong_code');
     return res.status(401).json({ ok: false, message: 'That code is not right. ' + (OTP_MAX_TRIES - ch.tries) + ' left.' });
   }
   otpChallenges.delete(ch.id);
   const user = findUserById.get(ch.userId);
-  if (!user || user.active === 0) return restart('That email and password do not match.');
+  if (!user || user.active === 0 || memberInactive(user)) return restart('That email and password do not match.');
   res.clearCookie(OTP_COOKIE, { path: '/login' });
   noteUserLogin.run(user.id);
   noteLoginAlert(req, user);
@@ -1340,8 +1392,21 @@ function noteScopedRead(req, p, key, view) {
 }
 
 // GET /api/storage/:key -> { key, value } | 404
+/* Step 6b, every mode: a store's name is a plain name. The names an object
+   already answers to (__proto__, constructor, hasOwnProperty, ...) are not
+   stores and never will be. */
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'hasOwnProperty', 'toString', 'valueOf', 'isPrototypeOf',
+  'propertyIsEnumerable', 'toLocaleString', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__']);
+app.all('/api/storage/:key', (req, res, next) => {
+  const key = String(req.params.key || '');
+  if (!/^[A-Za-z0-9_.\-]{1,160}$/.test(key) || RESERVED_KEYS.has(key)) {
+    if (req.method === 'GET' && RESERVED_KEYS.has(key)) return res.status(404).json({ error: 'not found' });
+    return res.status(400).json({ error: 'That is not a store name.' });
+  }
+  next();
+});
 app.get('/api/storage/:key', checkApiKey, (req, res) => {
-  const value = store[req.params.key];
+  const value = Object.prototype.hasOwnProperty.call(store, req.params.key) ? store[req.params.key] : undefined;
   if (value === undefined) return res.status(404).json({ error: 'not found' });
   /* Phase 1: what this person may read of the store (access-control.js).
      Report mode serves the store as before and writes down, at most once
@@ -1719,13 +1784,20 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
         }
         return parsedOnce[k];
       };
+      /* Step 6b: only records this person may read are sources, in every
+         mode: the stored copy of the record itself, and the client or lead
+         it names. Anything else leaves the masked value untraced, and the
+         save is refused with the same answer as for a wrong last four. */
+      const mayRead = accessControl.readableFor(accessControl.principal(signedInUser(req)));
       const linkedTo = (r) => {
         const out = [];
-        const find = (k, id) => { if (!id) return; const hit = byIdOf(k).get(id); if (hit) out.push(hit); };
+        const find = (k, id) => { if (!id) return; const hit = byIdOf(k).get(id); if (hit && mayRead(k, hit)) out.push(hit); };
         if (r && typeof r === 'object') { find('clients', r.clientId); find('leads', r.leadId); find('clients', r.recordId); find('leads', r.recordId); }
         return out;
       };
-      const fixed = AccessControl.restoreMaskedPans(current, incoming, linkedTo);
+      const ownKey = req.params.key;
+      const mayUseOwn = accessControl.classOf(ownKey) === 'R' ? (was) => mayRead(ownKey, was) : null;
+      const fixed = AccessControl.restoreMaskedPans(current, incoming, linkedTo, mayUseOwn);
       if (fixed.unresolved) {
         auditLog.append(Object.assign(auditWho(req), { action: 'pan.masked-save', target: req.params.key, outcome: 'deny', count: fixed.unresolved,
           reason: 'masked PAN with no stored PAN to restore' }));
@@ -1766,6 +1838,20 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
      person could not see exactly as it was. */
   let nextValue, savedValue;
   try { nextValue = JSON.parse(value); } catch (e) { nextValue = undefined; }
+  /* Step 6b, every mode, everyone: a placeholder stands for the stored
+     record (never replaces it), and a save may not add a duplicate id or a
+     second team record bound to one email. */
+  if (nextValue !== undefined) {
+    const stubbed = accessControl.resolveStubs(req.params.key, store[req.params.key], nextValue);
+    if (stubbed.stubs) { nextValue = stubbed.value; value = JSON.stringify(nextValue); }
+    const dup = accessControl.duplicates(req.params.key, store[req.params.key], nextValue);
+    if (dup.ids.length || dup.emails.length) {
+      auditLog.append(Object.assign(auditWho(req), { action: 'store.duplicate', target: req.params.key, outcome: 'deny',
+        ids: dup.ids, count: dup.ids.length + dup.emails.length, reason: dup.ids.length ? 'duplicate id' : 'second team record for one email' }));
+      return res.status(422).json({ error: dup.ids.length ? 'Not saved: two records here have the same id (' + dup.ids.slice(0, 3).join(', ') + ').'
+        : 'Not saved: two team members here have the same email address.' });
+    }
+  }
   if (nextValue !== undefined) {
     const key = req.params.key;
     const p = accessControl.principal(signedInUser(req));
@@ -2226,7 +2312,8 @@ app.post('/api/mail/send', checkApiKey, (req, res) => {
   const reasons = d.ok ? [] : d.reason.split(',');
   const who = p ? String(p.userId) : '?';
   const recent = (mailSentAt.get(who) || []).filter((t) => Date.now() - t < 3600000);
-  if (kind === 'compose' && p && !p.admin && recent.length >= MAIL_HOURLY_CAP) reasons.push('hourly_cap');
+  const capped = kind === 'compose' || kind === 'template';            // step 6b: a request cannot leave the cap by claiming "template"
+  if (capped && p && !p.admin && recent.length >= MAIL_HOURLY_CAP) reasons.push('hourly_cap');
   if (reasons.length) {
     auditLog.append(Object.assign(auditWho(req), { action: 'mail.send', target: kind, mode: accessControl.MODE, count: addrs.length,
       fields: domains, outcome: enforce ? 'deny' : 'would-deny', reason: reasons.join(',') }));
@@ -2238,7 +2325,7 @@ app.post('/api/mail/send', checkApiKey, (req, res) => {
           : 'You have sent ' + MAIL_HOURLY_CAP + ' messages in the last hour. Wait a little and try again.' });
     }
   }
-  if (kind === 'compose') { recent.push(Date.now()); mailSentAt.set(who, recent); }
+  if (capped) { recent.push(Date.now()); mailSentAt.set(who, recent); }
   sendMail(body, null, (status, json) => {
     auditLog.append(Object.assign(auditWho(req), { action: 'mail.send', target: kind, count: addrs.length, fields: domains,
       outcome: json && json.ok ? 'ok' : 'failed', reason: json && json.ok ? '' : 'HTTP ' + status }));
@@ -2894,6 +2981,12 @@ function sendMail(body, allowed, done) {
   if (!to.length) return done(400, { ok: false, message: 'No recipient.' });
   const bad = to.concat(cc).find(a => !ADDRESS_RE.test(a));
   if (bad) return done(400, { ok: false, message: '"' + bad + '" is not a usable email address.' });
+  /* Step 6b: Reply-To is one address and nothing else. It was written into
+     the message as given, so a line break in it could add headers (a
+     second From, a Bcc). */
+  const replyTo = String(body.replyTo || '').trim();
+  if (replyTo && (!ADDRESS_RE.test(replyTo) || /[\r\n]/.test(replyTo)))
+    return done(400, { ok: false, message: 'The reply-to address is not a single usable email address.' });
   if (allowed) {
     const set = new Set(allowed.filter(Boolean).map((a) => String(a).toLowerCase()));
     const outside = to.concat(cc).find((a) => !set.has(a.toLowerCase()));
@@ -2926,7 +3019,7 @@ function sendMail(body, allowed, done) {
 
   const msg = buildMessage({
     fromEmail, fromName: config.fromName, to, cc,
-    replyTo: (body.replyTo || '').trim() || undefined,
+    replyTo: replyTo || undefined,
     subject: body.subject || '(no subject)',
     body: body.body || '',
     html: !!body.html,
@@ -3119,6 +3212,14 @@ app.post('/api/apiconnectors/:id/call', checkApiKey, (req, res) => {
   apiConnFetch({ url, method: b.method || 'GET', headers, body: b.body, timeout: b.timeout, hosts }, (r) => {
     auditLog.append(Object.assign(auditWho(req), { action: 'connector.call', target: 'apiconn:' + id, outcome: r.blocked ? 'deny' : 'ok',
       reason: r.blocked || ('HTTP ' + (r.status || 0)), fields: (() => { try { return [new URL(url).hostname]; } catch (e) { return []; } })() }));
+    /* Step 6b: an approved host that echoes the request back must not hand
+       the stored secret to the caller: it is cut out of whatever returns. */
+    if (secret && String(secret).length >= 4) {
+      const enc = [String(secret), encodeURIComponent(String(secret)), Buffer.from(String(auth.username || '') + ':' + secret).toString('base64')];
+      let text = JSON.stringify(r);
+      enc.forEach((x) => { if (x && x.length >= 4) text = text.split(x).join('[stored secret]'); });
+      return res.json(JSON.parse(text));
+    }
     res.json(r);
   });
 });
@@ -4143,10 +4244,16 @@ function publicScope(token) {
     const converted = !lead && link.leadId
       ? clients.find((c) => c && (c.id === link.leadId || c.convertedFromLeadId === link.leadId))
       : null;
+    /* Step 6b, every mode: a link is only as wide as its own client. One
+       whose record is a different client, or a review of a different
+       client, than the client it names is not a valid link: it serves
+       nothing and accepts nothing. */
+    if (link.recordModule === 'CMS' && link.clientId && link.recordId && link.clientId !== link.recordId) return null;
     const client = link.recordModule === 'CMS' ? clients.find((c) => c.id === link.recordId)
       : converted
       || (lead && lead.convertedToClientId ? clients.find((c) => c.id === lead.convertedToClientId) : null);
     const review = reviews.find((r) => r && (r.ctFormToken === token || (link.recordModule === 'RMS' && r.id === link.recordId))) || null;
+    if (review && link.clientId && review.clientId && review.clientId !== link.clientId) return null;
     const rec = link.allocationId ? recs.find((r) => r.id === link.allocationId) : null;
     const reviewClient = review ? clients.find((c) => c.id === review.clientId) : null;
     const owner = (lead && lead.assignedTo) || (client && client.rmName) || (review && review.assignTo) || '';
@@ -4321,8 +4428,39 @@ app.get('/api/public/bundle', (req, res) => {
       : !conn.enabled ? 'The email connector is switched off.'
       : conn.status !== 'Connected' ? 'The email connector has not passed a connection test.' : '',
   };
-  res.json({ ok: true, kind: scope.kind, store: publicBundle(scope), mail });
+  /* Step 6b: PANs go out masked (XXXXXX234F) on a client's link too: a
+     link is a URL that can be forwarded. A masked PAN coming back means
+     "unchanged" (see /api/public/patch). */
+  const bundle = publicBundle(scope);
+  const counter = { n: 0 };
+  ['docLinks', 'docSubmissions', 'leads', 'clients', 'reviews', 'recommendations', 'tasks', 'businessEntries', 'queries', 'queryReplies']
+    .forEach((k) => { if (bundle[k]) bundle[k] = AccessControl.maskPansDeep(bundle[k], counter); });
+  res.json({ ok: true, kind: scope.kind, store: bundle, mail });
 });
+/* A masked PAN sent back from a client's link is put back from the records
+   that link covers (or the stored row being updated). One that cannot be
+   traced is refused: the client types the full PAN. */
+function publicRestorePans(scope, appends, updates) {
+  const r = scope.records || {};
+  const sources = [r.lead, r.client, r.review, r.rec].filter(Boolean);
+  let unresolved = 0;
+  const outA = {}, outU = {};
+  for (const [key, rows] of Object.entries(appends || {})) {
+    if (!Array.isArray(rows)) { outA[key] = rows; continue; }
+    const fixed = AccessControl.restoreMaskedPans([], rows, () => sources);
+    unresolved += fixed.unresolved; outA[key] = fixed.value;
+  }
+  for (const [key, byId] of Object.entries(updates || {})) {
+    if (!byId || typeof byId !== 'object') { outU[key] = byId; continue; }
+    const ids = Object.keys(byId);
+    const rows = ids.map((id) => Object.assign({}, byId[id], { id }));
+    const fixed = AccessControl.restoreMaskedPans(storeList(key), rows, () => sources);
+    unresolved += fixed.unresolved;
+    outU[key] = {};
+    fixed.value.forEach((row, i) => { outU[key][ids[i]] = row; });
+  }
+  return { unresolved, appends: outA, updates: outU };
+}
 
 // What the page did: rows added, and records changed. Every id is checked
 // against the token's own scope before anything is written.
@@ -4369,7 +4507,9 @@ app.post('/api/public/patch', (req, res) => {
   res.set('Cache-Control', 'no-store');
   if (!scope) return res.status(404).json({ ok: false, message: 'This link is not valid any more.' });
   const body = req.body || {};
-  const appends = body.appends || {}, updates = body.updates || {};
+  const restoredPans = publicRestorePans(scope, body.appends || {}, body.updates || {});
+  if (restoredPans.unresolved) return res.status(400).json({ ok: false, message: 'A PAN here is shown masked and cannot be matched. Type the full PAN.' });
+  const appends = restoredPans.appends, updates = restoredPans.updates;
   const refused = [];
 
   /* What a client's own link posts arrives from outside. The page checks

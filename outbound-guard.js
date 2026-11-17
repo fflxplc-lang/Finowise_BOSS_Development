@@ -30,34 +30,74 @@ const http = require('http');
 const https = require('https');
 
 function v4parts(ip) { return ip.split('.').map(Number); }
-/* 'always' (never reachable), 'private' (only with allowPrivate), 'public'. */
+function classifyV4(p, q, r) {
+  if (p === 0) return 'always';                                    // 0.0.0.0/8 "this network"
+  if (p === 169 && q === 254) return 'always';                     // link-local, incl. 169.254.169.254 metadata
+  if (p >= 224) return 'always';                                   // multicast and reserved
+  if (p === 192 && q === 0 && r === 0) return 'always';            // 192.0.0.0/24 IETF
+  if ((p === 192 && q === 0 && r === 2) || (p === 198 && q === 51 && r === 100) || (p === 203 && q === 0 && r === 113)) return 'always';   // documentation
+  if (p === 100 && q >= 64 && q <= 127) return 'private';          // CGNAT 100.64/10
+  if (p === 127) return 'private';                                 // loopback
+  if (p === 10) return 'private';
+  if (p === 172 && q >= 16 && q <= 31) return 'private';
+  if (p === 192 && q === 168) return 'private';
+  if (p === 198 && (q === 18 || q === 19)) return 'private';       // benchmarking
+  return 'public';
+}
+/* An IPv6 address as its eight 16-bit groups, whatever the spelling
+   (compressed, with an embedded dotted IPv4, mixed case, a zone id). */
+function v6words(addr) {
+  let a = String(addr || '').replace(/^\[|\]$/g, '').split('%')[0].toLowerCase();
+  if (!net.isIPv6(a)) return null;
+  let tail = [];
+  const m = a.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (m) {
+    const b = m.slice(1).map(Number);
+    tail = [(b[0] << 8) | b[1], (b[2] << 8) | b[3]];
+    a = a.slice(0, a.length - m[0].length);
+    if (a.endsWith(':') && !a.endsWith('::')) a = a.slice(0, -1);
+  }
+  const dbl = a.indexOf('::');
+  const part = (x) => (x ? x.split(':').filter((y) => y !== '') : []);
+  let words;
+  if (dbl >= 0) {
+    const h = part(a.slice(0, dbl)), t = part(a.slice(dbl + 2));
+    const fill = 8 - tail.length - h.length - t.length;
+    if (fill < 0) return null;
+    words = h.concat(new Array(fill).fill('0'), t);
+  } else words = part(a);
+  words = words.map((x) => parseInt(x, 16)).concat(tail);
+  return words.length === 8 && words.every((w) => w >= 0 && w <= 0xffff) ? words : null;
+}
+const v4of = (hi, lo) => [hi >> 8, hi & 255, lo >> 8, lo & 255];
+/* 'always' (never reachable), 'private' (only with allowPrivate), 'public'.
+   Step 6b: every IPv6 form that carries or reaches an IPv4 address is
+   classified by that IPv4 address (mapped ::ffff:a.b.c.d in either
+   spelling, IPv4-compatible ::a.b.c.d, IPv4-translated ::ffff:0:a.b.c.d,
+   NAT64 64:ff9b::/96, 6to4 2002::/16); Teredo, documentation, site-local
+   and the cloud metadata address over IPv6 are refused. */
 function classify(ip) {
-  let a = String(ip || '').toLowerCase();
-  if (a.startsWith('::ffff:') && net.isIPv4(a.slice(7))) a = a.slice(7);          // IPv4-mapped IPv6
-  if (net.isIPv4(a)) {
-    const [p, q] = v4parts(a);
-    if (p === 0) return 'always';                                  // 0.0.0.0/8 "this network"
-    if (p === 169 && q === 254) return 'always';                   // link-local, incl. 169.254.169.254 metadata
-    if (p >= 224) return 'always';                                 // multicast and reserved
-    if (p === 100 && q >= 64 && q <= 127) return 'private';        // CGNAT 100.64/10
-    if (p === 127) return 'private';                               // loopback
-    if (p === 10) return 'private';
-    if (p === 172 && q >= 16 && q <= 31) return 'private';
-    if (p === 192 && q === 168) return 'private';
-    if (p === 192 && q === 0 && v4parts(a)[2] === 0) return 'always';   // 192.0.0.0/24 IETF
-    if (p === 198 && (q === 18 || q === 19)) return 'private';     // benchmarking
-    return 'public';
-  }
-  if (net.isIPv6(a)) {
-    if (a === '::' ) return 'always';
-    if (a === '::1') return 'private';
-    if (/^fe[89ab]/.test(a)) return 'always';                      // fe80::/10 link-local
-    if (/^f[cd]/.test(a)) return 'private';                        // fc00::/7 unique local
-    if (/^ff/.test(a)) return 'always';                            // multicast
-    if (a.startsWith('fd00:ec2::254') ) return 'always';           // AWS metadata over IPv6
-    return 'public';
-  }
-  return 'always';
+  const a = String(ip || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (net.isIPv4(a)) { const [p, q, r] = v4parts(a); return classifyV4(p, q, r); }
+  const w = v6words(a);
+  if (!w) return 'always';
+  const z = (from, to) => w.slice(from, to).every((x) => x === 0);
+  if (z(0, 8)) return 'always';                                                   // ::
+  if (z(0, 7) && w[7] === 1) return 'private';                                    // ::1 loopback
+  if (z(0, 5) && w[5] === 0xffff) return classifyV4(...v4of(w[6], w[7]));         // ::ffff:a.b.c.d mapped
+  if (z(0, 4) && w[4] === 0xffff && w[5] === 0) return classifyV4(...v4of(w[6], w[7]));   // ::ffff:0:a.b.c.d translated
+  if (z(0, 6)) return classifyV4(...v4of(w[6], w[7]));                            // ::a.b.c.d compatible (deprecated)
+  if (w[0] === 0x64 && w[1] === 0xff9b && z(2, 6)) return classifyV4(...v4of(w[6], w[7]));   // NAT64 well-known
+  if (w[0] === 0x64 && w[1] === 0xff9b && w[2] === 1) return 'private';         // 64:ff9b:1::/48 local NAT64
+  if (w[0] === 0x2002) return classifyV4(...v4of(w[1], w[2]));                    // 6to4
+  if (w[0] === 0x2001 && w[1] === 0) return 'always';                             // Teredo (the IPv4 inside is obscured)
+  if (w[0] === 0x2001 && w[1] === 0xdb8) return 'always';                         // documentation
+  if (w[0] === 0xfd00 && w[1] === 0xec2 && z(2, 7) && w[7] === 0x254) return 'always';   // AWS metadata over IPv6
+  if ((w[0] & 0xffc0) === 0xfe80) return 'always';                               // fe80::/10 link-local
+  if ((w[0] & 0xffc0) === 0xfec0) return 'private';                              // fec0::/10 site-local (deprecated)
+  if ((w[0] & 0xfe00) === 0xfc00) return 'private';                              // fc00::/7 unique local
+  if ((w[0] & 0xff00) === 0xff00) return 'always';                               // multicast
+  return 'public';
 }
 
 function lookupAll(host) {
