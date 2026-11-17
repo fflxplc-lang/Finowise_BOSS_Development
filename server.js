@@ -4388,21 +4388,28 @@ app.post('/api/public/website-lead', (req, res) => {
 /* =====================================================================
    WEBSITE BLUEPRINT FORMS — the five goal cards on the Finowise website.
 
-   The website does not rebuild any blueprint form. A card asks who the
-   person is, posts here, and is handed the address of BOSS's own client
-   form for that blueprint — the same unified page an adviser's "Send the
-   Form & the ISEQ" sends: basic details, the full input sheet (template or
-   workbook), then the ISEQ. What the client submits there goes through the
-   existing client-link route (/api/public/patch), so it lands on the lead's
-   formData and opens the plan round exactly as any other input sheet does.
+   The website draws each blueprint's client input form itself, from BOSS's
+   own definitions (generated into the site's js/blueprint-forms.js from
+   gabSectionsFor / fslSectionsFor / seSectionsFor("client") and the Goal
+   Based Investment template), and posts the finished form here. It is
+   stored exactly where BOSS's own client page stores it:
+
+     · "Your details" go onto the lead (name, mobile, email, DOB, PAN …),
+       as unifiedApplyBasics does;
+     · the sheet goes into lead.formData[type] — a workbook's whole client
+       half by top-level key, so the RM's own inputs are never overwritten;
+       a template's answers merged over what is held;
+     · the plan round is told its input is in (inputSubmittedAt), which is
+       what Prepare Plan waits on;
+     · a link and a submission row are written, so the Forms registry shows
+       it came back, from the website.
 
      Single Goal / Multiple Goal  -> MULTIGOAL (Goal Based Investment)
      Inspiring Goal               -> FSL (Financial Success Ladder)
      7 Events                     -> SEVENEVENTS
      Golden Age                   -> GAB
 
-   One lead per mobile number, and one website link per lead and blueprint:
-   pressing the card again opens the same form, never a second lead.
+   One lead per mobile number; sending it again updates that lead.
    ===================================================================== */
 const WEBSITE_GOALS = {
   single:      { type: 'MULTIGOAL',   goal: 'Single Goal' },
@@ -4414,30 +4421,36 @@ const WEBSITE_GOALS = {
 const WEBSITE_FORM_NAMES = {
   MULTIGOAL: 'Goal Based Investment', FSL: 'FSL — Financial Success Ladder',
   SEVENEVENTS: 'Comprehensive Freedom Blueprint (7 Events)', GAB: 'GAB — Golden Age Blueprint',
-  ISEQ_OVER50: 'ISEQ — Investor Suitability (50 and over)', ISEQ_UNDER50: 'ISEQ — Investor Suitability (under 50)',
 };
+// "Your details" -> the lead, the fields unifiedApplyBasics writes.
+const WEBSITE_BASICS_TO_LEAD = { me_mobile: 'mobile', me_email: 'email', me_occupation: 'occupation', me_dob: 'dob',
+  me_pin: 'pin', me_city: 'city', me_state: 'state', me_country: 'country', me_pan: 'pan' };
+// The Goal Based Investment template's own first section (clientSkip), read
+// back from "Your details" exactly as BOSS's unified page does.
+const WEBSITE_MG_FROM_BASICS = { date: 'me_date', name: 'me_name', mobile: 'me_mobile', email: 'me_email',
+  occupation: 'me_occupation', dob: 'me_dob', city: 'me_city', country: 'me_country' };
+const WEBSITE_SHEET_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
 function websiteDocToken() {
   return 'DOC-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4);
 }
-function websiteNewLink(leadId, type, extra) {
-  const now = new Date().toISOString();
-  return Object.assign({
-    token: websiteDocToken(), leadId, type, formName: WEBSITE_FORM_NAMES[type] || type,
-    status: 'Active', createdAt: now, createdBy: 'Website', sharedBy: 'Website', sharedAt: now,
-    stage: 'Lead Created', source: 'Website',
-    history: [{ at: now, by: 'Website', what: 'Created', note: '' }, { at: now, by: 'Website', what: 'Shared', note: 'Opened from the website goal card' }],
-  }, extra || {});
-}
-// The answers a template blueprint starts with, as Setup has them — what
-// planFieldDefaults() gives an adviser's link. A workbook has none here.
-function websitePlanDefaults(type) {
-  const cfg = storeValue('config', {}) || {};
-  const fields = (cfg.formTemplates && Array.isArray(cfg.formTemplates[type])) ? cfg.formTemplates[type] : [];
-  const out = {};
-  fields.forEach((f) => { if (f && f.k && f.def !== undefined && f.def !== '') out[f.k] = f.def; });
-  return out;
-}
 
+/* The website's blueprint form fills City and State from a PIN, as BOSS's
+   own client page does. Same lookup; the website's origin rule, and a limit
+   of its own so looking up PINs never eats into submitting the form. */
+const websitePinHits = new Map();
+app.options('/api/public/website-pincode/:pin', (req, res) => {
+  if (!websiteLeadCors(req, res)) return res.status(403).end();
+  res.status(204).end();
+});
+app.get('/api/public/website-pincode/:pin', (req, res) => {
+  if (!websiteLeadCors(req, res)) return res.status(403).json({ ok: false });
+  const ip = callerIp(req), now = Date.now();
+  const hits = (websitePinHits.get(ip) || []).filter((x) => now - x < 60 * 1000);
+  hits.push(now); websitePinHits.set(ip, hits);
+  if (websitePinHits.size > 5000) websitePinHits.clear();
+  if (hits.length > 30 && ip !== '127.0.0.1' && ip !== '::1') return res.status(429).json({ ok: false });
+  pinLookup(req, res);
+});
 app.options('/api/public/website-blueprint', (req, res) => {
   if (!websiteLeadCors(req, res)) return res.status(403).end();
   res.status(204).end();
@@ -4448,106 +4461,131 @@ app.post('/api/public/website-blueprint', (req, res) => {
   if (websiteLeadThrottled(req)) return res.status(429).json({ ok: false, message: 'Too many requests. Please try again in a minute.' });
   const b = req.body || {};
   const pick = WEBSITE_GOALS[String(b.goal || '')];
-  const name = wlText(b.name, 80);
-  const mobile = String(b.mobile || '').replace(/\D/g, '').slice(-10);
-  const email = wlText(b.email, 120);
-  const city = wlText(b.city, 60);
+  const basicsIn = b.basics && typeof b.basics === 'object' ? b.basics : {};
+  const basics = {};
+  Object.keys(basicsIn).forEach((k) => { if (/^me_[a-z]+$/.test(k)) basics[k] = wlText(basicsIn[k], 120); });
+  const name = wlText(basics.me_name, 80);
+  const mobile = String(basics.me_mobile || '').replace(/\D/g, '').slice(-10);
+  const email = wlText(basics.me_email, 120);
+  const sheet = b.sheet && typeof b.sheet === 'object' && !Array.isArray(b.sheet) ? b.sheet : null;
   const wrong = [];
   if (!pick) wrong.push('Please choose a goal.');
   if (name.length < 2) wrong.push('Please enter your full name.');
   if (!/^[6-9]\d{9}$/.test(mobile)) wrong.push('Please enter a valid 10-digit mobile number.');
   if (!ADDRESS_RE.test(email)) wrong.push('Please enter a valid email.');
-  if (city.length < 2) wrong.push('Please enter your city.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(basics.me_dob || ''))) wrong.push('Please enter your date of birth.');
+  if (pick && pick.type === 'SEVENEVENTS' && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(basics.me_pan || '').toUpperCase()))
+    wrong.push('Please enter a valid PAN.');
+  if (!sheet) wrong.push('The form is empty.');
   if (b.consent !== true) wrong.push('Please agree to be contacted by our team.');
   if (wrong.length) return res.status(400).json({ ok: false, message: wrong.join(' ') });
+  if (basics.me_pan) basics.me_pan = basics.me_pan.toUpperCase();
+  basics.me_mobile = mobile;
 
   const now = new Date().toISOString();
+  const type = pick.type;
   const leads = storeList('leads');
   let lead = leads.find((l) => l && !l.deletedAt && String(l.mobile || '').replace(/\D/g, '').slice(-10) === mobile);
   let created = false;
   if (!lead) {
     created = true;
-    const parts = name.split(' ');
+    const city = basics.me_city || '';
     const branch = websiteLeadBranch(city);
     lead = {
-      id: websiteLeadId(), firstName: parts[0], lastName: parts.slice(1).join(' '),
-      mobile, email, city, branch, source: 'Website', callType: 'Inbound',
-      assignedTo: websiteLeadRm(branch, leads),
-      description: '', status: 'created',
-      blueprintHistory: [{ state: 'created', at: now, by: 'Website' }],
-      createdAt: now, createdBy: 'Website',
+      id: websiteLeadId(), firstName: '', lastName: '', mobile, email, city, branch, source: 'Website', callType: 'Inbound',
+      assignedTo: websiteLeadRm(branch, leads), description: '', status: 'created',
+      blueprintHistory: [{ state: 'created', at: now, by: 'Website' }], createdAt: now, createdBy: 'Website',
     };
     leads.push(lead);
-  } else {
-    if (!lead.email) lead.email = email;
-    if (!lead.city) lead.city = city;
-    if (!lead.branch) lead.branch = websiteLeadBranch(city);
-    if (!lead.assignedTo) lead.assignedTo = websiteLeadRm(lead.branch, leads);
   }
-  // The goal they picked. Single and Multiple Goal share one form, so this
-  // is what keeps the two apart on the record.
+  // Their own details, onto the record.
+  const parts = name.split(' ');
+  lead.firstName = parts[0];
+  lead.lastName = parts.slice(1).join(' ');
+  Object.keys(WEBSITE_BASICS_TO_LEAD).forEach((k) => { if (basics[k]) lead[WEBSITE_BASICS_TO_LEAD[k]] = basics[k]; });
+  if (!lead.branch) lead.branch = websiteLeadBranch(lead.city);
+  if (!lead.assignedTo) lead.assignedTo = websiteLeadRm(lead.branch, leads);
+
+  // The sheet, where BOSS keeps it.
+  lead.formData = lead.formData && typeof lead.formData === 'object' ? lead.formData : {};
+  if (type === 'MULTIGOAL') {
+    const answers = Object.assign({}, sheet);
+    Object.keys(WEBSITE_MG_FROM_BASICS).forEach((k) => { if (basics[WEBSITE_MG_FROM_BASICS[k]]) answers[k] = basics[WEBSITE_MG_FROM_BASICS[k]]; });
+    lead.formData.MULTIGOAL = Object.assign({}, lead.formData.MULTIGOAL, answers);
+  } else {
+    // A workbook: the client's half by top-level key, the RM's untouched.
+    const held = lead.formData[type] && typeof lead.formData[type] === 'object' ? lead.formData[type] : {};
+    const touched = (Array.isArray(b.touched) ? b.touched : Object.keys(sheet)).filter((k) => WEBSITE_SHEET_KEY_RE.test(String(k)));
+    const merged = Object.assign({}, held);
+    touched.forEach((k) => { if (sheet[k] !== undefined) merged[k] = sheet[k]; });
+    if (sheet.v !== undefined && merged.v === undefined) merged.v = sheet.v;
+    lead.formData[type] = merged;
+  }
   const wb = lead.websiteBlueprint && typeof lead.websiteBlueprint === 'object' ? lead.websiteBlueprint : {};
-  wb.goal = pick.goal;
-  wb.goalKey = String(b.goal);
-  wb.type = pick.type;
-  wb.startedAt = wb.type === pick.type && wb.startedAt ? wb.startedAt : now;
-  wb.history = (Array.isArray(wb.history) ? wb.history : []).concat([{ at: now, goal: pick.goal, type: pick.type }]).slice(-20);
+  wb.goal = pick.goal; wb.goalKey = String(b.goal); wb.type = type;
+  wb.startedAt = wb.startedAt || now; wb.submittedAt = now;
+  wb.history = (Array.isArray(wb.history) ? wb.history : []).concat([{ at: now, goal: pick.goal, type }]).slice(-20);
   lead.websiteBlueprint = wb;
-  // The blueprint is chosen on the website, which is what "Plan Choose" decides.
-  if (!lead.transformationForm || !lead.planRounds || !lead.planRounds.length) {
-    lead.transformationForm = pick.type;
+  if (!lead.planRounds || !lead.planRounds.length || !lead.transformationForm) {
+    lead.transformationForm = type;
     lead.investmentApproach = 'Transformation';
   }
-
-  // The links, made the way "Send the Form & the ISEQ" makes them: an ISEQ
-  // link of its own (the page picks the age version from the date of birth
-  // typed on it) and the sheet's link carrying it. Reused when they exist.
-  const links = storeList('docLinks');
-  let sheet = links.filter((l) => l && l.leadId === lead.id && l.type === pick.type && l.createdBy === 'Website')
-    .sort((x, y) => String(y.createdAt || '').localeCompare(String(x.createdAt || '')))[0];
-  if (!sheet) {
-    let iseq = lead.iseqDocToken ? links.find((l) => l && l.token === lead.iseqDocToken) : null;
-    if (!iseq) {
-      iseq = websiteNewLink(lead.id, 'ISEQ_OVER50');
-      links.push(iseq);
-      lead.iseqDocToken = iseq.token;
-      lead.iseqFormType = iseq.type;
-      lead.iseqSentAt = now;
-    }
-    const prefill = websitePlanDefaults(pick.type);
-    const held = lead.formData && lead.formData[pick.type];
-    if (held && typeof held === 'object') Object.assign(prefill, held);
-    sheet = websiteNewLink(lead.id, pick.type, { iseqToken: iseq.token, iseqType: iseq.type, websiteGoal: pick.goal });
-    if (Object.keys(prefill).length) sheet.prefill = prefill;
-    links.push(sheet);
-    lead.planFormToken = sheet.token;
-    lead.dgSent = Object.assign({}, lead.dgSent, { sheet: now, iseq: now });
-  } else {
-    sheet.websiteGoal = pick.goal;
-    sheet.history = (sheet.history || []).concat([{ at: now, by: 'Website', what: 'Opened again from the website', note: pick.goal }]);
+  // The round the answers are for, told it has them.
+  const rounds = Array.isArray(lead.planRounds) ? lead.planRounds : [];
+  let round = rounds.length ? rounds[rounds.length - 1] : null;
+  if (!round || round.clientDecision || (round.type && round.type !== type)) {
+    round = { n: rounds.length + 1, type, createdAt: now };
+    rounds.push(round);
   }
+  if (!round.type) round.type = type;
+  if (!round.inputSubmittedAt) { round.inputSubmittedAt = now; round.inputSubmittedBy = 'Client'; }
+  lead.planRounds = rounds;
+  lead.planFormReturnedAt = now;
+
+  // The form's trail: one website link per lead and blueprint, a submission each time.
+  const links = storeList('docLinks');
+  let link = links.find((l) => l && l.leadId === lead.id && l.type === type && l.createdBy === 'Website');
+  const again = !!link;
+  if (!link) {
+    link = { token: websiteDocToken(), leadId: lead.id, type, formName: WEBSITE_FORM_NAMES[type] || type, createdAt: now,
+      createdBy: 'Website', sharedBy: 'Website', sharedAt: now, source: 'Website', stage: 'Lead Created',
+      history: [{ at: now, by: 'Website', what: 'Created', note: 'Filled in on the website' }] };
+    links.push(link);
+  }
+  link.status = 'Submitted';
+  link.websiteGoal = pick.goal;
+  link.submittedAt = now;
+  link.submittedBy = 'Client';
+  link.history = (link.history || []).concat([{ at: now, by: 'Website', what: again ? 'Re-submitted' : 'Submitted', note: 'Website — ' + pick.goal }]);
+  lead.planFormToken = link.token;
   putList('docLinks', links);
+  const subs = storeList('docSubmissions');
+  subs.push({ id: 'DOCSUB-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+    token: link.token, leadId: lead.id, type, answers: type === 'MULTIGOAL' ? lead.formData.MULTIGOAL : { sheet: true },
+    basics, submittedAt: now, submittedBy: 'Client', submittedVia: 'Website', websiteGoal: pick.goal });
+  putList('docSubmissions', subs);
   putList('leads', leads);
 
   const audit = storeList('auditLog');
   audit.push({ id: 'AUD-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
-    at: now, by: 'Website', module: 'LMS', recordId: lead.id, action: created ? 'Create' : 'Edit',
+    at: now, by: 'Website', module: 'LMS', recordId: lead.id, action: created ? 'Create' : 'Input Form Submitted',
     details: [{ field: 'Website goal', oldValue: '', newValue: pick.goal },
-              { field: 'Blueprint form', oldValue: '', newValue: WEBSITE_FORM_NAMES[pick.type] || pick.type }] });
+              { field: 'Blueprint', oldValue: '', newValue: WEBSITE_FORM_NAMES[type] || type },
+              { field: 'Submitted by', oldValue: '', newValue: 'Client (website)' }] });
   putList('auditLog', audit);
   if (lead.assignedTo) {
     const list = storeList('notifications');
     list.push({ id: 'NTF-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
       at: now, userId: lead.assignedTo,
-      title: (created ? 'New website lead: ' : 'Website lead opened a blueprint: ') + name,
-      body: pick.goal + ' — the ' + (WEBSITE_FORM_NAMES[pick.type] || pick.type) + ' input form is with them on the website. '
-        + city + (lead.branch ? ' · ' + lead.branch + ' branch' : '') + '.',
+      title: (created ? 'New website lead: ' : 'Website blueprint ' + (again ? 're-submitted' : 'submitted') + ': ') + name,
+      body: pick.goal + ' — the ' + (WEBSITE_FORM_NAMES[type] || type) + ' input form came back from the website and is on the lead. '
+        + (lead.city || '') + (lead.branch ? ' · ' + lead.branch + ' branch' : '') + '.',
       view: 'lms', arg: lead.id, kind: 'submission', by: 'Website' });
     putList('notifications', list);
   }
   writeToDisk();
-  res.json({ ok: true, created, leadId: lead.id, goal: pick.goal, form: WEBSITE_FORM_NAMES[pick.type] || pick.type,
-    path: '/?doc=' + encodeURIComponent(sheet.token) });
+  res.json({ ok: true, created, leadId: lead.id, goal: pick.goal, form: WEBSITE_FORM_NAMES[type] || type,
+    message: 'Thank you! Your ' + (WEBSITE_FORM_NAMES[type] || type) + ' details have reached our team. Your relationship manager will be in touch.' });
 });
 
 app.get('/config.js', (req, res) => {
