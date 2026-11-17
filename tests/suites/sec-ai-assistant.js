@@ -82,6 +82,17 @@ secSuite(async (t) => {
     return 'RM A: ' + statuses.join(',') + ' then ' + over.status + ' (cap 3 an hour); the model heard nothing more';
   });
 
+  await t.step('"DWT dikhao" (answered without the model) is refused like any question: no flag 403, over the cap 429', async () => {
+    const nav = { system: 'You are ZZ.\n    OPEN: <page>      pages: dashboard (Dashboard), dwt (DWT · Daily Working Tracker)',
+      messages: [{ role: 'user', content: '<data>none read for this question</data>\n\nQuestion: DWT dikhao' }] };
+    const n = seen.length;
+    const b = await ask(rmB, nav);                    // RM B has no flag
+    const a = await ask(rmA, nav);                    // RM A is over the hourly cap
+    if (b.status !== 403 || b.json.reason !== 'no_permission' || a.status !== 429 || a.json.reason !== 'rate_limited' || seen.length !== n)
+      throw new Error([b.status, b.json && b.json.reason, a.status, a.json && a.json.reason].join(','));
+    return 'no flag → 403 no_permission; over the cap → 429; the page-open shortcut sits behind both';
+  });
+
   await t.step('an unverified public provider gets nothing, whatever the request says about privacy', async () => {
     await srv.stop();
     const file = path.join(srv.dir, 'connections.json');

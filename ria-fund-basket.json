@@ -1,0 +1,1187 @@
+{
+ "source": {
+  "file": "Asset Allocation Fund Basket.pdf",
+  "title": "Mutual Fund Basket - November 2026 refresh",
+  "sha256": "43bd61b5c679fe7dbc5c1797108b76e6ba348d6b6e0af4702801f10b737dd297",
+  "plan": "Regular",
+  "option": "Growth",
+  "note": "Equity/Debt line is the target mix; the bracketed % is the suggested share of the investment for that scheme."
+ },
+ "horizons": [
+  "Less than 1 Year",
+  "1-3 Years",
+  "3-5 Years",
+  "5-7 Years",
+  "7-10 Years",
+  "10-12 Years",
+  "Greater than 12 Years"
+ ],
+ "profiles": [
+  {
+   "profile": "Conservative",
+   "cells": [
+    {
+     "horizon": "Less than 1 Year",
+     "equity": 0,
+     "debt": 100,
+     "schemes": [
+      [
+       "ICICI Pru Liquid Reg Gr",
+       50
+      ],
+      [
+       "HDFC Money Market Reg Gr",
+       50
+      ]
+     ]
+    },
+    {
+     "horizon": "1-3 Years",
+     "equity": 0,
+     "debt": 100,
+     "schemes": [
+      [
+       "ICICI Pru Ultra Short Term Reg Gr",
+       30
+      ],
+      [
+       "ICICI Pru Short Term Reg Gr",
+       35
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       35
+      ]
+     ]
+    },
+    {
+     "horizon": "3-5 Years",
+     "equity": 15,
+     "debt": 85,
+     "schemes": [
+      [
+       "ICICI Pru Short Term Reg Gr",
+       30
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       40
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       15
+      ]
+     ]
+    },
+    {
+     "horizon": "5-7 Years",
+     "equity": 25,
+     "debt": 75,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       40
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       15
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       15
+      ]
+     ]
+    },
+    {
+     "horizon": "7-10 Years",
+     "equity": 30,
+     "debt": 70,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       35
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       25
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "10-12 Years",
+     "equity": 35,
+     "debt": 65,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       35
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       20
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       5
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "Greater than 12 Years",
+     "equity": 40,
+     "debt": 60,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       30
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       20
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       5
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "profile": "Moderately Conservative",
+   "cells": [
+    {
+     "horizon": "Less than 1 Year",
+     "equity": 0,
+     "debt": 100,
+     "schemes": [
+      [
+       "ICICI Pru Liquid Reg Gr",
+       50
+      ],
+      [
+       "HDFC Money Market Reg Gr",
+       50
+      ]
+     ]
+    },
+    {
+     "horizon": "1-3 Years",
+     "equity": 10,
+     "debt": 90,
+     "schemes": [
+      [
+       "ICICI Pru Ultra Short Term Reg Gr",
+       25
+      ],
+      [
+       "ICICI Pru Short Term Reg Gr",
+       30
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       25
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       20
+      ]
+     ]
+    },
+    {
+     "horizon": "3-5 Years",
+     "equity": 25,
+     "debt": 75,
+     "schemes": [
+      [
+       "ICICI Pru Short Term Reg Gr",
+       20
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       30
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       25
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       25
+      ]
+     ]
+    },
+    {
+     "horizon": "5-7 Years",
+     "equity": 35,
+     "debt": 65,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       30
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       15
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       20
+      ]
+     ]
+    },
+    {
+     "horizon": "7-10 Years",
+     "equity": 45,
+     "debt": 55,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       25
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       5
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "10-12 Years",
+     "equity": 50,
+     "debt": 50,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       25
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "Greater than 12 Years",
+     "equity": 55,
+     "debt": 45,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       20
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "DSP Value Reg Gr",
+       10
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "profile": "Moderate",
+   "cells": [
+    {
+     "horizon": "Less than 1 Year",
+     "equity": 0,
+     "debt": 100,
+     "schemes": [
+      [
+       "ICICI Pru Liquid Reg Gr",
+       50
+      ],
+      [
+       "HDFC Money Market Reg Gr",
+       50
+      ]
+     ]
+    },
+    {
+     "horizon": "1-3 Years",
+     "equity": 15,
+     "debt": 85,
+     "schemes": [
+      [
+       "ICICI Pru Ultra Short Term Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Short Term Reg Gr",
+       25
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       25
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       30
+      ]
+     ]
+    },
+    {
+     "horizon": "3-5 Years",
+     "equity": 35,
+     "debt": 65,
+     "schemes": [
+      [
+       "ICICI Pru Short Term Reg Gr",
+       15
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       25
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       30
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       30
+      ]
+     ]
+    },
+    {
+     "horizon": "5-7 Years",
+     "equity": 50,
+     "debt": 50,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       20
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       10
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       5
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "7-10 Years",
+     "equity": 60,
+     "debt": 40,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       15
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       10
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       5
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "10-12 Years",
+     "equity": 65,
+     "debt": 35,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       15
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       10
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       5
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       5
+      ],
+      [
+       "DSP Value Reg Gr",
+       10
+      ]
+     ]
+    },
+    {
+     "horizon": "Greater than 12 Years",
+     "equity": 70,
+     "debt": 30,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       10
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       10
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       10
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       10
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "profile": "Moderately Aggressive",
+   "cells": [
+    {
+     "horizon": "Less than 1 Year",
+     "equity": 0,
+     "debt": 100,
+     "schemes": [
+      [
+       "ICICI Pru Liquid Reg Gr",
+       50
+      ],
+      [
+       "HDFC Money Market Reg Gr",
+       50
+      ]
+     ]
+    },
+    {
+     "horizon": "1-3 Years",
+     "equity": 20,
+     "debt": 80,
+     "schemes": [
+      [
+       "ICICI Pru Ultra Short Term Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Short Term Reg Gr",
+       20
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       20
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       40
+      ]
+     ]
+    },
+    {
+     "horizon": "3-5 Years",
+     "equity": 50,
+     "debt": 50,
+     "schemes": [
+      [
+       "ICICI Pru Short Term Reg Gr",
+       15
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       20
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       15
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "5-7 Years",
+     "equity": 65,
+     "debt": 35,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       15
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       5
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       5
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       15
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       10
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "7-10 Years",
+     "equity": 75,
+     "debt": 25,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       10
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       5
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       10
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       15
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       5
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       15
+      ],
+      [
+       "Bandhan Small Cap Reg Gr",
+       5
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "10-12 Years",
+     "equity": 80,
+     "debt": 20,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       10
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       5
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       10
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       15
+      ],
+      [
+       "Bandhan Small Cap Reg Gr",
+       10
+      ],
+      [
+       "Kotak Contra Reg Gr",
+       10
+      ]
+     ]
+    },
+    {
+     "horizon": "Greater than 12 Years",
+     "equity": 85,
+     "debt": 15,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       5
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       10
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       15
+      ],
+      [
+       "Bandhan Small Cap Reg Gr",
+       15
+      ],
+      [
+       "DSP Value Reg Gr",
+       10
+      ],
+      [
+       "Kotak Contra Reg Gr",
+       10
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "profile": "Aggressive",
+   "cells": [
+    {
+     "horizon": "Less than 1 Year",
+     "equity": 0,
+     "debt": 100,
+     "schemes": [
+      [
+       "ICICI Pru Liquid Reg Gr",
+       50
+      ],
+      [
+       "HDFC Money Market Reg Gr",
+       50
+      ]
+     ]
+    },
+    {
+     "horizon": "1-3 Years",
+     "equity": 25,
+     "debt": 75,
+     "schemes": [
+      [
+       "ICICI Pru Ultra Short Term Reg Gr",
+       15
+      ],
+      [
+       "ICICI Pru Short Term Reg Gr",
+       20
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       15
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       50
+      ]
+     ]
+    },
+    {
+     "horizon": "3-5 Years",
+     "equity": 60,
+     "debt": 40,
+     "schemes": [
+      [
+       "ICICI Pru Short Term Reg Gr",
+       10
+      ],
+      [
+       "ABSL Corp Bond Reg Gr",
+       20
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       10
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       10
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       25
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       15
+      ],
+      [
+       "DSP Value Reg Gr",
+       5
+      ]
+     ]
+    },
+    {
+     "horizon": "5-7 Years",
+     "equity": 75,
+     "debt": 25,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       10
+      ],
+      [
+       "HDFC Gilt Reg Gr",
+       5
+      ],
+      [
+       "HDFC Balanced Advantage Reg Gr",
+       5
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Large Cap Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       25
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       20
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       10
+      ],
+      [
+       "DSP Value Reg Gr",
+       10
+      ]
+     ]
+    },
+    {
+     "horizon": "7-10 Years",
+     "equity": 85,
+     "debt": 15,
+     "schemes": [
+      [
+       "ABSL Corp Bond Reg Gr",
+       5
+      ],
+      [
+       "DSP Multi Asset Allocation Reg Gr",
+       5
+      ],
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       25
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       15
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       10
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       15
+      ],
+      [
+       "Bandhan Small Cap Reg Gr",
+       10
+      ],
+      [
+       "DSP Value Reg Gr",
+       10
+      ]
+     ]
+    },
+    {
+     "horizon": "10-12 Years",
+     "equity": 90,
+     "debt": 10,
+     "schemes": [
+      [
+       "ICICI Pru Equity & Debt Reg Gr",
+       5
+      ],
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       15
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       10
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       20
+      ],
+      [
+       "Bandhan Small Cap Reg Gr",
+       15
+      ],
+      [
+       "Kotak Contra Reg Gr",
+       15
+      ]
+     ]
+    },
+    {
+     "horizon": "Greater than 12 Years",
+     "equity": 95,
+     "debt": 5,
+     "schemes": [
+      [
+       "Parag Parikh Flexi Cap Reg Gr",
+       20
+      ],
+      [
+       "ICICI Pru Large & Mid Cap Reg Gr",
+       10
+      ],
+      [
+       "Nippon India Multi Cap Reg Gr",
+       10
+      ],
+      [
+       "HSBC Midcap Reg Gr",
+       20
+      ],
+      [
+       "Bandhan Small Cap Reg Gr",
+       20
+      ],
+      [
+       "DSP Value Reg Gr",
+       10
+      ],
+      [
+       "Kotak Contra Reg Gr",
+       10
+      ]
+     ]
+    }
+   ]
+  }
+ ]
+}

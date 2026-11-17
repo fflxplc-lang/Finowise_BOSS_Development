@@ -19,7 +19,16 @@
      - total AUM is the Dashboard's Live AUM figure;
      - Gemini overloaded on its model is tried once on the fast model first,
        and a healthy provider's answer passes through untouched;
-     - in the page, the same question shows the answer and no red error. */
+     - in the page, the same question shows the answer and no red error;
+     - "DWT dikhao" / "open DWT" opens DWT at once, from the page and from
+       the API, with no provider call and no "busy" text;
+     - "give me suggestion of buckket strategy" is the firm's 3-bucket
+       strategy with its schemes, provider up (the house view goes to it)
+       or down (answered from BOSS);
+     - "give me graphical representation of our clients" draws the chart;
+     - Gemini failing on its model walks the chain gemini-2.5-flash →
+       gemini-2.0-flash → gemini-1.5-flash, a 404 included;
+     - no answer anywhere says "The AI service is busy". */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -35,16 +44,21 @@ const MOCK_PORT = Number(process.env.BOSS_PORT || 3000) + 521;
 const OVERLOAD = 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.';
 
 /* ---- the stand-in provider ---- */
-const mode = { 'gemini-2.5-pro': 'ok', 'gemini-2.0-flash': 'ok', claude: 'ok' };
+const GEMINI = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+const mode = { claude: 'ok' };
+const gemini = (m) => GEMINI.forEach((g) => { mode[g] = m; });
+gemini('ok');
 const seen = [];
+const bodies = [];
 const mock = http.createServer((req, res) => {
   let body = ''; req.on('data', (d) => { body += d; }); req.on('end', () => {
     const gm = req.url.match(/\/v1beta\/models\/([^:]+):generateContent/);
     const which = gm ? decodeURIComponent(gm[1]) : 'claude';
-    seen.push(which);
+    seen.push(which); bodies.push(body);
     const m = mode[which] || 'ok';
     if (m === 'hang') return;                                                   // never answers
     res.setHeader('Content-Type', 'application/json');
+    if (m === '404') { res.statusCode = 404; return res.end(JSON.stringify({ error: { code: 404, message: 'models/' + which + ' is not found for API version v1beta.', status: 'NOT_FOUND' } })); }
     if (m === '503' || m === '429') {
       res.statusCode = Number(m);
       return res.end(JSON.stringify({ error: { code: Number(m), message: m === '503' ? OVERLOAD : 'Resource has been exhausted (e.g. check quota).', status: m === '503' ? 'UNAVAILABLE' : 'RESOURCE_EXHAUSTED' } }));
@@ -83,6 +97,7 @@ async function login(base) {
   const call = async (method, p, body) => {
     const res = await fetch(base + p, { method, headers: Object.assign({ Cookie: cookie }, body ? { 'Content-Type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
     const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch (e) { /* not json */ }
+    if (p === '/api/ai/chat') everyText.push(text);
     return { status: res.status, json, text };
   };
   return { cookie, get: (p) => call('GET', p), post: (p, b) => call('POST', p, b), put: (p, b) => call('PUT', p, b) };
@@ -106,7 +121,15 @@ const planAsk = (q) => ({ connector: 'gemini', temperature: 0, maxTokens: 600, m
 const crmAsk = () => ({ connector: 'gemini', system: 'You are RIA AI.', maxTokens: 1200, messages: [{ role: 'user', content: '<data>\n'
   + JSON.stringify({ reads: [{ source: 'Clients', total: 12, groupBy: ['branch'], sum: ['aum'], groups: [{ key: 'Varanasi', branch: 'Varanasi', count: 7, aum: 1250000 }, { key: 'Mumbai', branch: 'Mumbai', count: 5, aum: 900000 }] }] })
   + '\n</data>\n\nQuestion: How many clients do we have branch-wise, with AUM?' }] });
-const NEVER = /did not answer within|HTTP 50\d|HTTP 429|high demand|Spikes in demand|Resource has been exhausted/;
+const NEVER = /did not answer within|HTTP 50\d|HTTP 429|high demand|Spikes in demand|Resource has been exhausted|AI service is busy|AI service was busy/;
+const BUSY = /AI service is busy|AI service was busy/;
+/* What the page sends: its open rules, with the pages this person may open. */
+const PAGES_SYS = 'You are RIA AI.\nOPENING A SCREEN\n    OPEN: cms <client id from <data>> <tab>     tabs: overview, portfolio, goals\n'
+  + '    OPEN: <page>                               pages: dashboard (Dashboard), lms (LMS · Lead Management System), cms (CMS · Client Management System), '
+  + 'dwt (DWT · Daily Working Tracker), business (DBT · Daily Business Tracker), meetings (Meetings), partners (Partners), queries (QMS · Query Management)';
+const chatAsk = (q, system) => ({ connector: 'gemini', system: system || PAGES_SYS, maxTokens: 1200,
+  messages: [{ role: 'user', content: '<data>none read for this question</data>\n\nQuestion: ' + q }] });
+const everyText = [];
 
 let failures = 0;
 async function step(name, fn) {
@@ -121,7 +144,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
   const admin = await login(srv.base);
   try {
     await step('(a) the provider hangs past the time budget: RIA AI answers the KYC question anyway, in time, without the timeout text', async () => {
-      mode['gemini-2.5-pro'] = 'hang'; mode['gemini-2.0-flash'] = 'hang';
+      gemini('hang');
       const r = await timed(() => admin.post('/api/ai/chat', kycAsk()));
       if (r.status !== 200 || !r.json.ok || NEVER.test(r.text) || !/Physical KYC/.test(r.json.text) || !/\[kyc-status-check\]/.test(r.json.text) || r.ms > 4500)
         throw new Error(r.status + ' ' + r.ms + 'ms ' + r.text.slice(0, 200));
@@ -137,7 +160,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
     });
 
     await step('(b) HTTP 503 "high demand" on the planning step and on the answer: still 200 and the full answer', async () => {
-      mode['gemini-2.5-pro'] = '503'; mode['gemini-2.0-flash'] = '503';
+      gemini('503');
       const p = await admin.post('/api/ai/chat', planAsk(KYC_Q));
       const a = await admin.post('/api/ai/chat', kycAsk());
       const c = await admin.post('/api/ai/chat', crmAsk());
@@ -149,7 +172,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
     });
 
     await step('(b) HTTP 429 on both models: still 200 with the answer', async () => {
-      mode['gemini-2.5-pro'] = '429'; mode['gemini-2.0-flash'] = '429';
+      gemini('429');
       const a = await admin.post('/api/ai/chat', kycAsk());
       const p = await admin.post('/api/ai/chat', planAsk('How many leads are pending this month?'));
       const plan = JSON.parse(p.json.text);
@@ -159,24 +182,34 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
     });
 
     await step('(b) an empty answer from the provider is answered from BOSS too', async () => {
-      mode['gemini-2.5-pro'] = 'empty'; mode['gemini-2.0-flash'] = 'empty';
+      gemini('empty');
       const a = await admin.post('/api/ai/chat', kycAsk());
       if (a.status !== 200 || !/Physical KYC/.test(a.json.text)) throw new Error(a.status + ' ' + a.text.slice(0, 160));
       return '200 with the SOP answer';
     });
 
-    await step('Gemini overloaded on its model is tried once on the fast model, whose answer is used', async () => {
-      mode['gemini-2.5-pro'] = '503'; mode['gemini-2.0-flash'] = 'ok';
+    await step('Gemini overloaded on its model is tried next on gemini-2.5-flash, whose answer is used', async () => {
+      gemini('ok'); mode['gemini-2.5-pro'] = '503';
       const n = seen.length;
       const a = await admin.post('/api/ai/chat', kycAsk());
       const calls = seen.slice(n);
-      if (a.status !== 200 || a.json.text !== 'MOCK MODEL ANSWER from gemini-2.0-flash' || calls.join() !== 'gemini-2.5-pro,gemini-2.0-flash' || a.json.fallback)
+      if (a.status !== 200 || a.json.text !== 'MOCK MODEL ANSWER from gemini-2.5-flash' || calls.join() !== 'gemini-2.5-pro,gemini-2.5-flash' || a.json.fallback)
         throw new Error(JSON.stringify({ text: a.json && a.json.text, calls }));
-      return 'calls: ' + calls.join(' → ') + '; the fast model answered';
+      return 'calls: ' + calls.join(' → ') + '; gemini-2.5-flash answered';
+    });
+
+    await step('the whole chain: 503 → 404 → 503 → gemini-1.5-flash answers', async () => {
+      mode['gemini-2.5-pro'] = '503'; mode['gemini-2.5-flash'] = '404'; mode['gemini-2.0-flash'] = '503'; mode['gemini-1.5-flash'] = 'ok';
+      const n = seen.length;
+      const a = await admin.post('/api/ai/chat', kycAsk());
+      const calls = seen.slice(n);
+      if (a.status !== 200 || a.json.text !== 'MOCK MODEL ANSWER from gemini-1.5-flash' || calls.join() !== GEMINI.join() || a.json.fallback)
+        throw new Error(JSON.stringify({ text: a.json && a.json.text, calls }));
+      return 'calls: ' + calls.join(' → ');
     });
 
     await step('a healthy provider’s answer passes through untouched', async () => {
-      mode['gemini-2.5-pro'] = 'ok';
+      gemini('ok');
       const a = await admin.post('/api/ai/chat', kycAsk());
       if (a.status !== 200 || a.json.text !== 'MOCK MODEL ANSWER from gemini-2.5-pro' || a.json.fallback) throw new Error(a.text.slice(0, 160));
       return 'model answer, no fallback';
@@ -197,8 +230,62 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       return '429 → 200; hang → 200 in ' + b.ms + ' ms';
     });
 
+    await step('"DWT dikhao" and "open DWT" through the API: OPEN: dwt at once, no provider call, no busy text', async () => {
+      gemini('503');
+      const n = seen.length;
+      const a = await timed(() => admin.post('/api/ai/chat', chatAsk('DWT dikhao')));
+      const b = await timed(() => admin.post('/api/ai/chat', chatAsk('open DWT')));
+      const c = await admin.post('/api/ai/chat', chatAsk('mom kholo'));
+      const d = await admin.post('/api/ai/chat', chatAsk('take me to dbt'));
+      const calls = seen.slice(n);
+      if (a.status !== 200 || !/^OPEN: dwt$/m.test(a.json.text) || !/\*\*DWT \(Daily Working Tracker\)\*\* khol diya hai\./.test(a.json.text)
+        || !/^OPEN: dwt$/m.test(b.json.text) || !/^Opened \*\*DWT \(Daily Working Tracker\)\*\*\./.test(b.json.text)
+        || !/^OPEN: meetings$/m.test(c.json.text) || !/^OPEN: business$/m.test(d.json.text) || calls.length || BUSY.test(a.text + b.text))
+        throw new Error(JSON.stringify({ a: a.json && a.json.text, b: b.json && b.json.text, c: c.json && c.json.text, d: d.json && d.json.text, calls }));
+      return 'Hinglish "' + a.json.text.split('\n')[0] + '" in ' + a.ms + ' ms; English "' + b.json.text.split('\n')[0] + '" in ' + b.ms + ' ms; MoM → meetings, DBT → business; 0 provider calls';
+    });
+
+    await step('"give me suggestion of buckket strategy", provider down: the 3-bucket strategy with Finowise schemes', async () => {
+      gemini('503');
+      const a = await admin.post('/api/ai/chat', chatAsk('give me suggestion of buckket strategy'));
+      const t = (a.json && a.json.text) || '';
+      const need = [/Bucket 1 — 0–2 years · Liquidity/, /Bucket 2 — 3–6 years · Stability/, /Bucket 3 — 7\+ years · Growth/, /ABSL Liquid/, /ICICI Pru Liquid/,
+        /Mirae Asset Arbitrage/, /ICICI Pru All Seasons Bond/, /Kotak Aggressive Hybrid/, /Bandhan Flexi Cap/, /HDFC Value/, /SWP/, /STP/];
+      const missing = need.filter((re) => !re.test(t)).map(String);
+      if (a.status !== 200 || missing.length || NEVER.test(a.text)) throw new Error(JSON.stringify({ missing, t: t.slice(0, 300) }));
+      return 'three buckets, each with its categories and schemes, then how to run it';
+    });
+
+    await step('…and Hinglish, typo-tolerant: "3 bucket strategy batao", "retirement buket kya hai"', async () => {
+      const a = await admin.post('/api/ai/chat', chatAsk('3 bucket strategy batao'));
+      const b = await admin.post('/api/ai/chat', chatAsk('retirement buket kya hai'));
+      if (!/Finowise ki 3-Bucket Strategy/.test(a.json.text) || !/Bucket 3/.test(b.json.text) || NEVER.test(a.text + b.text)) throw new Error((a.text + b.text).slice(0, 300));
+      return 'both answered from the house view';
+    });
+
+    await step('the Fund Basket by risk profile × horizon, and the 18-category scheme list, provider down', async () => {
+      const a = await admin.post('/api/ai/chat', chatAsk('fund basket for moderately aggressive investor 7-10 years'));
+      const b = await admin.post('/api/ai/chat', chatAsk('recommended scheme list'));
+      if (!/Moderately Aggressive · 7-10 Years\*\*: Equity 75 \/ Debt 25/.test(a.json.text) || !/Parag Parikh Flexi Cap 20%/.test(a.json.text)
+        || !/18 categories/.test(b.json.text) || !/^18\. \*\*Value \/ Contra/m.test(b.json.text)) throw new Error((a.json.text + '\n' + b.json.text).slice(0, 400));
+      return 'Moderately Aggressive · 7–10Y cell; 18 categories listed';
+    });
+
+    await step('provider up: the house view goes to the model with the question, and its answer passes through', async () => {
+      gemini('ok');
+      const n = bodies.length;
+      const a = await admin.post('/api/ai/chat', chatAsk('give me suggestion of buckket strategy'));
+      const sent = bodies.slice(n).join('');
+      if (a.json.text !== 'MOCK MODEL ANSWER from gemini-2.5-pro' || !/FINOWISE HOUSE VIEW/.test(sent) || !/Mirae Asset Arbitrage/.test(sent)) throw new Error(a.text.slice(0, 200));
+      const k = await admin.post('/api/ai/chat', kycAsk());
+      const plain = bodies.slice(-1)[0];
+      if (/FINOWISE HOUSE VIEW/.test(plain)) throw new Error('the house view was sent with a KYC question');
+      void k;
+      return 'house view sent for the bucket question, not for the KYC one';
+    });
+
     await step('total AUM with the provider down is the Dashboard’s Live AUM figure, never a guess', async () => {
-      mode['gemini-2.5-pro'] = '503'; mode['gemini-2.0-flash'] = '503';
+      gemini('503');
       await admin.put('/api/storage/clients', { value: JSON.stringify([{ id: 'CMS-F1', cmsName: 'ZZ One', rmName: '', branch: 'Varanasi' }, { id: 'CMS-F2', cmsName: 'ZZ Two', rmName: '', branch: 'Mumbai' }]) });
       await admin.put('/api/storage/transactions', { value: JSON.stringify([{ id: 'TX-F1', clientId: 'CMS-F1', status: 'Completed', transactionType: 'Purchase', amount: 250000 },
         { id: 'TX-F2', clientId: 'CMS-F2', status: 'Completed', transactionType: 'Purchase', amount: 150000 }]) });
@@ -217,7 +304,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
     });
 
     /* In the page itself. */
-    mode['gemini-2.5-pro'] = '503'; mode['gemini-2.0-flash'] = '503';
+    gemini('503');
     await admin.put('/api/connections/claude', { enabled: false });
     const browser = await pw.chromium.launch({ executablePath: CHROME });
     try {
@@ -234,7 +321,68 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         if (r.error || r.role !== 'assistant' || !/Physical KYC/.test(r.text) || NEVER.test(r.text) || /Market zone/.test(r.text)) throw new Error(JSON.stringify(r).slice(0, 300));
         return 'assistant answered (' + r.text.split('\n')[0].slice(0, 80) + '…); ai.error is empty';
       });
+
+      const pg = await (await browser.newContext()).newPage();
+      await signIn(pg, srv.base); await ready(pg);
+      const ask = (q) => pg.evaluate(async (q) => {
+        await aiRefreshStatus(true);
+        ai.open = true; aiDrawPanel();
+        ai.draft = q;
+        const input = document.getElementById('aiInput');          // with the panel open, aiSend reads the box
+        if(input) input.value = q;
+        const t0 = performance.now();
+        await aiSend();
+        const ms = performance.now() - t0;
+        const last = ai.turns[ai.turns.length - 1] || {};
+        const box = document.getElementById('aiTurns');
+        return { ms: Math.round(ms * 10) / 10, error: ai.error, role: last.role, text: String(last.content || ''), opened: last.opened || null, view: currentView,
+          chart: !!last.chart, chartDom: !!(box && box.querySelector('.boss-chart')), chartTitle: last.chart ? last.chart.title : '', html: box ? box.innerText : '' };
+      }, q);
+
+      await step('in the page: "DWT dikhao" opens DWT at once — Hinglish answer, ↗ Opened chip, no provider call, under 50 ms', async () => {
+        const n = seen.length;
+        const r = await ask('DWT dikhao');
+        if (r.error || r.view !== 'dwt' || !r.opened || r.opened.view !== 'dwt' || r.text !== '**DWT (Daily Working Tracker)** khol diya hai.' || seen.length !== n
+          || r.ms > 50 || !/Opened/.test(r.html) || BUSY.test(r.html)) throw new Error(JSON.stringify(r).slice(0, 400));
+        return 'on ' + r.view + ' in ' + r.ms + ' ms; "' + r.text + '"; chip shown; 0 provider calls';
+      });
+
+      await step('in the page: "open DWT" — English answer, DWT open', async () => {
+        await pg.evaluate(() => navigate('dashboard'));
+        const n = seen.length;
+        const r = await ask('open DWT');
+        if (r.error || r.view !== 'dwt' || r.text !== 'Opened **DWT (Daily Working Tracker)**.' || seen.length !== n || r.ms > 50) throw new Error(JSON.stringify(r).slice(0, 400));
+        return '"' + r.text + '" in ' + r.ms + ' ms';
+      });
+
+      await step('in the page: "Daily Business Tracker dikhao", "QMS kholo", "setup kholo" open their screens', async () => {
+        const a = await ask('Daily Business Tracker dikhao');
+        const b = await ask('QMS kholo');
+        const c = await ask('setup kholo');
+        if (a.view !== 'business' || b.view !== 'queries' || c.view !== 'settings' || !/DBT \(Daily Business Tracker\)/.test(a.text) || !/QMS \(Query Management\)/.test(b.text))
+          throw new Error(JSON.stringify([a, b, c].map((x) => ({ view: x.view, text: x.text }))));
+        return [a, b, c].map((x) => x.view).join(', ');
+      });
+
+      await step('in the page: "give me suggestion of buckket strategy", provider down — the 3-bucket strategy, no busy text', async () => {
+        gemini('503');
+        const r = await ask('give me suggestion of buckket strategy');
+        if (r.error || !/Bucket 1/.test(r.text) || !/ABSL Arbitrage/.test(r.text) || !/Bucket 3/.test(r.text) || NEVER.test(r.text) || BUSY.test(r.html)) throw new Error(JSON.stringify(r).slice(0, 400));
+        return r.text.split('\n')[0];
+      });
+
+      await step('in the page: "give me graphical representation of our clients" draws the chart in the chat panel', async () => {
+        await pg.evaluate(() => navigate('dashboard'));
+        const r = await ask('give me graphical representation of our clients');
+        if (r.error || !r.chart || !r.chartDom || NEVER.test(r.text) || BUSY.test(r.html)) throw new Error(JSON.stringify(r).slice(0, 400));
+        return 'boss-chart drawn: "' + r.chartTitle + '"; ' + r.text.split('\n')[0].slice(0, 80);
+      });
     } finally { await browser.close(); }
+    await step('no answer anywhere in this run said "The AI service is busy"', async () => {
+      const busy = everyText.filter((t) => BUSY.test(t));
+      if (busy.length) throw new Error(busy.length + ' answers: ' + busy[0].slice(0, 200));
+      return everyText.length + ' API answers checked';
+    });
   } finally {
     await srv.stop(); mock.close();
     try { fs.rmSync(srv.dir, { recursive: true, force: true }); } catch (e) { /* temp */ }
