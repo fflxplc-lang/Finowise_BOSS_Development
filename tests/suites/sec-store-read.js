@@ -107,9 +107,10 @@ secSuite(async (t) => {
       otherSalary: f(tA, 'U-RMB').monthlySalary, hrSalary: f(tPM, 'U-RMB').monthlySalary, hrPan: f(tPM, 'U-RMB').panNumber,
       adminPan: f(tAdm, 'U-RMB').panNumber,
     };
-    if (r.count !== data.team.length || r.ownPan !== 'ZZZPA1111A' || r.otherPan || r.otherBank || r.otherSalary
+    /* Own PAN: shown, but masked since step 3 (full PAN for the administrator account only). */
+    if (r.count !== data.team.length || r.ownPan !== 'XXXXXX111A' || r.otherPan || r.otherBank || r.otherSalary
       || r.hrSalary !== 60000 || r.hrPan || r.adminPan !== 'ZZZPB2222B') throw new Error(JSON.stringify(r));
-    return 'all ' + r.count + ' members; own PAN kept; another’s PAN/bank/salary withheld; HR sees salary but not PAN; admin sees all';
+    return 'all ' + r.count + ' members; own PAN shown masked (XXXXXX111A); another’s PAN/bank/salary withheld; HR sees salary but not PAN; admin sees all in full';
   });
 
   await t.step('settings and reference data stay readable by everyone', async () => {

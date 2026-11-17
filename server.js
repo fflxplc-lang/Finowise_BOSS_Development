@@ -105,6 +105,47 @@ const noteUserLogin = usersDb.prepare("UPDATE users SET last_login_at = datetime
 const deleteUserById = usersDb.prepare('DELETE FROM users WHERE id = ?');
 const setUserTwoFactor = usersDb.prepare('UPDATE users SET two_factor = ? WHERE id = ?');
 
+/* Phase 1, step 3: A GENERATED PASSWORD IS NOT KEPT IN PLAIN TEXT.
+   An administrator can still read it until the person first signs in (it
+   is cleared then, as before), but on disk it is AES-256-GCM: "enc1:" and
+   base64 of iv | tag | ciphertext. The key is derived from
+   CRM_SESSION_SECRET, which is read and never changed — and is a different
+   key from the Aadhaar vault's, whose code and inputs are untouched. With
+   no CRM_SESSION_SECRET (a laptop, the tests) the key is a file of its own
+   beside users.db. A value written before this change is plain text; it is
+   sealed once at start-up, and still read correctly until then. */
+const ISSUED_KEY = (() => {
+  if (process.env.CRM_SESSION_SECRET) return crypto.createHash('sha256').update(process.env.CRM_SESSION_SECRET + ':issued-password').digest();
+  const file = path.join(path.dirname(USERS_DB_FILE), 'issued-password.key');
+  try { const k = Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'hex'); if (k.length === 32) return k; } catch (e) { /* first run */ }
+  const k = crypto.randomBytes(32);
+  fs.writeFileSync(file, k.toString('hex'), { mode: 0o600 });
+  return k;
+})();
+function sealIssued(plain) {
+  if (plain === null || plain === undefined || plain === '') return plain;
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', ISSUED_KEY, iv);
+  const ct = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+  return 'enc1:' + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
+}
+function openIssued(stored) {
+  if (!stored) return null;
+  if (!String(stored).startsWith('enc1:')) return stored;            // written before this change
+  try {
+    const b = Buffer.from(String(stored).slice(5), 'base64');
+    const d = crypto.createDecipheriv('aes-256-gcm', ISSUED_KEY, b.subarray(0, 12));
+    d.setAuthTag(b.subarray(12, 28));
+    return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+  } catch (e) { return null; }                                        // another key: unreadable, say nothing
+}
+{
+  const plainRows = usersDb.prepare("SELECT id, issued_password FROM users WHERE issued_password IS NOT NULL AND issued_password <> '' AND issued_password NOT LIKE 'enc1:%'").all();
+  const seal = usersDb.prepare('UPDATE users SET issued_password = ? WHERE id = ?');
+  plainRows.forEach((r) => seal.run(sealIssued(r.issued_password), r.id));
+  if (plainRows.length) console.log('[accounts] sealed ' + plainRows.length + ' generated password(s) that were stored in plain text');
+}
+
 // A password somebody has to read off a screen and type once. No look-alike
 // characters, and enough of them that the length is doing the work.
 const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -122,7 +163,7 @@ function accountJson(u) {
   return {
     id: u.id, email: u.email, role: u.role, crmRole: u.crm_role || '', memberId: u.member_id || '',
     active: u.active === undefined ? 1 : u.active, createdAt: u.created_at, lastLoginAt: u.last_login_at || null,
-    issuedPassword: u.issued_password || null,
+    issuedPassword: openIssued(u.issued_password),
   };
 }
 
@@ -531,8 +572,8 @@ function usersPage({ error = null, added = null, removed = null, meId = null } =
             ${u.role === 'admin' ? '<span class="tag">admin</span>' : ''}</td>
           <td class="pw">${u.active === 0
             ? '<span class="muted">deactivated</span>'
-            : u.issued_password
-              ? '<code>' + esc(u.issued_password) + '</code>'
+            : openIssued(u.issued_password)
+              ? '<code>' + esc(openIssued(u.issued_password)) + '</code>'
               : u.last_login_at
                 ? '<span class="muted">used ' + esc(u.last_login_at) + '</span>'
                 : '<span class="muted">set by hand</span>'}</td>
@@ -1087,7 +1128,8 @@ function checkApiKey(req, res, next) {
    and its own audit trail (audit-log.js). Step 1 identifies people and
    evaluates the team-record rule in report mode only; nothing here
    refuses a request yet. */
-const accessControl = require('./access-control').create({
+const AccessControl = require('./access-control');
+const accessControl = AccessControl.create({
   storeRaw: (key) => store[key],
   memberOfUser: (user) => memberOfUser(user),
 });
@@ -1111,7 +1153,8 @@ function noteScopedRead(req, p, key, view) {
   const enforce = accessControl.enforcing();
   auditLog.append(Object.assign(auditWho(req), { action: 'store.read', target: key, mode: accessControl.MODE,
     outcome: enforce ? 'scoped' : 'would-scope', count: view.hidden,
-    reason: view.refused ? 'store_has_no_rule' : (view.stubs ? view.stubs + ' placeholder(s)' : 'records outside scope') }));
+    reason: view.refused ? 'store_has_no_rule' : [view.hidden ? 'records outside scope' : '', view.stubs ? view.stubs + ' placeholder(s)' : '',
+      view.masked ? view.masked + ' PAN(s) masked' : ''].filter(Boolean).join('; ') }));
 }
 
 // GET /api/storage/:key -> { key, value } | 404
@@ -1127,7 +1170,7 @@ app.get('/api/storage/:key', checkApiKey, (req, res) => {
      person and store: skip the work when it was counted just now. */
   if (!accessControl.enforcing() && scopedReadRecent(p, req.params.key)) return res.json({ key: req.params.key, value });
   const view = accessControl.readView(p, req.params.key, value);
-  if (view.refused || view.hidden || view.stubs) noteScopedRead(req, p, req.params.key, view);
+  if (view.refused || view.hidden || view.stubs || view.masked) noteScopedRead(req, p, req.params.key, view);
   else scopedReadNoted.set(scopedReadKey(p, req.params.key), Date.now());
   if (accessControl.enforcing()) {
     if (view.refused) return res.status(403).json({ error: 'This store is not open to your account.' });
@@ -1478,6 +1521,37 @@ function compOffGuard(before, after) {
 app.put('/api/storage/:key', checkApiKey, (req, res) => {
   let { value } = req.body || {};
   if (typeof value !== 'string') return res.status(400).json({ error: 'body.value must be a string (the CRM already JSON.stringifies before sending)' });
+  /* Phase 1, step 3, every mode: a PAN that came back masked (XXXXXX234F)
+     means "unchanged". The stored PAN is put back here, before any other
+     check reads the record, so a masked string never reaches the disk. One
+     that cannot be traced to a stored PAN is refused. */
+  if (/X{6}[0-9]{3}[A-Za-z]/i.test(value)) {          // cheap test first: most saves carry no masked PAN
+    let incoming; try { incoming = JSON.parse(value); } catch (e) { incoming = undefined; }
+    if (incoming !== undefined) {
+      let current; try { current = store[req.params.key] === undefined ? undefined : JSON.parse(store[req.params.key]); } catch (e) { current = undefined; }
+      const parsedOnce = {};
+      const byIdOf = (k) => {
+        if (!parsedOnce[k]) {
+          parsedOnce[k] = new Map();
+          try { const v = JSON.parse(store[k] || '[]'); if (Array.isArray(v)) v.forEach((x) => { if (x && x.id) parsedOnce[k].set(x.id, x); }); } catch (e) { /* unreadable store */ }
+        }
+        return parsedOnce[k];
+      };
+      const linkedTo = (r) => {
+        const out = [];
+        const find = (k, id) => { if (!id) return; const hit = byIdOf(k).get(id); if (hit) out.push(hit); };
+        if (r && typeof r === 'object') { find('clients', r.clientId); find('leads', r.leadId); find('clients', r.recordId); find('leads', r.recordId); }
+        return out;
+      };
+      const fixed = AccessControl.restoreMaskedPans(current, incoming, linkedTo);
+      if (fixed.unresolved) {
+        auditLog.append(Object.assign(auditWho(req), { action: 'pan.masked-save', target: req.params.key, outcome: 'deny', count: fixed.unresolved,
+          reason: 'masked PAN with no stored PAN to restore' }));
+        return res.status(422).json({ error: 'Not saved: a PAN here is shown masked and BOSS has no full PAN on file to keep. Type the full PAN.' });
+      }
+      if (fixed.changed) value = JSON.stringify(fixed.value);
+    }
+  }
   if (req.params.key === 'hrAttendance') {
     const wrong = attendanceGuard(store.hrAttendance, value);
     if (wrong) return res.status(409).json({ error: 'attendance is append-only: ' + wrong });
@@ -2122,12 +2196,36 @@ app.put('/api/aadhaar/access', checkApiKey, requireApiAdmin, (req, res) => {
 });
 // Store a full number. Anybody who may edit a client may put one in; seeing
 // it again is the approved question.
+/* One decision for the three Aadhaar actions (access-control.js
+   aadhaarDecision). Written to the server audit trail without any digits:
+   which client, which action, the outcome. Returns false when it has
+   already answered the request with a refusal. */
+function aadhaarAllowed(req, res, v, user, clientId, action) {
+  const p = accessControl.principal(user);
+  const d = accessControl.aadhaarDecision(p, clientId, action);
+  const enforce = accessControl.enforcing();
+  if (d.ok) {
+    auditLog.append(Object.assign(auditWho(req), { action: 'aadhaar.' + action, target: 'aadhaar', ids: [clientId], outcome: 'ok' }));
+    return true;
+  }
+  auditLog.append(Object.assign(auditWho(req), { action: 'aadhaar.' + action, target: 'aadhaar', ids: [clientId], mode: accessControl.MODE,
+    outcome: enforce ? 'deny' : 'would-deny', reason: d.reason }));
+  if (!enforce) return true;
+  vaultLog(v, user, 'refused', clientId, action + ': ' + d.reason); vaultWrite(v);
+  res.status(403).json({ ok: false, message: 'This client is not one your account may ' + (action === 'view' ? 'view the Aadhaar number of' : 'change the Aadhaar number of') + '.' });
+  return false;
+}
 app.put('/api/aadhaar/:clientId', checkApiKey, (req, res) => {
   const user = signedInUser(req);
   const id = String(req.params.clientId || '');
   const number = String((req.body || {}).number || '').replace(/[\s-]/g, '');
   if (!id) return res.status(400).json({ ok: false, message: 'Which client?' });
   const v = vaultRead();
+  /* Phase 1, step 3: the client must be in this person's scope, with CMS
+     edit (and CMS delete to remove). Report mode records a refusal and
+     carries on; enforce mode refuses. The vault itself, its key and its
+     encryption are untouched. */
+  if (!aadhaarAllowed(req, res, v, user, id, number ? 'store' : 'remove')) return;
   if (!number) {
     if (v.clients[id]) { delete v.clients[id]; vaultLog(v, user, 'removed', id); vaultWrite(v); }
     return res.json({ ok: true, removed: true });
@@ -2148,6 +2246,7 @@ app.get('/api/aadhaar/:clientId', checkApiKey, (req, res) => {
     vaultLog(v, user, 'refused', id); vaultWrite(v);
     return res.status(403).json({ ok: false, message: 'The full Aadhaar number is shown only to people management has approved.' });
   }
+  if (!aadhaarAllowed(req, res, v, user, id, 'view')) return;
   const row = v.clients[id];
   if (!row) return res.status(404).json({ ok: false, message: 'Only the last four digits of this Aadhaar number are on file.' });
   let number;
@@ -3320,7 +3419,7 @@ app.post('/api/users/sync', checkApiKey, requireApiAdmin, (req, res) => {
 
   const password = String(body.password || '') || generatePassword();
   if (password.length < 8) return res.status(400).json({ ok: false, message: 'A password needs at least 8 characters.' });
-  insertMemberUser.run(email, hashPassword(password), role, memberId, crmRole, active, password);
+  insertMemberUser.run(email, hashPassword(password), role, memberId, crmRole, active, sealIssued(password));
   const made = findUserByEmail.get(email);
   res.json({ ok: true, created: true, password, account: accountJson(made) });
 });
@@ -3331,7 +3430,7 @@ app.post('/api/users/:memberId/password', checkApiKey, requireApiAdmin, (req, re
   res.set('Cache-Control', 'no-store');
   if (!user) return res.status(404).json({ ok: false, message: 'That team member has no sign-in account yet.' });
   const password = generatePassword();
-  updateUserPassword.run(hashPassword(password), password, user.id);
+  updateUserPassword.run(hashPassword(password), sealIssued(password), user.id);
   res.json({ ok: true, password, account: accountJson(findUserById.get(user.id)) });
 });
 
@@ -3375,6 +3474,24 @@ app.get('/api/access/reconcile', checkApiKey, requireApiAdmin, (req, res) => {
   Object.keys(out).forEach((k) => { counts[k] = out[k].length; });
   auditLog.append(Object.assign(auditWho(req), { action: 'access.reconcile', target: 'users', outcome: 'ok' }));
   res.set('Cache-Control', 'no-store').json({ ok: true, mode: accessControl.MODE, counts, ids: out });
+});
+
+/* Phase 1, step 3: which clients carry these PANs, for a page that only
+   holds masked PANs (an import matching its rows, a duplicate check).
+   Answers ids of clients in the person's scope and a yes/no for "also on
+   a client outside your scope"; never a PAN, never anybody else's id. */
+app.post('/api/clients/pan-match', checkApiKey, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const p = accessControl.principal(signedInUser(req));
+  if (!accessControl.mayMatchPans(p)) {
+    auditLog.append(Object.assign(auditWho(req), { action: 'pan.match', target: 'clients', outcome: 'deny', reason: 'needs CMS view or import' }));
+    return res.status(403).json({ ok: false, message: 'Your account cannot look up clients by PAN.' });
+  }
+  const pans = Array.isArray((req.body || {}).pans) ? req.body.pans : [];
+  if (pans.length > 5000) return res.status(413).json({ ok: false, message: 'At most 5,000 PANs at a time.' });
+  const results = accessControl.panMatch(p, pans);
+  auditLog.append(Object.assign(auditWho(req), { action: 'pan.match', target: 'clients', outcome: 'ok', count: results.filter(Boolean).length }));
+  res.json({ ok: true, results });
 });
 
 /* The server's audit trail, newest first. Administrators only. */

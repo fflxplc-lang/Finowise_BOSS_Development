@@ -75,14 +75,15 @@ async function account(admin, memberId, email, password, opts) {
 }
 
 const started = [];
-async function startServer(env) {
+/* opts.dir: start on an existing data folder (a restart), keeping its accounts. */
+async function startServer(env, opts) {
   const port = PORT + 500 + started.length;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sec-srv-'));
+  const dir = (opts && opts.dir) || fs.mkdtempSync(path.join(os.tmpdir(), 'sec-srv-'));
   const base = 'http://localhost:' + port;
   const usersDb = path.join(dir, 'users.db');
   const run = (args) => execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'user.js')].concat(args),
     { cwd: ROOT, env: Object.assign({}, process.env, { CRM_USERS_DB: usersDb }), stdio: 'ignore' });
-  run(['add', signIn.EMAIL, signIn.PASSWORD]); run(['role', signIn.EMAIL, 'admin']);
+  if (!(opts && opts.dir)) { run(['add', signIn.EMAIL, signIn.PASSWORD]); run(['role', signIn.EMAIL, 'admin']); }
   const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: Object.assign({}, process.env, env || {}, { PORT: String(port), CRM_DB_FILE: path.join(dir, 'data.json'),
       CRM_USERS_DB: usersDb, CRM_CONNECTIONS_FILE: path.join(dir, 'connections.json'), CRM_REMINDERS: 'manual',
@@ -93,7 +94,8 @@ async function startServer(env) {
     admin: () => login(signIn.EMAIL, signIn.PASSWORD, base),
     login: (e, p) => login(e, p, base),
     account: (admin, ...a) => account(admin, ...a),
-    stop: () => new Promise((r) => { if (child.exitCode !== null) return r(); child.once('exit', () => r()); child.kill(); }) };
+    /* A child stopped by a signal has signalCode set and exitCode null: either means it is gone. */
+    stop: () => new Promise((r) => { if (child.exitCode !== null || child.signalCode !== null) return r(); child.once('exit', () => r()); child.kill(); }) };
   started.push(srv);
   for (let i = 0; i < 150; i++) {
     try { if ((await fetch(base + '/api/health')).ok) return srv; } catch (e) { /* not up yet */ }

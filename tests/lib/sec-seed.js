@@ -57,8 +57,13 @@ function build(n) {
     const rm = owners[i % owners.length];
     const branch = branchB ? 'B' : 'A';
     const id = 'CMS-ZZ' + i;
-    d.clients.push({ id, cmsName: 'ZZ Client ' + i, rmName: rm, branch, pan: 'ZZZPC' + String(1000 + (i % 9000)).padStart(4, '0') + 'C', createdAt: at });
-    if (i % 2 === 0) d.leads.push({ id: 'LMS-ZZ' + i, leadName: 'ZZ Lead ' + i, assignedTo: rm, branch, createdAt: at });
+    const client = { id, cmsName: 'ZZ Client ' + i, rmName: rm, branch, pan: 'ZZZPC' + String(1000 + (i % 9000)).padStart(4, '0') + 'C', createdAt: at };
+    /* PANs where a field list would not think to look: a family member, a nominee */
+    if (i % 4 === 0) client.familyMembers = [{ name: 'ZZ Spouse ' + i, relation: 'Spouse', pan: 'ZZZPF' + String(1000 + (i % 9000)).padStart(4, '0') + 'F' }];
+    if (i % 8 === 0) client.nominees = [{ name: 'ZZ Nominee ' + i, share: '100', pan: 'ZZZPN' + String(1000 + (i % 9000)).padStart(4, '0') + 'N' }];
+    d.clients.push(client);
+    if (i % 2 === 0) d.leads.push({ id: 'LMS-ZZ' + i, leadName: 'ZZ Lead ' + i, assignedTo: rm, branch, createdAt: at,
+      pan: 'ZZZPL' + String(1000 + (i % 9000)).padStart(4, '0') + 'L' });
     if (i % 3 === 0) d.tasks.push({ id: 'TSK-ZZ' + i, clientId: id, assignTo: rm, createdBy: rm, overallStatus: 'Not Started' });
     if (i % 10 === 1) d.tasks.push({ id: 'TSK-ZZG' + i, clientId: id, assignTo: branchB ? 'U-RMC' : 'U-RMB', createdBy: 'U-RMA', overallStatus: 'Not Started' });
     if (i % 4 === 0) d.meetings.push({ id: 'MTG-ZZ' + i, clientId: id, assignTo: rm, createdBy: rm, status: 'Scheduled' });
@@ -78,7 +83,8 @@ function build(n) {
     if (i % 10 === 5) d.moms.push({ id: 'MOM-ZZ' + i, clientId: id, by: rm });
     if (i % 12 === 6) d.insPolicies.push({ id: 'INS-ZZ' + i, clientId: id, createdBy: rm });
     if (i % 11 === 0) d.docLinks.push({ id: 'DLK-ZZ' + i, clientId: id, createdBy: rm });
-    if (i % 5 === 1) d.auditLog.push({ id: 'AUD-ZZ' + i, at, by: rm, module: 'CMS', recordId: id, action: 'ZZ edit', details: [] });
+    if (i % 5 === 1) d.auditLog.push({ id: 'AUD-ZZ' + i, at, by: rm, module: 'CMS', recordId: id, action: 'ZZ edit',
+      details: [{ field: 'PAN', oldValue: 'ZZZPO' + String(1000 + (i % 9000)).padStart(4, '0') + 'O', newValue: client.pan }] });
   }
   ['A', 'B'].forEach((b, k) => {
     const owner = b === 'A' ? 'U-RMA' : 'U-RMC';

@@ -3929,6 +3929,33 @@ function aadhaarCheck(raw){
   if(/^[2-9][0-9]{11}$/.test(d) && verhoeffOk(d)) return {ok:true, value:d.slice(-4)};
   return {ok:false, value:v};
 }
+/* A PAN SHOWN MASKED (Phase 1, step 3).
+
+   For anyone but an administrator account the server sends PANs as
+   XXXXXX234F. Saved back unchanged, the server keeps the real one, so the
+   form accepts a masked PAN as it stands. Anything that has to MATCH a
+   PAN (an import, a search) asks the server, which answers with client
+   ids and never with the PAN: crmPanLookup(). */
+const CRM_PAN_FULL_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const CRM_PAN_MASKED_RE = /^X{6}[0-9]{3}[A-Z]$/i;
+function crmPansMasked(list, field){
+  const k = field || 'pan';
+  return (list || []).some(r=>r && CRM_PAN_MASKED_RE.test(String(r[k] || '').trim()));
+}
+/* {PAN: {ids:[client ids in my scope], elsewhere:bool}} for the full PANs given. */
+async function crmPanLookup(pans){
+  const want = Array.from(new Set((pans || []).map(x=>String(x || '').trim().toUpperCase()).filter(x=>CRM_PAN_FULL_RE.test(x))));
+  const out = {};
+  for(let i = 0; i < want.length; i += 5000){
+    const res = await fetch('/api/clients/pan-match', {method:'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({pans: want.slice(i, i + 5000)})});
+    if(res.status === 401){ crmSessionGone(); throw new Error('signed out'); }
+    if(!res.ok) throw new Error('the server answered ' + res.status);
+    const chunk = want.slice(i, i + 5000), results = (await res.json()).results || [];
+    chunk.forEach((pan, j)=>{ if(results[j]) out[pan] = results[j]; });     // the answers come back in the order asked
+  }
+  return out;
+}
 /* A PAN typed in lower case is the same PAN. A mobile is the same
    number with a space or two in it, a stray space after it (phones add
    one when they autofill), or the country code in front: +91 88879 82965
@@ -3958,6 +3985,7 @@ function checkValue(kind, raw){
   const value = normaliseValue(kind, raw);
   if(!spec) return {ok:true, value};
   if(!String(value).trim()) return {ok:true, value};        // blank is the form's business
+  if(kind === 'pan' && CRM_PAN_MASKED_RE.test(String(value).trim())) return {ok:true, value: String(value).trim().toUpperCase()};  // unchanged; the server keeps the real one
   if(spec.check){
     const got = spec.check(value);
     return got.ok ? {ok:true, value:got.value} : {ok:false, value, message:spec.message};
@@ -55104,7 +55132,15 @@ function acHitsHtml(hits){
 function acRenderHits(){
   const a = window._ac;
   const pool = addClientPool(a.projectId, a.branch);
-  const hits = a.q.trim().length>=2 ? pool.filter(c=>
+  /* A whole PAN typed while PANs are shown masked: the server says which of
+     these clients carry it (Phase 1, step 3). */
+  const qp = a.q.trim().toUpperCase();
+  if(CRM_PAN_FULL_RE.test(qp) && crmPansMasked(pool) && (!a._pan || a._pan.q !== qp)){
+    a._pan = {q: qp, ids: []};
+    crmPanLookup([qp]).then(m=>{ if(window._ac && window._ac._pan && window._ac._pan.q === qp){ window._ac._pan.ids = (m[qp] || {}).ids || []; acRenderHits(); } }).catch(()=>{});
+  }
+  const panIds = a._pan && a._pan.q === qp ? a._pan.ids : [];
+  const hits = a.q.trim().length>=2 ? pool.filter(c=> panIds.includes(c.id) ||
       [c.cmsName, c.pan, c.mobile, c.email].some(v=>String(v||'').toLowerCase().includes(a.q.trim().toLowerCase()))
     ).slice(0,40) : null;
   const node = document.getElementById('acHits');
@@ -68486,20 +68522,34 @@ function impCell(type, raw){
    and a half thousand rows against a book of two thousand clients was
    five million PAN normalisations before anything was written. */
 function impClientIndex(clients){
-  const byPan = new Map(), byName = new Map();
+  const byPan = new Map(), byName = new Map(), outside = new Set();
+  /* With masked PANs in the tab, the PAN half of the index is the server's
+     answer (crmPanLookup) about this file's PANs: ids in scope, and which
+     belong only to clients outside it. */
+  const server = impWiz && impWiz.serverPans;
+  if(server){
+    const byId = new Map((clients || []).map(c=>[c.id, c]));
+    Object.keys(server).forEach(pan=>{
+      const list = (server[pan].ids || []).map(id=>byId.get(id)).filter(Boolean);
+      if(list.length) byPan.set(pan, list);
+      else if(server[pan].elsewhere) outside.add(pan);
+    });
+  }
   (clients || []).forEach(c=>{
-    const p = impNormPan(c.pan || '');
+    const p = server ? '' : impNormPan(c.pan || '');
     if(p){ if(!byPan.has(p)) byPan.set(p, []); byPan.get(p).push(c); }
     const n = impNormKey(c.cmsName || '');
     if(n){ if(!byName.has(n)) byName.set(n, []); byName.get(n).push(c); }
   });
-  return {byPan, byName};
+  return {byPan, byName, outside};
 }
 function impMatchClient(ident, clients, index){
   const idx = index || impClientIndex(clients);
   const pan = impNormPan(ident.pan || '');
   if(pan && IMP_PAN_RE.test(pan)){
     const hit = idx.byPan.get(pan) || [];
+    if(!hit.length && idx.outside && idx.outside.has(pan))
+      return {how:'invalid', why:'the PAN ending ' + pan.slice(-4) + ' belongs to a client outside your scope, so this row is left alone'};
     if(hit.length === 1) return {clientId: hit[0].id, how:'pan', client: hit[0]};
     if(hit.length > 1){
       /* The same PAN on two records is the same person entered twice. The
@@ -68908,6 +68958,15 @@ async function impTakeFile(ev){
     impWiz.headers = read.headers;
     impWiz.rows = read.rows;
     impWiz.analysis = null;
+    /* Clients' PANs arrive masked for anyone but an administrator account,
+       so matching this file's rows to clients by PAN is asked of the server
+       before any row is matched. If it cannot answer, nothing goes ahead. */
+    impWiz.serverPans = null;
+    if(crmPansMasked(DB.clients)){
+      const cells = [];
+      (read.rows || []).forEach(r=>(Array.isArray(r) ? r : Object.values(r || {})).forEach(v=>cells.push(impNormPan(v || ''))));
+      impWiz.serverPans = await crmPanLookup(cells);
+    }
     impSuggestColumns(impWiz);
     impWiz.step = 4;
   } catch(e){
@@ -70814,6 +70873,25 @@ function mapImpBuild(){
   const headers = mapImp.read.headers;
   const keyField = mapImp.keyField ? mapImpField(srcId, mapImp.keyField) : null;
   const existing = (DB[srcId] || []).filter(r=>!r.deletedAt);
+  /* A PAN key with the PANs in the tab masked (Phase 1, step 3): clients are
+     matched through the server (crmPanLookup); another module cannot be,
+     and says so rather than matching nothing and adding duplicates. */
+  const panKey = keyField && (keyField.vk === 'pan' || /pan/i.test(keyField.k)) && crmPansMasked(existing, keyField.k);
+  let panBlock = '';
+  if(panKey){
+    if(srcId !== 'clients') panBlock = 'Matching on PAN needs an administrator account for this module (PANs are shown masked). Choose another key.';
+    else if(!mapImp.serverPans || mapImp.serverPansFor !== keyField.k){
+      panBlock = 'Checking the PANs in this file with the server\u2026';
+      if(mapImp.serverPansFor !== keyField.k){
+        mapImp.serverPansFor = keyField.k; mapImp.serverPans = null;
+        const col = mapImp.read.headers.findIndex(h=>mapImp.map[h] === keyField.k);
+        const pans = col < 0 ? [] : mapImp.read.rows.map(r=>String((r || [])[col] || ''));
+        crmPanLookup(pans).then(m=>{ if(mapImp && mapImp.serverPansFor === keyField.k){ mapImp.serverPans = m; render(); } })
+          .catch(e=>{ if(mapImp){ mapImp.serverPans = {__error: String(e && e.message || e)}; render(); } });
+      }
+    }
+    else if(mapImp.serverPans.__error) panBlock = 'BOSS could not check the PANs with the server (' + mapImp.serverPans.__error + '). Nothing will be imported until it can.';
+  }
   const mappedKeys = Object.values(mapImp.map).filter(Boolean);
   const identity = mapImpIdentity(srcId);
   const partial = mapImp.partial !== false;
@@ -70871,7 +70949,12 @@ function mapImpBuild(){
           + (keyField.l || keyField.k) + '.';
       } else {
         seenInFile[kv] = i;
-        const hit = existing.find(r=>mapImpNorm(r[keyField.k]) === kv);
+        let hit = null;
+        if(panKey && !panBlock){
+          const m = mapImp.serverPans[String(rec[keyField.k] || '').trim().toUpperCase()];
+          hit = m ? existing.find(r=>(m.ids || []).includes(r.id)) || null : null;
+          if(!hit && m && m.elsewhere){ verdict = 'skip'; note = 'This PAN belongs to a client outside your scope; the row is left alone.'; }
+        } else hit = existing.find(r=>mapImpNorm(r[keyField.k]) === kv);
         if(hit){
           if(mapImp.mode === 'update'){ verdict = 'update'; note = 'Matches ' + hit.id; rec.__id = hit.id; }
           /* THE SAME PAN IS NOT ALWAYS A DUPLICATE.
@@ -70965,7 +71048,8 @@ function mapImpBuild(){
              is off. Otherwise it is a gap on every new record — said plainly,
              and left for somebody to fill in on the profile. */
           blocking: fields.filter(f=>f.req && mappedKeys.indexOf(f.k) < 0
-                                  && (!partial || f.k === identity))};
+                                  && (!partial || f.k === identity))
+            .concat(panBlock ? [{k:'__pan', l: panBlock, req:true}] : [])};
 }
 
 /* ---- the screen ----------------------------------------------------- */

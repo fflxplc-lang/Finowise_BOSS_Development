@@ -73,6 +73,95 @@ function hasValue(v) {
   return true;
 }
 
+/* =====================================================================
+   PAN, SHOWN MASKED  (Phase 1, step 3)
+
+   A PAN is ten characters: five letters, four digits, a letter. For anyone
+   but an administrator account the server sends every PAN it finds in a
+   record as XXXXXX234F (the last four kept, so a person can still tell two
+   apart), wherever in the record it sits: the client's own, a family
+   member's, a nominee's, a value a form recorded, an audit line's old and
+   new value. It is matched on the value, not the field name, so a PAN in
+   a field nobody listed is masked too.
+
+   A masked PAN sent back on a save means "unchanged": the server puts the
+   stored PAN back before anything else looks at the record. A full PAN
+   sent back is a change, and is saved like any other edit. A masked value
+   the server cannot trace to a stored PAN is refused rather than saved.
+   ===================================================================== */
+const PAN_FULL_RE = /^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/;
+const PAN_MASKED_RE = /^X{6}([0-9]{3}[A-Za-z])$/;
+function maskPan(v) { return 'XXXXXX' + String(v).trim().slice(-4).toUpperCase(); }
+function isFullPan(v) { return typeof v === 'string' && PAN_FULL_RE.test(v.trim()); }
+function isMaskedPan(v) { return typeof v === 'string' && PAN_MASKED_RE.test(v.trim()); }
+/* Copy-on-write walk: returns the same object when nothing needed masking. */
+function maskPansDeep(v, counter) {
+  if (typeof v === 'string') { if (isFullPan(v)) { counter.n++; return maskPan(v); } return v; }
+  if (!v || typeof v !== 'object') return v;
+  let copy = null;
+  if (Array.isArray(v)) {
+    v.forEach((x, i) => { const y = maskPansDeep(x, counter); if (y !== x) { if (!copy) copy = v.slice(); copy[i] = y; } });
+  } else {
+    Object.keys(v).forEach((k) => { const y = maskPansDeep(v[k], counter); if (y !== v[k]) { if (!copy) copy = Object.assign({}, v); copy[k] = y; } });
+  }
+  return copy || v;
+}
+/* Every full PAN in a stored record, by its last four. */
+function pansByLast4(v, out) {
+  out = out || new Map();
+  if (typeof v === 'string') {
+    if (isFullPan(v)) { const k = v.trim().slice(-4).toUpperCase(); const s = out.get(k) || new Set(); s.add(v.trim().toUpperCase()); out.set(k, s); }
+  } else if (v && typeof v === 'object') (Array.isArray(v) ? v : Object.values(v)).forEach((x) => pansByLast4(x, out));
+  return out;
+}
+/* Put the stored PAN back wherever a masked one came in. */
+function restorePansDeep(v, last4, counter) {
+  if (typeof v === 'string') {
+    const m = v.trim().match(PAN_MASKED_RE);
+    if (!m) return v;
+    const hit = last4 && last4.get(m[1].toUpperCase());
+    if (hit && hit.size === 1) { counter.restored++; return [...hit][0]; }
+    counter.unresolved++; return v;
+  }
+  if (!v || typeof v !== 'object') return v;
+  let copy = null;
+  if (Array.isArray(v)) {
+    v.forEach((x, i) => { const y = restorePansDeep(x, last4, counter); if (y !== x) { if (!copy) copy = v.slice(); copy[i] = y; } });
+  } else {
+    Object.keys(v).forEach((k) => { const y = restorePansDeep(v[k], last4, counter); if (y !== v[k]) { if (!copy) copy = Object.assign({}, v); copy[k] = y; } });
+  }
+  return copy || v;
+}
+function hasMaskedPan(v) {
+  if (typeof v === 'string') return isMaskedPan(v);
+  if (!v || typeof v !== 'object') return false;
+  return (Array.isArray(v) ? v : Object.values(v)).some(hasMaskedPan);
+}
+/* A save's records with their masked PANs put back from the server copy
+   of the same record (matched by id; a store that is one object is matched
+   as a whole). {value, restored, unresolved, changed}. */
+function restoreMaskedPans(curValue, nextValue, linked) {
+  const counter = { restored: 0, unresolved: 0 };
+  if (!hasMaskedPan(nextValue)) return { value: nextValue, restored: 0, unresolved: 0, changed: false };
+  let value = nextValue;
+  if (Array.isArray(nextValue)) {
+    const byId = new Map((Array.isArray(curValue) ? curValue : []).filter((r) => r && r.id).map((r) => [r.id, r]));
+    value = nextValue.map((r) => {
+      if (!hasMaskedPan(r)) return r;
+      const was = r && r.id ? byId.get(r.id) : null;
+      /* The record's own stored copy first; then the client or lead it hangs
+         off (a form pre-filled from the client carries the client's PAN). */
+      const map = was ? pansByLast4(was) : new Map();
+      const extra = linked && !was ? linked(r) : [];      // only a record new to the server needs it
+      (extra || []).forEach((x) => pansByLast4(x, map));
+      return restorePansDeep(r, map.size ? map : null, counter);
+    });
+  } else {
+    value = restorePansDeep(nextValue, pansByLast4(curValue), counter);
+  }
+  return { value, restored: counter.restored, unresolved: counter.unresolved, changed: counter.restored > 0 };
+}
+
 function create(opts) {
   const storeRaw = opts.storeRaw;               // key -> raw JSON string, as the server holds it
   const memberOfUser = opts.memberOfUser;       // the server's own id-then-email lookup
@@ -475,7 +564,7 @@ function create(opts) {
 
   /* -------- reading a store -------- */
   function readView(p, key, raw) {
-    const out = { cls: classOf(key), hidden: 0, stubs: 0, refused: false, value: raw };
+    const out = { cls: classOf(key), hidden: 0, stubs: 0, masked: 0, refused: false, value: raw, maskCounter: { n: 0 } };
     if (raw === undefined || !p || p.admin || UNSCOPED) return out;
     if (!out.cls) { out.refused = true; out.value = undefined; return out; }    // a store with no rule
     const v = parsedRaw(key, raw);
@@ -490,10 +579,18 @@ function create(opts) {
         changed = true; out.hidden += hide.length;
         const copy = Object.assign({}, m); hide.forEach((k) => { delete copy[k]; }); return copy;
       });
-      if (changed) out.value = JSON.stringify(shown);
+      const masked = maskPansDeep(shown, out.maskCounter);
+      out.masked = out.maskCounter.n;
+      if (changed || masked !== shown) out.value = JSON.stringify(masked);
       return out;
     }
-    if (out.cls === 'S' || !Array.isArray(v)) return out;
+    if (out.cls === 'S') return out;
+    if (!Array.isArray(v)) {                       // a store that is one object: masked, not filtered
+      const m = maskPansDeep(v, out.maskCounter);
+      out.masked = out.maskCounter.n;
+      if (m !== v) out.value = JSON.stringify(m);
+      return out;
+    }
     const kept = v.filter((r) => readable(key, r, c));
     out.hidden = v.length - kept.length;
     /* A visible record that points at a client or lead the person cannot
@@ -515,7 +612,9 @@ function create(opts) {
       });
       out.stubs = want.size;
     }
-    if (out.hidden || out.stubs) out.value = JSON.stringify(kept);
+    const shownList = maskPansDeep(kept, out.maskCounter);
+    out.masked = out.maskCounter.n;
+    if (out.hidden || out.stubs || shownList !== kept) out.value = JSON.stringify(shownList);
     return out;
   }
 
@@ -659,8 +758,60 @@ function create(opts) {
     return { removed, total, emptied, limit, confirmed: confirmHeader !== undefined && confirmHeader !== '' };
   }
 
+  /* -------- PAN match: which clients carry these PANs, without saying the PANs --------
+     For each PAN asked about: the ids of the live clients in the person's
+     scope that carry it, and whether it is also on a client outside their
+     scope (yes or no, nothing more). The page uses it for platform imports
+     and duplicate checks when it only holds masked PANs. */
+  const panIndexCache = { raw: null, index: null };
+  function panIndex() {
+    const raw = storeRaw('clients');
+    if (panIndexCache.raw === raw && panIndexCache.index) return panIndexCache.index;
+    const index = new Map();
+    for (const c of parsed('clients', [])) {
+      if (!c || c.deletedAt || !isFullPan(c.pan)) continue;
+      const k = c.pan.trim().toUpperCase();
+      if (!index.has(k)) index.set(k, []);
+      index.get(k).push(c);
+    }
+    panIndexCache.raw = raw; panIndexCache.index = index;
+    return index;
+  }
+  /* One answer per PAN asked, in the same order; null for something that
+     is not a PAN. The answer carries ids and a yes/no, never a PAN. */
+  function panMatch(p, pans) {
+    const index = panIndex();
+    const c = context(p);
+    return pans.map((raw) => {
+      const k = String(raw || '').trim().toUpperCase();
+      if (!PAN_FULL_RE.test(k)) return null;
+      const hits = index.get(k) || [];
+      const mine = p.admin ? hits : hits.filter((cl) => readable('clients', cl, c));
+      return { ids: mine.map((cl) => cl.id), elsewhere: hits.length > mine.length };
+    });
+  }
+  function mayMatchPans(p) { return !!p && (p.admin || can(p, 'CMS', 'view') || can(p, 'CMS', 'create') || mayImport(p)); }
+
+  /* -------- Aadhaar: the client must be the person's to work on --------
+     Store or replace: the client is in scope and CMS edit is held.
+     Remove: also CMS delete. View: the approval list (unchanged, checked by
+     the route) and the client in scope. The administrator account: always. */
+  function aadhaarDecision(p, clientId, action) {
+    if (!p) return { ok: false, reason: 'not_signed_in' };
+    if (p.admin) return { ok: true };
+    const c = context(p);
+    const client = c.get('clients', clientId);
+    if (!client) return { ok: false, reason: 'no_such_client' };
+    if (!readable('clients', client, c)) return { ok: false, reason: 'client_outside_scope' };
+    if (action === 'view') return { ok: true };
+    if (!can(p, 'CMS', 'edit')) return { ok: false, reason: 'needs_cms_edit' };
+    if (action === 'remove' && !can(p, 'CMS', 'delete')) return { ok: false, reason: 'needs_cms_delete' };
+    return { ok: true };
+  }
+
   return {
     MODE, UNSCOPED, ADMIN_ROLE, ADMIN_FLAGS, USER_FLAGS, TEAM_PROTECTED, TEAM_PRIVATE,
+    panMatch, mayMatchPans, aadhaarDecision,
     principal, can, canAdmin, hrAdmin, inScope, teamViolations,
     classOf, readView, mergeWrite, shrinkCheck,
     roleOf: (m) => roleOf(m, config()), descendants: (id) => descendants(team(), id),
@@ -704,7 +855,7 @@ const ROUTE_POLICY = {
   'GET /users': 'admin', 'POST /users/delete': 'admin', 'POST /users': 'admin',
   'GET /api/users': 'admin', 'POST /api/users/sync': 'admin', 'POST /api/users/:memberId/password': 'admin',
   'DELETE /api/users/:memberId': 'admin',
-  'GET /api/access/reconcile': 'admin', 'GET /api/audit': 'admin',
+  'GET /api/access/reconcile': 'admin', 'GET /api/audit': 'admin', 'POST /api/clients/pan-match': 'scoped',
   'GET /api/public/bundle': 'token', 'POST /api/public/patch': 'token', 'POST /api/approvals': 'signed-in',
   'POST /api/public/approval': 'token', 'POST /api/public/mail': 'token', 'POST /api/public/website-lead': 'public',
   'GET /config.js': 'public', 'POST /api/reminders/run': 'test-only',
@@ -712,4 +863,5 @@ const ROUTE_POLICY = {
   'GET /api/reminders/log': 'scoped', 'GET /api/attendance/today': 'signed-in', 'GET /*splat': 'public',
 };
 
-module.exports = { create, ROUTE_POLICY, TEAM_PROTECTED, ADMIN_ROLE, DEFAULT_ROLES };
+module.exports = { create, ROUTE_POLICY, TEAM_PROTECTED, ADMIN_ROLE, DEFAULT_ROLES,
+  maskPan, isFullPan, isMaskedPan, maskPansDeep, restoreMaskedPans };
