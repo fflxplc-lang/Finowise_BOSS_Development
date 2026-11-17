@@ -31,7 +31,13 @@
      - no answer anywhere says "The AI service is busy";
      - "how many kycs are pending", "kitne kyc pending hain", "how many
        mandates are pending" give the exact count and the status-wise
-       breakdown from the clients, with no SOP beside them. */
+       breakdown from the clients, with no SOP beside them;
+     - the portfolio, risk & wealth engine: portfolio analysis (donut),
+       buy/sell/hold/switch and risky-to-safe, tax harvesting, cross-sell
+       and up-sell, risk (Sharpe, beta, σ, μ ± σ), GAB / buckets / HUF /
+       legacy, projections (fan chart), each with its exact figures from
+       a synthetic client, several charts in one answer, and the PDF
+       report (a real %PDF- file, on request and from the button). */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -421,6 +427,137 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
           throw new Error(JSON.stringify({ text: r.text, calls: bodies.length - n, sops: /<sops>/.test(asked), count: /countSummary/.test(asked) }));
         gemini('503');
         return 'one call, with <data> holding the count; no <sops>';
+      });
+
+      /* ---- the portfolio, risk & wealth engine ---- */
+      const daysAgo = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
+      const H = [['Parag Parikh Flexi Cap Reg Gr', 400000, 600000, daysAgo(1500)], ['HSBC Midcap Reg Gr', 200000, 320000, daysAgo(1000)],
+        ['Bandhan Small Cap Reg Gr', 250000, 400000, daysAgo(150)], ['ICICI Pru Liquid Reg Gr', 300000, 310000, daysAgo(400)],
+        ['HDFC Corporate Bond Reg Gr', 150000, 165000, daysAgo(1800)], ['DSP Value Reg Gr', 100000, 90000, daysAgo(600)]];
+      const clients = KYC.map((k, i) => ({ id: 'CMS-K' + i, cmsName: 'ZZ Kyc ' + i, rmName: '', branch: i % 2 ? 'Varanasi' : 'Mumbai', kycStatus: k, mandateStatus: MANDATE[i] }));
+      clients.push({ id: 'CMS-I1', cmsName: 'ZZ Intel Client', rmName: '', branch: 'Mumbai', riskProfile: 'Moderate', dob: '1975-05-01', taxStatus: 'Individual', kycStatus: 'Validated' });
+      await admin.put('/api/storage/clients', { value: JSON.stringify(clients) });
+      await admin.put('/api/storage/platformHoldings', { value: JSON.stringify(H.map((h, i) => ({ id: 'PFH-I' + i, clientId: 'CMS-I1', schemeName: h[0], invested: h[1], current: h[2], purchaseDate: h[3] }))) });
+      await admin.put('/api/storage/platformSips', { value: JSON.stringify([{ id: 'PFS-I1', clientId: 'CMS-I1', schemeName: 'Parag Parikh Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000 }]) });
+      const TOTAL = 1885000, SIP = 5000;
+      const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+      const fv = (r, n) => { const i = r / 1200; return TOTAL * Math.pow(1 + r / 100, n) + SIP * ((Math.pow(1 + i, n * 12) - 1) / i) * (1 + i); };
+      const pg2 = await (await browser.newContext({ acceptDownloads: true })).newPage();
+      await signIn(pg2, srv.base); await ready(pg2);
+      const askI = (q) => pg2.evaluate(async (q) => {
+        await aiRefreshStatus(true);
+        ai.open = true; aiDrawPanel();
+        const input = document.getElementById('aiInput'); ai.draft = q; if(input) input.value = q;
+        await aiSend();
+        const i = ai.turns.length - 1, last = ai.turns[i] || {};
+        const box = document.getElementById('aiTurns');
+        const cards = box ? [...box.querySelectorAll('.ria-chart')].filter((el) => el.closest('#aiTurns')) : [];
+        return { i, error: ai.error, text: String(last.content || ''), charts: (last.charts || []).map((c) => ({ kind: c.kind, module: c.module, title: c.title, sub: c.sub || '' })),
+          intel: last.intel ? { total: last.intel.total, modules: last.intel.modules, scope: last.intel.scope } : null, pdf: last.pdf || null,
+          dom: cards.slice(-(last.charts || []).length || 0).map((el) => ({ kind: el.dataset.kind, svg: el.querySelector('svg') ? el.querySelector('svg').getAttribute('class') : '', text: el.textContent })),
+          pdfButton: !!(box && box.querySelector('.ria-pdf')), html: box ? box.innerText : '' };
+      }, q);
+      const clean = (r) => { if (r.error || NEVER.test(r.text) || BUSY.test(r.html)) throw new Error('error or busy: ' + (r.error || r.text.slice(0, 200))); };
+
+      await step('portfolio analysis: asset classes, concentration and return vs reference, with a donut chart', async () => {
+        gemini('503');
+        const r = await askI('portfolio analysis of ZZ Intel Client');
+        clean(r);
+        const donut = r.dom.find((d) => d.kind === 'donut');
+        if (!r.intel || r.intel.total !== TOTAL || !donut || donut.svg !== 'ria-donut' || !/Equity 74\.8%, Liquid\/Cash 16\.4%, Debt 8\.8%/.test(r.text) || !r.pdfButton)
+          throw new Error(JSON.stringify({ intel: r.intel, charts: r.charts.map((c) => c.kind), text: r.text.slice(0, 400) }));
+        return 'total ' + inr(TOTAL) + '; Equity 74.8 / Liquid 16.4 / Debt 8.8; donut drawn; ' + r.charts.length + ' charts; PDF button shown';
+      });
+
+      await step('buy / sell / hold / switch and risky-to-safe: switch ₹2,48,750, exit load ₹1,382, with the comparison chart and the governance note', async () => {
+        const r = await askI('buy sell hold switch and risky to safe switch for ZZ Intel Client');
+        clean(r);
+        const sw = r.charts.find((c) => /Risky-to-safe/.test(c.title));
+        const share = 248750 / 720000, tax = Math.round((120000 * share * 12.5 + 150000 * share * 20) / 100);
+        if (!sw || !/₹2,48,750/.test(sw.sub) || !/₹1,382/.test(sw.sub) || !sw.sub.includes(inr(tax)) || !r.charts.some((c) => /Buy \/ Sell \/ Hold \/ Switch/.test(c.title))
+          || !/human advisor & client approval is mandatory/.test(r.text) || !r.dom.some((d) => d.svg === 'ria-bars'))
+          throw new Error(JSON.stringify({ charts: r.charts, text: r.text.slice(0, 500) }));
+        return 'small + mid 38.2% vs 25% ceiling → switch ₹2,48,750; load ₹1,382; tax ' + inr(tax);
+      });
+
+      await step('tax harvesting: ₹1,25,000 tax-free, ₹15,625 saved, ₹1,95,000 still taxable, ₹10,000 loss — before/after chart', async () => {
+        const r = await askI('tax harvesting for ZZ Intel Client');
+        clean(r);
+        const c = r.charts.find((x) => x.module === 'tax');
+        if (!c || !/Book ₹1,25,000 of long-term gain tax-free/.test(r.text) || !/about ₹15,625 saved; taxable gain remaining ₹1,95,000/.test(r.text) || !/Losses of ₹10,000/.test(r.text)
+          || !/Unrealised equity gain ₹4,70,000/.test(r.text)) throw new Error(JSON.stringify({ c, text: r.text.slice(0, 600) }));
+        return 'gain ₹4,70,000 (LT ₹3,20,000, ST ₹1,50,000) → harvest ₹1,25,000, save ₹15,625';
+      });
+
+      await step('cross-sell & up-sell: SIP step-up, idle cash, protection, GAB, 7 Events, HUF, LA MF, diversification', async () => {
+        const r = await askI('cross sell up sell opportunities for ZZ Intel Client');
+        clean(r);
+        const need = [/SIP step-up \/ top-up: 1 \(₹14,000\)/, /idle cash → STP into Flexi Cap \/ Multi-Asset: 1 \(₹1,21,500\)/, /FSL \/ protection/, /GAB \(Golden Age Blueprint\)/, /7 Events blueprint/,
+          /HUF folio/, /LA MF \(loan against mutual funds\): 1 \(₹6,34,500\)/, /Multi-Asset \/ Gold \/ Debt diversification/];
+        const missing = need.filter((re) => !re.test(r.text)).map(String);
+        if (missing.length || !r.charts.some((c) => c.module === 'opportunities')) throw new Error(JSON.stringify({ missing, text: r.text.slice(0, 700) }));
+        return '8 opportunities, each with its amount where there is one';
+      });
+
+      await step('risk analysis: Sharpe, beta, μ, σ and the μ ± σ spread drawn on the risk card', async () => {
+        const r = await askI('risk analysis sharpe beta standard deviation of ZZ Intel Client');
+        clean(r);
+        const card = r.dom.find((d) => d.kind === 'risk');
+        const m = r.text.match(/Sharpe ratio (-?[\d.]+) · Beta \(β\) ([\d.]+) · Expected return \(μ\) ([\d.]+)% · Standard deviation \(σ\) ([\d.]+)%/);
+        if (!m || !card || card.svg !== 'ria-risk' || !/μ − σ/.test(card.text) || !/μ \+ σ/.test(card.text) || !/Sharpe ratio/.test(card.text) || !/not computed from NAV history/.test(r.text))
+          throw new Error(JSON.stringify({ card, text: r.text.slice(0, 500) }));
+        const [mu, sigma, sharpe] = [Number(m[3]), Number(m[4]), Number(m[1])];
+        if (Math.abs(sharpe - (mu - 6.5) / sigma) > 0.02) throw new Error('Sharpe ' + sharpe + ' is not (μ − 6.5) / σ');
+        return 'Sharpe ' + m[1] + ', β ' + m[2] + ', μ ' + m[3] + '%, σ ' + m[4] + '%; spread drawn';
+      });
+
+      await step('GAB, bucket strategy, HUF ("huff suggestion"), trust & legacy: buckets on the real corpus, with a donut', async () => {
+        const r = await askI('GAB bucket strategy huff suggestion and trust legacy planning for ZZ Intel Client');
+        clean(r);
+        const need = [/Bucket 1 · 0–2Y Immediate cashflow & emergency: ₹1,88,500/, /Bucket 2 · 3–6Y Stability & income refill: ₹3,77,000/, /Bucket 3 · 7Y\+ Wealth growth: ₹13,19,500/,
+          /GAB SWP income: ₹6,283 to ₹7,854 a month/, /HUF \(Hindu Undivided Family\)/, /Private Family Trust/, /0 of 1 client have a nominee on file/];
+        const missing = need.filter((re) => !re.test(r.text)).map(String);
+        if (missing.length || !r.dom.some((d) => d.kind === 'donut' && /Bucket strategy/.test(d.text))) throw new Error(JSON.stringify({ missing, text: r.text.slice(0, 700) }));
+        return 'buckets ₹1,88,500 / ₹3,77,000 / ₹13,19,500; SWP ₹6,283–₹7,854 a month';
+      });
+
+      await step('future projection: 3 to 20 years at 9 / 12 / 15%, as a fan chart', async () => {
+        const r = await askI('future projection of ZZ Intel Client');
+        clean(r);
+        const ten = '10 years: ' + inr(fv(9, 10)) + ' / ' + inr(fv(12, 10)) + ' / ' + inr(fv(15, 10));
+        const line = r.dom.find((d) => d.kind === 'line');
+        if (!r.text.includes(ten) || !line || line.svg !== 'ria-line' || !/20Y/.test(line.text)) throw new Error(JSON.stringify({ ten, text: r.text.slice(0, 600) }));
+        return ten;
+      });
+
+      await step('the book: "risk analysis of our book" covers every visible client', async () => {
+        const r = await askI('risk analysis of our book');
+        clean(r);
+        if (!r.intel || r.intel.scope.kind !== 'book' || r.intel.scope.clients !== 9 || !r.charts.some((c) => c.kind === 'risk')) throw new Error(JSON.stringify(r.intel));
+        return r.intel.scope.label;
+      });
+
+      await step('one question, every chart, and the PDF report — on request and from the button — is a real PDF', async () => {
+        const auto = pg2.waitForEvent('download', { timeout: 15000 });
+        const r = await askI('complete portfolio analysis of ZZ Intel Client with pdf');
+        clean(r);
+        const kinds = new Set(r.charts.map((c) => c.kind)), mods = new Set(r.charts.map((c) => c.module));
+        if (r.charts.length < 9 || !['donut', 'hbar', 'risk', 'line'].every((k) => kinds.has(k)) || mods.size < 7 || r.dom.length !== r.charts.length || !r.pdf || !r.pdf.filename)
+          throw new Error(JSON.stringify({ charts: r.charts.map((c) => c.module + ':' + c.kind), dom: r.dom.length, pdf: r.pdf }));
+        const d1 = await auto;
+        const f1 = fs.readFileSync(await d1.path());
+        const press = pg2.waitForEvent('download', { timeout: 15000 });
+        await pg2.evaluate(() => { const b = [...document.querySelectorAll('#aiTurns .ria-pdf')].pop(); b.click(); });
+        const d2 = await press;
+        const f2 = fs.readFileSync(await d2.path());
+        const info = await pg2.evaluate((i) => { const b = bossTurnPdfBlocks(i); const raw = pdfRender(b, { footer: RIA_PDF_FOOT });
+          return { head: raw.slice(0, 5), blocks: b.length, kinds: [...new Set(b.map((x) => x.t))], text: b.map((x) => [x.text, x.label, x.value, x.title].concat((x.items || []).map((it) => it.label)).filter(Boolean).join(' ')).join(' | ') }; }, r.i);
+        const want = ['RIA AI Advisory Report', 'ZZ Intel Client', 'Executive summary', 'Asset allocation', 'Tax harvesting', 'Risk analytics', 'Bucket strategy', 'Future projection',
+          'Cross-sell', 'Std dev (sigma)', 'Mean return (mu)', 'Generated by RIA AI from live BOSS records. Human advisor approval required before execution.'];
+        const missing = want.filter((w) => !info.text.includes(w));
+        if (f1.slice(0, 5).toString() !== '%PDF-' || f2.slice(0, 5).toString() !== '%PDF-' || info.head !== '%PDF-' || missing.length || !['donut', 'bars', 'table', 'cards', 'meter'].every((k) => info.kinds.includes(k)))
+          throw new Error(JSON.stringify({ h1: f1.slice(0, 8).toString(), h2: f2.slice(0, 8).toString(), missing, kinds: info.kinds }));
+        return r.charts.length + ' charts across ' + mods.size + ' modules; PDF ' + d1.suggestedFilename() + ' (' + f1.length + ' bytes, ' + info.blocks + ' blocks) on request and ' + f2.length + ' bytes from the button';
       });
     } finally { await browser.close(); }
     await step('no answer anywhere in this run said "The AI service is busy"', async () => {
