@@ -77,6 +77,7 @@ const SOURCE_WORDS = [
   [/\b(calls?)\b/, ['call']],
   [/\b(transactions?|txns?|sips?|redemptions?|purchases?)\b/, ['transaction', 'sip']],
   [/\b(campaigns?)\b/, ['campaign']],
+  [/\b(kycs?|mandates?|iins?|ucc|nominees?|risk ?profiles?|iseq|tax status|nri|huf|categor(?:y|ies)|stages?)\b/, ['client']],
 ];
 function pickSource(q, sources) {
   const t = String(q || '').toLowerCase();
@@ -104,13 +105,24 @@ function period(q, now) {
   if (/\b(this year|is saal)\b/.test(t)) return { from: d.getUTCFullYear() + '-01-01', to: iso(d) };
   return { from: null, to: null };
 }
-const COUNT_RE = /\b(how many|kitne|kitna|kitni|count|number of|total|branch[- ]?wise|rm[- ]?wise|status[- ]?wise|by branch|by rm|by status|breakdown)\b/i;
+const COUNT_RE = /\b(how many|how much|kitne|kitna|kitni|count|number of|total|branch[- ]?wise|rm[- ]?wise|status[- ]?wise|by branch|by rm|by status|breakdown)\b/i;
+const PENDING_RE = /\b(pending|baaki|baki|incomplete|outstanding|overdue|remaining|not validated|non[- ]?validated|not done)\b/i;
+/* A how-to in so many words; "on hold" or "form" alone does not make a count question one. */
+const STRICT_HOWTO_RE = /\b(kaise|how to|how do|process|procedure|steps?|documents?|docs|kagaz|kya karein|kya karna|what to do|what should|should i)\b/i;
+/* "How many KYCs are pending", "kitne mandate pending hain", "overdue tasks". */
+const isCountQ = (q) => (COUNT_RE.test(q) || PENDING_RE.test(q)) && !STRICT_HOWTO_RE.test(q);
+/* The status a question names, as a column of the source: kycs → kyc. */
+const FIELD_WORDS = [[/\bkycs?\b/, /kyc/], [/\bmandates?\b/, /mandate/], [/\b(risks?|risk ?profiles?|iseq)\b/, /risk|iseq/],
+  [/\b(tax|nri|huf|minor)\b/, /tax/], [/\bcategor(?:y|ies)\b/, /categor/], [/\b(iins?|ucc|activation)\b/, /iin|ucc/], [/\bstages?\b/, /stage/]];
 const HOWTO_RE = /\b(kaise|how to|how do|process|procedure|steps?|documents?|docs|kagaz|kya karein|kya karna|what to do|what should|should i|tat|on hold|rejected|form)\b/i;
 function groupAndSum(q, src) {
   const t = String(q || '').toLowerCase();
   const col = (re) => src.cols.find((c) => re.test(c.toLowerCase()));
   let g = null;
-  if (/branch/.test(t)) g = col(/branch/);
+  const field = FIELD_WORDS.find(([re]) => re.test(t));
+  if (field) g = col(field[1]);
+  if (g) { /* the status named */ }
+  else if (/branch/.test(t)) g = col(/branch/);
   else if (/\brm\b|advis|owner|assigned/.test(t)) g = col(/^rm|rm$|owner|assigned|advis/);
   else if (/status|stage/.test(t)) g = col(/status|stage/);
   if (!g) g = col(/status|stage/) || col(/branch/) || null;
@@ -122,12 +134,14 @@ function groupAndSum(q, src) {
 function plan(q, system, now) {
   const sources = parseSources(system);
   const src = pickSource(q, sources);
-  if (!src || (HOWTO_RE.test(q) && !COUNT_RE.test(q))) return JSON.stringify({ reads: [], client: null });
+  if (!src || (HOWTO_RE.test(q) && !isCountQ(q))) return JSON.stringify({ reads: [], client: null });
   const per = period(q, now);
   const read = { source: src.name, from: per.from, to: per.to, where: [] };
-  if (COUNT_RE.test(q)) Object.assign(read, groupAndSum(q, src));
+  if (isCountQ(q)) Object.assign(read, groupAndSum(q, src));
   else read.cols = src.cols.slice(0, 8);
-  if (/\bpending\b/i.test(q)) { const s = src.cols.find((c) => /status/i.test(c)); if (s) read.where = [{ col: s, op: 'contains', value: 'Pending' }]; }
+  /* "Pending SIPs" as a list is filtered; a count of pending is grouped by
+     status instead, so every status and its count is in the answer. */
+  if (/\bpending\b/i.test(q) && !(read.groupBy && read.groupBy.length)) { const s = src.cols.find((c) => /status/i.test(c)); if (s) read.where = [{ col: s, op: 'contains', value: 'Pending' }]; }
   return JSON.stringify({ reads: [read], client: null });
 }
 
@@ -198,7 +212,7 @@ const PAGE_ALIAS = {
   'daily working tracker': 'dwt', 'daily job tracker': 'djt', 'annual review calendar': 'arc', 'management information system': 'mis',
 };
 const norm = (q) => String(q || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9\u0900-\u097f]+/g, ' ').replace(/\s+/g, ' ').trim();
-const isHinglish = (q) => /\b(dikhao|dikhado|dikha|dikhaiye|kholo|kholiye|khol|chalo|jao|karo|ka|ki|ke|ko|mera|meri|mujhe|zara|hai|kijiye|dijiye|batao|hamara|humara)\b/i.test(String(q || ''));
+const isHinglish = (q) => /\b(dikhao|dikhado|dikha|dikhaiye|kholo|kholiye|khol|chalo|jao|karo|ka|ki|ke|ko|mera|meri|mujhe|zara|hai|hain|kitne|kitna|kitni|kya|kaun|kaunsa|kijiye|dijiye|batao|hamara|humara)\b/i.test(String(q || ''));
 function pageFor(name, pages) {
   const n = norm(name);
   if (!n) return null;
@@ -294,6 +308,15 @@ function describeClient(c) {
   if ((c.openTasks || []).length) lines.push('- Open tasks: ' + c.openTasks.slice(0, 3).map((t) => (t.title || t.type) + (t.due ? ' (due ' + t.due + ')' : '')).join('; '));
   return lines;
 }
+/* "How many KYCs are pending": the number first, then each status. */
+function describeCount(c, q) {
+  if (!c || typeof c.matching !== 'number') return [];
+  const who = c.matching + ' of ' + c.total + ' ' + (c.of || 'records');
+  const head = isHinglish(q) && / is not /.test(c.rule)
+    ? '**' + c.total + ' mein se ' + c.matching + ' ' + (c.of || 'records') + '** ka ' + c.rule.replace(/ is not /, ' ') + ' nahi hai (pending).'
+    : '**' + who + '** are pending: their ' + c.rule + '.';
+  return [head, ''];
+}
 function describeChart(ch) {
   if (!ch || typeof ch !== 'object') return [];
   const bars = Array.isArray(ch.rows) ? ch.rows : Array.isArray(ch.bars) ? ch.bars : Array.isArray(ch.data) ? ch.data : Array.isArray(ch.groups) ? ch.groups : [];
@@ -336,6 +359,7 @@ function chat(messages, opts) {
   } else if (opts.aum && opts.aum.message && /\baum\b/i.test(q)) out.push(opts.aum.message);
 
   if (data) {
+    if (data.countSummary) out.push(...describeCount(data.countSummary, q));
     (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c)); out.push(''); });
     if (data.openLead) out.push('Lead on screen: ' + rowLine(data.openLead) + '.');
     if (data.chart) out.push(...describeChart(data.chart));
@@ -350,8 +374,13 @@ function chat(messages, opts) {
   }
   while (out.length && out[out.length - 1] === '') out.pop();
 
-  /* With the house view given, a policy note is context, not the answer. */
-  if (house && sops.length) {
+  /* A count question is answered by its numbers; an SOP under it is noise. */
+  const countQ = isCountQ(q) && !house && !(data && Array.isArray(data.clients) && data.clients.length);   // a client's own question keeps its SOPs
+  if (countQ) {
+    if (!data || !(data.reads || data.countSummary || data.clients)) out.push(isHinglish(q)
+      ? 'Is ginti ke liye BOSS ne koi records nahi padhe. Status ka naam likhiye — jaise "kitne KYC pending hain" ya "how many mandates are pending".'
+      : 'BOSS read no records for that count. Name the status — for example "how many KYCs are pending" or "how many mandates are pending".');
+  } else if (house && sops.length) {
     out.push('', 'Related: ' + sops.slice(0, 3).map((x) => '[' + x.id + '] ' + x.title).join('; ') + '.');
   } else if (sops.length) {
     const s = sops[0];

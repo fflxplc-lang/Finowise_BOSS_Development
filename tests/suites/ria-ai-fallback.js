@@ -28,7 +28,10 @@
      - "give me graphical representation of our clients" draws the chart;
      - Gemini failing on its model walks the chain gemini-2.5-flash →
        gemini-2.0-flash → gemini-1.5-flash, a 404 included;
-     - no answer anywhere says "The AI service is busy". */
+     - no answer anywhere says "The AI service is busy";
+     - "how many kycs are pending", "kitne kyc pending hain", "how many
+       mandates are pending" give the exact count and the status-wise
+       breakdown from the clients, with no SOP beside them. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -306,6 +309,11 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
     /* In the page itself. */
     gemini('503');
     await admin.put('/api/connections/claude', { enabled: false });
+    /* Eight synthetic clients with known KYC and mandate statuses. */
+    const KYC = ['Validated', 'Validated', 'Validated', 'Registered', 'Registered', 'On Hold', 'Not Registered', ''];
+    const MANDATE = ['Approved', 'Approved', 'Pending Approval', 'Pending Approval', 'Pending Approval', 'Not Initiated', 'Rejected', ''];
+    await admin.put('/api/storage/clients', { value: JSON.stringify(KYC.map((k, i) => ({ id: 'CMS-K' + i, cmsName: 'ZZ Kyc ' + i, rmName: '', branch: i % 2 ? 'Varanasi' : 'Mumbai',
+      kycStatus: k, mandateStatus: MANDATE[i] }))) });
     const browser = await pw.chromium.launch({ executablePath: CHROME });
     try {
       await step('in the page: the KYC question with Gemini overloaded shows the answer, and no red error', async () => {
@@ -376,6 +384,43 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const r = await ask('give me graphical representation of our clients');
         if (r.error || !r.chart || !r.chartDom || NEVER.test(r.text) || BUSY.test(r.html)) throw new Error(JSON.stringify(r).slice(0, 400));
         return 'boss-chart drawn: "' + r.chartTitle + '"; ' + r.text.split('\n')[0].slice(0, 80);
+      });
+
+      const SOP_NOISE = /\[iin-pending\]|Here is what to do|The process that applies|Related: \[/;
+      await step('in the page: "how many kycs are pending" — 5 of 8 clients, status by status, no SOP', async () => {
+        gemini('503');
+        const r = await ask('how many kycs are pending');
+        const last = await pg.evaluate(() => { const t = ai.turns[ai.turns.length - 1]; return { sops: (t.sops || []).length }; });
+        const need = [/\*\*5 of 8 clients\*\* are pending: their KYC Status is not Validated\./, /- Validated: 3/, /- Registered: 2/, /- On Hold: 1/, /- Not Registered: 1/, /- Not recorded: 1/];
+        const missing = need.filter((re) => !re.test(r.text)).map(String);
+        if (r.error || missing.length || SOP_NOISE.test(r.text) || last.sops || NEVER.test(r.text)) throw new Error(JSON.stringify({ missing, sops: last.sops, text: r.text }).slice(0, 500));
+        return r.text.split('\n')[0] + ' (then every status; 0 SOPs attached)';
+      });
+
+      await step('in the page: "kitne kyc pending hain" — the same count, in Hinglish', async () => {
+        const r = await ask('kitne kyc pending hain');
+        if (r.error || !/\*\*8 mein se 5 clients\*\* ka KYC Status Validated nahi hai \(pending\)\./.test(r.text) || !/- On Hold: 1/.test(r.text) || SOP_NOISE.test(r.text))
+          throw new Error(r.text.slice(0, 400));
+        return r.text.split('\n')[0];
+      });
+
+      await step('in the page: "how many mandates are pending" — 6 of 8 clients, Pending Approval 3', async () => {
+        const r = await ask('how many mandates are pending');
+        if (r.error || !/\*\*6 of 8 clients\*\* are pending: their Mandate Status is not Approved\./.test(r.text) || !/- Pending Approval: 3/.test(r.text) || !/- Approved: 2/.test(r.text) || SOP_NOISE.test(r.text))
+          throw new Error(r.text.slice(0, 400));
+        return r.text.split('\n')[0];
+      });
+
+      await step('in the page, provider up: the model is sent the counts and no SOPs for "how many kycs are pending"', async () => {
+        gemini('ok');
+        const n = bodies.length;
+        const r = await ask('how many kycs are pending');
+        /* The question as sent (the user turn), not the system prompt, whose rules mention <sops> by name. */
+        const asked = bodies.slice(n).map((b) => { try { return (JSON.parse(b).contents || []).map((c) => (c.parts || []).map((x) => x.text).join('')).join('\n'); } catch (e) { return ''; } }).join('\n');
+        if (r.text !== 'MOCK MODEL ANSWER from gemini-2.5-pro' || bodies.length - n !== 1 || !/countSummary/.test(asked) || !/KYC Status is not Validated/.test(asked) || /<sops>/.test(asked))
+          throw new Error(JSON.stringify({ text: r.text, calls: bodies.length - n, sops: /<sops>/.test(asked), count: /countSummary/.test(asked) }));
+        gemini('503');
+        return 'one call, with <data> holding the count; no <sops>';
       });
     } finally { await browser.close(); }
     await step('no answer anywhere in this run said "The AI service is busy"', async () => {

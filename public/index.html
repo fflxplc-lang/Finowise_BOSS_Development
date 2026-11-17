@@ -58439,6 +58439,10 @@ const AI_SOURCES = {
       stage:r=>stateLabel('CMS', stateOf('CMS', r)), category:r=>r.clientCategory||'',
       branch:r=>r.branch, rm:r=>teamName(r.rmName), created:r=>r.createdAt,
       aum:r=>clientBookAum(r), sip:r=>numVal(r.monthlySip),
+      /* The statuses a "how many KYCs are pending" question groups by. */
+      kyc:r=>r.kycStatus||'', mandate:r=>r.mandateStatus||'', risk:r=>r.riskProfile||r.iseqCategory||'',
+      tax:r=>(typeof bossTaxStatus==='function') ? bossTaxStatus(r) : (r.taxStatus||''),
+      iin:r=>!String(r.canIinNo||r.uccNo||'').trim() ? 'No IIN' : (/^yes$/i.test(String(r.accountActivated||'')) ? 'IIN active' : 'IIN not active'),
     }},
   reviews: {label:'Reviews', perm:'RMS', list:()=>DB.reviews, owner:r=>r.assignedTo, branch:r=>r.branch,
     date:r=>r.createdAt,
@@ -59485,7 +59489,48 @@ function bossLooksLikeHowTo(q){
   return /\b(kaise|how to|how do|process|procedure|steps?|documents?|docs|kagaz|kya karein|kya karna|what to do|what should|should i|tat|form)\b/i.test(q);
 }
 function bossLooksLikeData(q){
-  return /\b(kitne|kitna|kitni|how many|how much|total|list|pending|due|aaj|today|week|hafte|month|mahine|aum|clients|leads|meetings|tasks|reviews|queries|business|calls|top|highest|sabse|branch[- ]?wise|rm[- ]?wise|mere|my)\b/i.test(q);
+  return /\b(kitne|kitna|kitni|how many|how much|total|count|number of|list|pending|overdue|due|aaj|today|week|hafte|month|mahine|aum|clients?|leads?|meetings?|tasks?|reviews?|queries|query|tickets?|business|calls?|kycs?|mandates?|folios?|schemes?|sips?|nominees?|iins?|top|highest|sabse|branch[- ]?wise|rm[- ]?wise|status[- ]?wise|mere|my)\b/i.test(q);
+}
+/* "How many KYCs are pending", "kitne mandate pending hain": a question for
+   a number, not for a process. Its answer is a count from the records, and
+   an SOP beside it is noise. "What should I do if a KYC is on hold" is not
+   one of these. */
+const BOSS_COUNT_RE = /\b(how\s*many|how\s*much|kitne|kitna|kitni|count|number of|total|branch[- ]?wise|rm[- ]?wise|status[- ]?wise|breakdown)\b/i;
+const BOSS_PENDING_RE = /\b(pending|baaki|baki|incomplete|outstanding|overdue|remaining|not validated|non[- ]?validated|not done)\b/i;
+const BOSS_STRICT_HOWTO = /\b(kaise|how to|how do|process|procedure|steps?|documents?|docs|kagaz|kya karein|kya karna|what to do|what should|should i)\b/i;
+function bossCountQuestion(q){
+  return (BOSS_COUNT_RE.test(q) || (BOSS_PENDING_RE.test(q) && bossLooksLikeData(q))) && !BOSS_STRICT_HOWTO.test(q);
+}
+/* When a status is done: what "pending" means for it. */
+const BOSS_STATUS_DONE = {kyc:{re:/^validated$/i, rule:'is not Validated'}, mandate:{re:/^approved$/i, rule:'is not Approved'},
+  iin:{re:/^iin active$/i, rule:'is not IIN active'}, nominee:{re:/^nominee registered$/i, rule:'has no nominee registered'},
+  goals:{re:/^goals mapped$/i, rule:'has no goals mapped'}};
+/* The count, read here from the records this user may see, grouped the way
+   the Analytics charts group them. null when the question names no status
+   BOSS counts (it then goes to the planned read). */
+function bossCountIntent(q){
+  if(!bossCountQuestion(q)) return null;
+  const one = w => w.replace(/ies$/,'y').replace(/([^s])s$/,'$1');
+  const t = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').map(one).join(' ') + ' ';
+  const src = / lead /.test(t) && can('LMS','view') ? 'leads' : 'clients';
+  const rows = analyticsRecords(src);
+  if(!rows) return null;
+  /* Branch and RM counts often want a sum beside them: those stay with the planned read. */
+  const dim = ANALYTICS_SOURCES[src].dims.filter(d=>d.id!=='branch' && d.id!=='rm')
+    .find(d=>d.words.some(w=>t.indexOf(' '+one(w)+' ')>=0));
+  if(!dim) return null;
+  const groups = analyticsGroup(rows, dim.value);
+  const label = ANALYTICS_SOURCES[src].label;
+  const read = {source: label, total: rows.length, groupBy: [dim.label], groups: groups.map(g=>({key:g.label, count:g.count}))};
+  const done = src==='clients' ? BOSS_STATUS_DONE[dim.id] : null;
+  let summary = null;
+  if(done && BOSS_PENDING_RE.test(q)){
+    const open = groups.filter(g=>!done.re.test(g.label));
+    summary = {asked:'pending', field: dim.label, rule: dim.label + ' ' + done.rule, of: label.toLowerCase(),
+      matching: open.reduce((n,g)=>n+g.count, 0), total: rows.length,
+      breakdown: open.map(g=>({key:g.label, count:g.count}))};
+  }
+  return {read, summary};
 }
 const BOSS_ANSWER_RULES = `
 HOW RIA AI ANSWERS
@@ -59682,7 +59727,14 @@ async function bossRunChat(q){
   if(chart){ data.chart = chart; if(!bossLooksLikeHowTo(q)) sops = []; }
   /* "HDFC Bank ka share live dikhao": live prices, read now, and the
      policy's market view beside them instead of whatever SOP the words hit. */
-  const mktNames = !chart && !chartQ ? lexiMarketAsk(q, people) : null;
+  /* "How many KYCs are pending": the count is read here, now, and no SOP
+     goes with it. */
+  const countQ = !chart && !chartQ && !people.length ? bossCountIntent(q) : null;
+  if(countQ){ data.reads = [countQ.read]; if(countQ.summary) data.countSummary = countQ.summary; }
+  /* A question about one client ("what is pending on this client") keeps
+     the SOPs for what is wrong on that account. */
+  if(countQ || (!people.length && bossCountQuestion(q) && bossLooksLikeData(q))) sops = [];
+  const mktNames = !chart && !chartQ && !countQ ? lexiMarketAsk(q, people) : null;
   let market = null;
   if(mktNames){
     ai.phase = 'RIA AI is reading live prices'; aiDrawPanel();
@@ -59695,7 +59747,7 @@ async function bossRunChat(q){
     data.liveMarket = lexiMarketForAi(market, lexiMoneyIn(q), shortlist);
     data.marketZone = lexiLiveZoneLabel(market.quotes);
     sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean))];
-  } else if(!chart && !chartQ && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
+  } else if(!chart && !chartQ && !countQ && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
     ai.phase = 'RIA AI is reading the live market'; aiDrawPanel();
     const now = await lexiMarketRead(['NIFTY 50']);
     if(now.quotes.length){
@@ -59704,7 +59756,7 @@ async function bossRunChat(q){
       sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean).concat(sops))].slice(0, 5);
     }
   }
-  if(!mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
+  if(!countQ && !mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
     ai.phase = 'RIA AI is checking the records'; aiDrawPanel();
     const plan = await bossPlanReads(q);
     if(plan.error) return {error: plan.error};
