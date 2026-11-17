@@ -809,9 +809,45 @@ function create(opts) {
     return { ok: true };
   }
 
+  /* -------- Mail as the firm (step 4; report mode first) --------
+     Every recipient must be an email address found on a record the person
+     can see (a client, a lead, a campaign recipient), on the team, or be
+     their own. Anything else needs the administrator account or the
+     mailExternal flag. A campaign or drip send needs Campaigns permission.
+     Free-form compose is capped at 20 recipients a message. */
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  function emailsIn(v, out) {
+    if (typeof v === 'string') { const t = v.trim().toLowerCase(); if (EMAIL_RE.test(t)) out.add(t); }
+    else if (v && typeof v === 'object') (Array.isArray(v) ? v : Object.values(v)).forEach((x) => emailsIn(x, out));
+    return out;
+  }
+  function mailDecision(p, addresses, kind) {
+    if (!p) return { ok: false, reason: 'not_signed_in' };
+    if (p.admin) return { ok: true };
+    const reasons = [];
+    if ((kind === 'campaign' || kind === 'drip') && !(can(p, 'Campaigns', 'edit') || can(p, 'Campaigns', 'create'))) reasons.push('needs_campaigns_permission');
+    if (kind === 'compose' && addresses.length > 20) reasons.push('too_many_recipients');
+    if (!canAdmin(p, 'mailExternal')) {
+      const c = context(p);
+      const ok = new Set();
+      emailsIn(p.email, ok);
+      team().forEach((m) => { if (m) ['email', 'personalEmail', 'officialEmail'].forEach((k) => emailsIn(m[k], ok)); });
+      ['clients', 'leads', 'campaignRecipients'].forEach((k) => { for (const r of c.list(k)) if (r && readable(k, r, c)) emailsIn(r, ok); });
+      const outside = addresses.filter((a) => !ok.has(String(a).trim().toLowerCase()));
+      if (outside.length) reasons.push('recipient_outside_scope');
+    }
+    return reasons.length ? { ok: false, reason: reasons.join(',') } : { ok: true };
+  }
+  /* The assistant (step 4; report mode first): the page's canUse('useAiAssistant'). */
+  function mayUseAi(p) {
+    if (!p) return false;
+    if (p.admin || p.teamAdmin) return true;
+    return !!(p.member && p.member.adminFlags && p.member.adminFlags.useAiAssistant);
+  }
+
   return {
     MODE, UNSCOPED, ADMIN_ROLE, ADMIN_FLAGS, USER_FLAGS, TEAM_PROTECTED, TEAM_PRIVATE,
-    panMatch, mayMatchPans, aadhaarDecision,
+    panMatch, mayMatchPans, aadhaarDecision, mailDecision, mayUseAi,
     principal, can, canAdmin, hrAdmin, inScope, teamViolations,
     classOf, readView, mergeWrite, shrinkCheck,
     roleOf: (m) => roleOf(m, config()), descendants: (id) => descendants(team(), id),

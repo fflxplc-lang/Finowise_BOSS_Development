@@ -53546,7 +53546,7 @@ async function runDripJourneys(){
         if(channel==='Email' && mailChannel.ready){
           try{
             const res = await fetch('/api/mail/send', {
-              method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()),
+              method:'POST', headers: Object.assign({'Content-Type':'application/json', 'X-CRM-Mail':'drip'}, apiHeaders()),
               body: JSON.stringify({to:address, subject, body, html: signed.html}),
             });
             const r = await res.json().catch(()=>({ok:false, message:'The server gave no answer.'}));
@@ -54515,7 +54515,7 @@ async function confirmSendCampaign(id){
       if(channel==='Email' && mailChannel.ready){
         try{
           const res = await fetch('/api/mail/send', {
-            method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()),
+            method:'POST', headers: Object.assign({'Content-Type':'application/json', 'X-CRM-Mail':'campaign'}, apiHeaders()),
             body: JSON.stringify({to:address, subject, body, html: signed.html}),
           });
           const r = await res.json().catch(()=>({ok:false, message:'The server gave no answer.'}));
@@ -72788,6 +72788,8 @@ async function saveApiConnector(){
   if(secretEl && secretEl.value) body.secret = secretEl.value;
   if(tokenEl && tokenEl.value) body.shareToken = tokenEl.value;
   if(Object.keys(body).length){
+    /* The administrator saving the secret approves where it may go (Phase 1). */
+    body.baseUrl = d.baseUrl || ''; body.tokenUrl = (d.auth && d.auth.tokenUrl) || '';
     try{ await apiPutSecret(d.id, body); }
     catch(e){ alert('The credential could not be saved — ' + e.message); return; }
   }
@@ -72817,7 +72819,7 @@ async function apiTestFromEditor(){
   apiEditCapture();
   const d = apiDraft();
   const secretEl = document.getElementById('ac_secret');
-  if(secretEl && secretEl.value){ await apiPutSecret(d.id, {secret: secretEl.value}); secretEl.value = ''; }
+  if(secretEl && secretEl.value){ await apiPutSecret(d.id, {secret: secretEl.value, baseUrl: d.baseUrl || '', tokenUrl: (d.auth && d.auth.tokenUrl) || ''}); secretEl.value = ''; }
   await apiTestRun(d, true);
 }
 async function apiTestConnection(id){
@@ -79503,7 +79505,7 @@ async function deliverMail(o){
         ? '/api/public/mail?token=' + encodeURIComponent(publicToken)
         : '/api/mail/send';
       const res = await fetch(endpoint, {
-        method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()),
+        method:'POST', headers: Object.assign({'Content-Type':'application/json', 'X-CRM-Mail':'template'}, apiHeaders()),
         body: JSON.stringify({to, cc:o.cc||'', subject, body, html: asHtml,
                               attachments: o.attachments || []}),
       });
@@ -80065,7 +80067,7 @@ async function submitComposeMail(module, recordId){
   if(mailChannel.ready){
     try{
       const res = await fetch('/api/mail/send', {
-        method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()),
+        method:'POST', headers: Object.assign({'Content-Type':'application/json', 'X-CRM-Mail':'compose'}, apiHeaders()),
         body: JSON.stringify({to, cc, subject: finalSubject, body: finalBody, html: signed.html}),
       });
       const r = await res.json().catch(()=>({ok:false, message:'The server gave no answer.'}));

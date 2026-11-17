@@ -36,6 +36,8 @@ const TEAM = [
   { id: 'U-HR', name: 'ZZ HR', role: 'Executive', scope: 'own', branch: 'A', status: 'Active', hrAccess: { admin: 1 } },
   { id: 'U-PM', name: 'ZZ Permissions', role: 'Manager', scope: 'own', branch: 'A', status: 'Active',
     adminFlags: { managePermissions: 1 }, perms: { Team: { view: 1, edit: 1 } } },
+  /* U-OPS holds Manage module settings: today it may also test and remove connectors in the page. */
+  { id: 'U-OPS', name: 'ZZ Ops Settings', role: 'Manager', scope: 'own', branch: 'A', status: 'Active', adminFlags: { manageModuleSettings: 1 }, perms: {} },
 ];
 /* Who owns records in each branch, in turn. */
 const OWNERS_A = ['U-RMA', 'U-RMB', 'U-TL', 'U-BMA'];
@@ -44,7 +46,8 @@ const OWNERS_B = ['U-RMC'];
 function build(n) {
   n = n || 400;
   const at = '2026-10-01T10:00:00.000Z';
-  const d = { team: JSON.parse(JSON.stringify(TEAM)), clients: [], leads: [], tasks: [], meetings: [], transactions: [],
+  /* a team member's own email, as the Team Members screen records it (the same as their sign-in) */
+  const d = { team: JSON.parse(JSON.stringify(TEAM)).map((m) => Object.assign({ email: email(m.id) }, m)), clients: [], leads: [], tasks: [], meetings: [], transactions: [],
     platformHoldings: [], platformSips: [], reviews: [], queries: [], queryReplies: [], callEntries: [], businessEntries: [],
     recommendations: [], projects: [], projectClients: [], projectTasks: [], partners: [], campaigns: [], campaignRecipients: [],
     communications: [], clientDocuments: [], moms: [], insPolicies: [], docLinks: [], auditLog: [], settingsAudit: [],
@@ -57,7 +60,7 @@ function build(n) {
     const rm = owners[i % owners.length];
     const branch = branchB ? 'B' : 'A';
     const id = 'CMS-ZZ' + i;
-    const client = { id, cmsName: 'ZZ Client ' + i, rmName: rm, branch, pan: 'ZZZPC' + String(1000 + (i % 9000)).padStart(4, '0') + 'C', createdAt: at };
+    const client = { id, cmsName: 'ZZ Client ' + i, rmName: rm, branch, email: 'client' + i + '@sec.test', pan: 'ZZZPC' + String(1000 + (i % 9000)).padStart(4, '0') + 'C', createdAt: at };
     /* PANs where a field list would not think to look: a family member, a nominee */
     if (i % 4 === 0) client.familyMembers = [{ name: 'ZZ Spouse ' + i, relation: 'Spouse', pan: 'ZZZPF' + String(1000 + (i % 9000)).padStart(4, '0') + 'F' }];
     if (i % 8 === 0) client.nominees = [{ name: 'ZZ Nominee ' + i, share: '100', pan: 'ZZZPN' + String(1000 + (i % 9000)).padStart(4, '0') + 'N' }];
