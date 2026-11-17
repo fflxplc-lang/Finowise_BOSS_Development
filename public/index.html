@@ -58954,7 +58954,9 @@ async function aiSend(){
   ai.error = null;
   ai.turns.push({role:'user', content:q});
   ai.busy = true; aiDrawPanel();
-  const out = riaTotalAumIntent(q) ? await riaTotalAumTurn()
+  const nav = bossPageOpenIntent(q);
+  const out = nav ? bossOpenNow(q, nav)
+            : riaTotalAumIntent(q) ? await riaTotalAumTurn()
             : aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
   ai.busy = false; ai.phase = '';
   if(out && out.error) ai.error = out.error;
@@ -59510,8 +59512,23 @@ HOW RIA AI ANSWERS
    page as text, and an id the model made up opens nothing. */
 const BOSS_CLIENT_TABS = ['overview','portfolio','goals','transactions','risk','engagement','mail','comms','documents'];
 function bossPages(){
-  const views = ['dashboard'].concat(...NAV_GROUPS.filter(g=>!g.setupOnly).map(g=>g.items));
+  /* The rail's modules, and the screens reached from inside one (Portfolio
+     Review and Mail from a review, My Profile from the avatar) that are
+     routes all the same. navigate() still asks whether this account may. */
+  const views = ['dashboard'].concat(...NAV_GROUPS.filter(g=>!g.setupOnly).map(g=>g.items), ['portfolio','mailbox','profile','settings']);
   return [...new Set(views)].filter(v=>NAV_LABELS[v] && (typeof viewIsLive!=='function' || viewIsLive(v)));
+}
+/* "DWT · Daily Working Tracker" as the page list says it: the short name
+   the rail uses, then the full one. */
+function bossPageLabel(v){
+  const l = String(NAV_LABELS[v]||v).replace(/\s+—\s+/, ' · ');
+  const sh = (typeof NAV_SHORT!=='undefined' && NAV_SHORT[v]) || '';
+  return sh && l.indexOf(sh)!==0 ? sh + ' · ' + l : l;
+}
+/* …and as an answer says it: "DWT (Daily Working Tracker)". */
+function bossPageTitle(v){
+  const l = bossPageLabel(v), i = l.indexOf(' · ');
+  return i > 0 ? l.slice(0, i) + ' (' + l.slice(i + 3) + ')' : l;
 }
 function bossOpenRules(){
   return `
@@ -59519,7 +59536,7 @@ OPENING A SCREEN
   If the user asks to see, show, open or go to a screen or a client's details (show, open, go to, take me, dikhao, kholo, le chalo),
   answer in one or two lines and end with exactly one line on its own:
     OPEN: cms <client id from <data>> <tab>     tabs: ${BOSS_CLIENT_TABS.join(', ')}
-    OPEN: <page>                               pages: ${bossPages().map(v=>v+' ('+NAV_LABELS[v]+')').join(', ')}
+    OPEN: <page>                               pages: ${bossPages().map(v=>v+' ('+bossPageLabel(v)+')').join(', ')}
   Use only a client id that appears in <data>. If the client is not in <data>, say so and write no OPEN line.
   When the user only asks a question, write no OPEN line.`;
 }
@@ -59537,8 +59554,92 @@ function bossOpen(line){
     navigate('cms', c.id);
     return {kind:'cms', id:c.id, tab, label: clientDisplayName(c) + ' › ' + tab.charAt(0).toUpperCase() + tab.slice(1)};
   }
-  if(bossPages().includes(p[0])){ navigate(p[0]); return {kind:'page', view:p[0], label: NAV_LABELS[p[0]]}; }
+  const v = bossPages().includes(p[0]) ? p[0] : bossPageAlias(p.join(' '));
+  if(v && bossPages().includes(v)){
+    navigate(v);
+    if(currentView !== v) return null;                 // the router refused it: nothing was opened
+    return {kind:'page', view:v, label: NAV_LABELS[v]};
+  }
   return null;
+}
+/* ---- "DWT dikhao", "open DWT", "Priya ka portfolio dikhao" ----
+   A request only to open a screen needs no records, no SOP and no model:
+   it is answered here, at once, and the screen opens. Anything more
+   ("DWT dikhao aur batao kitne pending hain") goes the usual way. */
+const BOSS_OPEN_WORDS = /\b(open|show|go|goto|take|navigate|launch|visit|dikhao|dikhado|dikha|dikhaiye|dikhayein|dikhaye|kholo|kholiye|kholdo|khol|chalo|jao|le)\b/;
+const BOSS_OPEN_FILLER = new Set(('me to the a an page screen module tab section view please pls plz now ka ki ke ko mera meri mere my our hamara humara '
+  + 'do de dijiye dena karo kar kariye zara jara hai na ab abhi wala wali wale par pe on up for us can you could would i want see let lets go goto take navigate '
+  + 'open show launch visit dikhao dikhado dikha dikhaiye dikhayein dikhaye kholo kholiye kholdo khol chalo jao le bhai sir ji details detail').split(' '));
+const BOSS_PAGE_ALIAS = {
+  home:'dashboard', dash:'dashboard', leads:'lms', lead:'lms', clients:'cms', client:'cms', reviews:'rms', review:'rms',
+  tasks:'dst', task:'dst', 'service tasks':'dst', dbt:'business', 'daily business tracker':'business', business:'business',
+  mom:'meetings', moms:'meetings', 'minutes of meeting':'meetings', meeting:'meetings', calendar:'meetings', call:'calls', 'call logs':'calls',
+  mail:'mailbox', mails:'mailbox', inbox:'mailbox', email:'mailbox', emails:'mailbox', fbp:'partners', partner:'partners',
+  campaign:'campaigns', marketing:'campaigns', project:'projects', report:'reports', import:'import', 'bulk import':'import',
+  team:'teammembers', 'team members':'teammembers', 'team member':'teammembers', setup:'settings', setting:'settings', settings:'settings',
+  'recycle bin':'recyclebin', bin:'recyclebin', trash:'recyclebin', fq:'fqtests', 'fq tests':'fqtests', 'fq test':'fqtests',
+  iseq:'iseqforms', 'iseq forms':'iseqforms', cif:'cifforms', 'cif forms':'cifforms', 'plan forms':'planforms', 'plan input forms':'planforms',
+  ct:'ctforms', 'ct forms':'ctforms', 'c and t forms':'ctforms', qms:'queries', query:'queries', queries:'queries', tickets:'queries',
+  profile:'profile', 'my profile':'profile', hr:'hrdashboard', 'hr dashboard':'hrdashboard', attendance:'hrattendance',
+  incentive:'hrincentive', incentives:'hrincentive', appraisal:'hrappraisal', appraisals:'hrappraisal',
+  '7 events':'sevenevents', 'seven events':'sevenevents', 'execution tracker':'recommendations', recommendation:'recommendations',
+  transaction:'transactions', 'transaction tracker':'transactions', txns:'transactions', 'portfolio review':'portfolio', portfolio:'portfolio',
+  'daily working tracker':'dwt', 'daily job tracker':'djt', 'annual review calendar':'arc', 'management information system':'mis',
+};
+const bossNorm = q => ' ' + String(q||'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9\u0900-\u097f]+/g,' ').replace(/\s+/g,' ').trim() + ' ';
+/* The view a name stands for, among the pages BOSS can open. */
+function bossPageAlias(name){
+  const n = bossNorm(name).trim();
+  if(!n) return '';
+  const pages = bossPages();
+  if(pages.includes(n.replace(/ /g,''))) return n.replace(/ /g,'');
+  if(BOSS_PAGE_ALIAS[n]) return BOSS_PAGE_ALIAS[n];
+  /* "Daily Working Tracker", "DWT · Daily Working Tracker", "Lead Nurture Group". */
+  return pages.find(v=>String(bossPageLabel(v)).split(' · ').concat([bossPageLabel(v)]).some(part=>bossNorm(part).trim() === n)) || '';
+}
+const BOSS_TAB_ALIAS = {overview:'overview', profile:'overview', summary:'overview', portfolio:'portfolio', holdings:'portfolio', goals:'goals', goal:'goals',
+  transactions:'transactions', transaction:'transactions', txns:'transactions', risk:'risk', 'risk profile':'risk', engagement:'engagement',
+  mail:'mail', mails:'mail', emails:'mail', comms:'comms', communication:'comms', communications:'comms', documents:'documents', document:'documents', docs:'documents'};
+const bossHinglish = q => /\b(dikhao|dikhado|dikha|dikhaiye|kholo|kholiye|khol|chalo|jao|karo|ka|ki|ke|ko|mera|meri|mujhe|zara|hai|kijiye|dijiye|batao|hamara|humara)\b/i.test(q);
+function bossPageOpenIntent(q){
+  const t = bossNorm(q);
+  if(!BOSS_OPEN_WORDS.test(t)) return null;
+  const rest = t.trim().split(' ').filter(w=>w && !BOSS_OPEN_FILLER.has(w));
+  if(!rest.length) return null;
+  const v = bossPageAlias(rest.join(' '));
+  if(v) return {kind:'page', view:v};
+  /* A client and one of the client tabs: "Priya Sharma ka portfolio dikhao". */
+  const named = typeof bossClientsNamedIn==='function' ? bossClientsNamedIn(q) : [];
+  if(named.length !== 1) return null;
+  const c = named[0];
+  const nameWords = new Set(bossNorm(clientDisplayName(c)).trim().split(' ').concat(bossNorm(c.id).trim().split(' ')));
+  let tab = '', left = rest.filter(w=>!nameWords.has(w));
+  const two = left.join(' ');
+  if(BOSS_TAB_ALIAS[two]){ tab = BOSS_TAB_ALIAS[two]; left = []; }
+  else left = left.filter(w=>{ if(!tab && BOSS_TAB_ALIAS[w]){ tab = BOSS_TAB_ALIAS[w]; return false; } return true; });
+  if(left.length) return null;
+  return {kind:'cms', id:c.id, tab: tab || 'overview'};
+}
+function bossOpenNow(q, intent){
+  const hi = bossHinglish(q);
+  let text, opened = null;
+  if(intent.kind === 'cms'){
+    opened = bossOpen('cms ' + intent.id + ' ' + intent.tab);
+    text = opened ? (hi ? '**' + opened.label + '** khol diya hai.' : 'Opened **' + opened.label + '**.')
+                  : (hi ? 'Yeh client aapke account mein khul nahi sakta.' : 'That client is not one your account can open.');
+  } else {
+    const name = bossPageTitle(intent.view);
+    if(!bossPages().includes(intent.view)) text = hi ? '**' + name + '** abhi Setup mein band hai.' : '**' + name + '** is switched off in Setup.';
+    else {
+      opened = bossOpen(intent.view);
+      text = opened ? (hi ? '**' + name + '** khol diya hai.' : 'Opened **' + name + '**.')
+                    : (hi ? '**' + name + '** aapke account ke liye khula nahi hai.' : '**' + name + '** is not open to your account.');
+    }
+  }
+  const turn = {role:'assistant', content:text};
+  if(opened){ turn.opened = opened; ai.context = aiContextOf(); }
+  ai.turns.push(turn);
+  return {};
 }
 function bossReopen(i){
   const t = ai.turns[i]; if(!t || !t.opened) return;
@@ -60801,7 +60902,7 @@ function lexiChartDraw(){
    Returns null when the question does not ask for a chart. */
 function bossChartIntent(q){
   const t = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9]+/g,' ') + ' ';
-  if(!/ (chart|charts|graph|graphs|bar|pie|plot|visual|visualise|visualize|breakdown|distribution|graf) /.test(t)) return null;
+  if(!/ (chart|charts|graph|graphs|graphical|graphically|bar|pie|plot|visual|visually|visualise|visualize|visualisation|visualization|representation|breakdown|distribution|graf) /.test(t)) return null;
   if(/ (task|tasks|kaam|work|dst) /.test(t) && can('DST','view')){
     let card = ANALYTICS_TASK_CARDS[2], score = 0;
     ANALYTICS_TASK_CARDS.forEach(c=>{ const s = c.words.filter(w=>t.indexOf(' '+w+' ')>=0).length; if(s > score){ score = s; card = c; } });
@@ -60817,6 +60918,14 @@ function bossChartIntent(q){
     String(d.label).toLowerCase().replace(/[^a-z0-9]+/g,' ').split(' ').forEach(w=>{ if(w.length>2 && t.indexOf(' '+w+' ')>=0) s += 1; });
     if(s > score){ score = s; best = d; }
   });
+  /* "Graphical representation of our clients" names no grouping: the
+     stage (or the branch) is the picture of the book everyone means. A
+     question that names a grouping BOSS has no chart for ("each referral
+     channel") is left to the planned read instead. */
+  const BARE = new Set(('give me show a an the of our my all for in on please pls draw make create get see representation graphical graphically chart charts '
+    + 'graph graphs bar pie plot visual visually visualise visualize visualisation visualization breakdown distribution graf client clients lead leads data book '
+    + 'overall total entire whole us we have do can you i want to it picture view display kar karo dikhao do de ka ki ke mere hamare humare sabhi saare').split(' '));
+  if(!best && t.trim().split(' ').every(w=>!w || BARE.has(w))) best = dims.find(d=>d.id==='stage') || dims.find(d=>d.id==='branch') || dims[0] || null;
   return {src, dim: best, rows};
 }
 function bossChartFor(intent){

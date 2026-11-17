@@ -29,6 +29,7 @@
    <data> or computed by BOSS. Pure: no network, no store access.
    ===================================================================== */
 
+const RiaKnowledge = require('./ria-knowledge');
 const PLAN_MARK = 'deciding WHICH RECORDS BOSS should read';
 const REPORT_MARK = 'REPORT SPECIFICATION';
 const REFRAME_MARK = 'You are rewriting a passage';
@@ -144,7 +145,7 @@ function report(q, system, now) {
   const gs = COUNT_RE.test(q) ? groupAndSum(q, src) : { groupBy: [], sum: [] };
   return JSON.stringify({ title: src.label + ' report' + (per.from ? ' (' + per.from + ' to ' + per.to + ')' : ''), source: src.name,
     from: per.from, to: per.to, cols: gs.groupBy.length ? [] : src.cols.slice(0, 10), groupBy: gs.groupBy, sum: gs.sum, where: [], format,
-    notes: 'Prepared by BOSS’s built-in assistant while the AI service was busy: check the columns before sharing.', ask: '' });
+    notes: 'Prepared by BOSS’s built-in assistant: check the columns before sharing.', ask: '' });
 }
 
 /* "Rewrite this": tidy the passage and keep every fact. */
@@ -161,6 +162,70 @@ function reframe(text) {
   if (out && !/[.!?:]$/.test(out) && !/\n- /.test(out)) out += '.';
   return out;
 }
+
+
+/* ---------------- "DWT dikhao": opening a screen ---------------- */
+/* The pages the page said this person can open: the line
+   "pages: dashboard (Dashboard), dwt (DWT · Daily Working Tracker), …". */
+function parsePages(system) {
+  const m = String(system || '').match(/pages:\s*(.+)$/m);
+  if (!m) return [];
+  const out = [];
+  const re = /([a-z0-9]+) \(([^)]*)\)/g;
+  let x;
+  while ((x = re.exec(m[1]))) out.push({ view: x[1], label: x[2] });
+  return out;
+}
+const OPEN_WORDS = /\b(open|show|go|goto|take|navigate|launch|visit|dikhao|dikhado|dikha|dikhaiye|dikhayein|dikhaye|kholo|kholiye|kholdo|khol|chalo|jao|le)\b/;
+const OPEN_FILLER = new Set(('me to the a an page screen module tab section view please pls plz now ka ki ke ko mera meri mere my our hamara humara '
+  + 'do de dijiye dena karo kar kariye zara jara hai na ab abhi wala wali wale par pe on up for us can you could would i want see let lets go goto take navigate '
+  + 'open show launch visit dikhao dikhado dikha dikhaiye dikhayein dikhaye kholo kholiye kholdo khol chalo jao le bhai sir ji details detail').split(' '));
+/* The same names the page knows (public/index.html, BOSS_PAGE_ALIAS). */
+const PAGE_ALIAS = {
+  home: 'dashboard', dash: 'dashboard', leads: 'lms', lead: 'lms', clients: 'cms', client: 'cms', reviews: 'rms', review: 'rms',
+  tasks: 'dst', task: 'dst', 'service tasks': 'dst', dbt: 'business', 'daily business tracker': 'business', business: 'business',
+  mom: 'meetings', moms: 'meetings', 'minutes of meeting': 'meetings', meeting: 'meetings', calendar: 'meetings', call: 'calls', 'call logs': 'calls',
+  mail: 'mailbox', mails: 'mailbox', inbox: 'mailbox', email: 'mailbox', emails: 'mailbox', fbp: 'partners', partner: 'partners',
+  campaign: 'campaigns', marketing: 'campaigns', project: 'projects', report: 'reports', import: 'import', 'bulk import': 'import',
+  team: 'teammembers', 'team members': 'teammembers', 'team member': 'teammembers', setup: 'settings', setting: 'settings', settings: 'settings',
+  'recycle bin': 'recyclebin', bin: 'recyclebin', trash: 'recyclebin', fq: 'fqtests', 'fq tests': 'fqtests', 'fq test': 'fqtests',
+  iseq: 'iseqforms', 'iseq forms': 'iseqforms', cif: 'cifforms', 'cif forms': 'cifforms', 'plan forms': 'planforms', 'plan input forms': 'planforms',
+  ct: 'ctforms', 'ct forms': 'ctforms', 'c and t forms': 'ctforms', qms: 'queries', query: 'queries', queries: 'queries', tickets: 'queries',
+  profile: 'profile', 'my profile': 'profile', hr: 'hrdashboard', 'hr dashboard': 'hrdashboard', attendance: 'hrattendance',
+  incentive: 'hrincentive', incentives: 'hrincentive', appraisal: 'hrappraisal', appraisals: 'hrappraisal',
+  '7 events': 'sevenevents', 'seven events': 'sevenevents', 'execution tracker': 'recommendations', recommendation: 'recommendations',
+  transaction: 'transactions', 'transaction tracker': 'transactions', txns: 'transactions', 'portfolio review': 'portfolio', portfolio: 'portfolio',
+  'daily working tracker': 'dwt', 'daily job tracker': 'djt', 'annual review calendar': 'arc', 'management information system': 'mis',
+};
+const norm = (q) => String(q || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9\u0900-\u097f]+/g, ' ').replace(/\s+/g, ' ').trim();
+const isHinglish = (q) => /\b(dikhao|dikhado|dikha|dikhaiye|kholo|kholiye|khol|chalo|jao|karo|ka|ki|ke|ko|mera|meri|mujhe|zara|hai|kijiye|dijiye|batao|hamara|humara)\b/i.test(String(q || ''));
+function pageFor(name, pages) {
+  const n = norm(name);
+  if (!n) return null;
+  const byView = (v) => pages.find((p) => p.view === v) || null;
+  return byView(n.replace(/ /g, '')) || (PAGE_ALIAS[n] ? byView(PAGE_ALIAS[n]) : null)
+    || pages.find((p) => p.label.split(' · ').concat([p.label]).some((part) => norm(part) === n)) || null;
+}
+/* "DWT (Daily Working Tracker)" from "DWT · Daily Working Tracker". */
+const pageTitle = (p) => { const i = p.label.indexOf(' · '); return i > 0 ? p.label.slice(0, i) + ' (' + p.label.slice(i + 3) + ')' : p.label; };
+/* A request ONLY to open a page ("DWT dikhao", "open DWT"): the page, or null. */
+function openIntent(q, pages) {
+  const t = norm(q);
+  if (!pages.length || !OPEN_WORDS.test(' ' + t + ' ')) return null;
+  const rest = t.split(' ').filter((w) => w && !OPEN_FILLER.has(w));
+  return rest.length ? pageFor(rest.join(' '), pages) : null;
+}
+const openedLine = (q, p) => (isHinglish(q) ? '**' + pageTitle(p) + '** khol diya hai.' : 'Opened **' + pageTitle(p) + '**.') + '\nOPEN: ' + p.view;
+const questionOf = (messages) => { const t = lastUser(messages); return ((t.match(/Question:\s*([\s\S]*)$/) || [])[1] || t).trim(); };
+/* The whole answer to a pure page-open request, or ''. */
+function pageOpenAnswer(system, messages) {
+  const q = questionOf(messages);
+  const p = openIntent(q, parsePages(system));
+  return p ? openedLine(q, p) : '';
+}
+const TAB_ALIAS = { overview: 'overview', summary: 'overview', portfolio: 'portfolio', holdings: 'portfolio', goals: 'goals', goal: 'goals',
+  transactions: 'transactions', transaction: 'transactions', txns: 'transactions', risk: 'risk', engagement: 'engagement',
+  mail: 'mail', mails: 'mail', emails: 'mail', comms: 'comms', communication: 'comms', communications: 'comms', documents: 'documents', document: 'documents', docs: 'documents' };
 
 /* ---------------- the chat answer ---------------- */
 function parseSops(text) {
@@ -244,7 +309,6 @@ function describeMarket(m) {
       + (c.bias ? ' — the checklist leans ' + c.bias : '') + '.';
   });
 }
-const FOOT = 'BOSS answered this from the firm’s SOPs and records because the AI service was busy. Ask again in a minute for a fuller answer.';
 
 function chat(messages, opts) {
   opts = opts || {};
@@ -256,6 +320,13 @@ function chat(messages, opts) {
   if (raw && !/^none read/i.test(raw)) { try { data = JSON.parse(raw); } catch (e) { data = null; } }
   const out = [];
   const howTo = HOWTO_RE.test(q);
+  const pages = parsePages(opts.system);
+  /* "DWT dikhao": the screen, at once. */
+  const pure = openIntent(q, pages);
+  if (pure) return openedLine(q, pure);
+  /* The firm's own advisory view answers an advisory question first. */
+  const house = RiaKnowledge.knowledgeFor(q);
+  if (house) out.push(house);
 
   if (opts.aum && opts.aum.ok) {
     const a = opts.aum;
@@ -279,7 +350,10 @@ function chat(messages, opts) {
   }
   while (out.length && out[out.length - 1] === '') out.pop();
 
-  if (sops.length) {
+  /* With the house view given, a policy note is context, not the answer. */
+  if (house && sops.length) {
+    out.push('', 'Related: ' + sops.slice(0, 3).map((x) => '[' + x.id + '] ' + x.title).join('; ') + '.');
+  } else if (sops.length) {
     const s = sops[0];
     if (out.length) out.push('');
     /* A note of the SOP that speaks to the question's own words ("on hold")
@@ -309,12 +383,28 @@ function chat(messages, opts) {
     if (rest.length) out.push('Related: ' + rest.slice(0, 2).map((x) => '[' + x.id + '] ' + x.title).join('; ') + '.');
   }
   if (!out.length) {
-    out.push('The AI service is busy right now, and nothing BOSS read for this question answers it directly.');
-    out.push('Ask again in a minute, or name the client, the record or the process (for example "KYC on hold" or "pending SIPs this month").');
-    return out.join('\n');
+    out.push(isHinglish(q)
+      ? 'Is sawaal ke liye BOSS ke SOPs aur records mein seedha jawab nahi mila.'
+      : 'BOSS\u2019s SOPs and the records read for this question do not answer it directly.');
+    out.push('Try naming the client, the record or the process — for example "KYC on hold", "pending SIPs this month", "bucket strategy", "fund basket for a moderate investor, 5–7 years", or "open DWT".');
   }
-  out.push('', FOOT);
+  /* "Priya ka portfolio dikhao", "DWT dikhao aur batao…": the screen too. */
+  const open = openLine(q, pages, data);
+  if (open) out.push('OPEN: ' + open);
   return out.join('\n');
+}
+/* Where a question that also asks to see something should go, or ''. */
+function openLine(q, pages, data) {
+  const t = ' ' + norm(q) + ' ';
+  if (!OPEN_WORDS.test(t)) return '';
+  const tabWord = Object.keys(TAB_ALIAS).find((w) => t.includes(' ' + w + ' '));
+  const clients = (data && Array.isArray(data.clients) ? data.clients : []).filter((c) => c && c.id);
+  if (clients.length === 1 && (tabWord || /\b(client|details?|profile|account)\b/.test(t))) return 'cms ' + clients[0].id + ' ' + (tabWord ? TAB_ALIAS[tabWord] : 'overview');
+  /* A page named anywhere in the sentence, longest name first. */
+  const names = Object.keys(PAGE_ALIAS).concat(pages.map((p) => p.view)).concat(...pages.map((p) => p.label.split(' · ').map(norm)))
+    .filter(Boolean).sort((a, b) => b.length - a.length);
+  for (const n of names) if (t.includes(' ' + n + ' ')) { const p = pageFor(n, pages); if (p) return p.view; }
+  return '';
 }
 
 function answer({ system, messages, aum, now } = {}) {
@@ -323,7 +413,7 @@ function answer({ system, messages, aum, now } = {}) {
   if (kind === 'plan') return plan(q, system, now);
   if (kind === 'report') return report(q, system, now);
   if (kind === 'reframe') return reframe(q);
-  return chat(messages, { aum });
+  return chat(messages, { aum, system });
 }
 
 /* Whether a failed provider call is the provider's trouble (answer from
@@ -334,4 +424,7 @@ function retryable(r) {
   return [408, 425, 429, 500, 502, 503, 504, 529].includes(Number(r.status)) || /did not answer|timed? ?out|ECONNRESET|socket hang up|EAI_AGAIN/i.test(String(r.message || ''));
 }
 
-module.exports = { answer, classify, plan, report, reframe, chat, parseSources, parseSops, retryable, PLAN_MARK, REPORT_MARK, REFRAME_MARK };
+const knowledgeFor = (q) => RiaKnowledge.knowledgeFor(q);
+
+module.exports = { answer, classify, plan, report, reframe, chat, parseSources, parseSops, parsePages, openIntent, pageOpenAnswer, questionOf,
+  knowledgeFor, retryable, PLAN_MARK, REPORT_MARK, REFRAME_MARK };

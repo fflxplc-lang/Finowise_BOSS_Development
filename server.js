@@ -2982,9 +2982,15 @@ function httpProbeJsonAny(opts, cb) {
      - each call has a time budget for what it is: 6 seconds to decide
        which records to read or to write a report specification, 9 for an
        answer or a rewrite (CRM_AI_PLAN_BUDGET_MS, CRM_AI_ANSWER_BUDGET_MS);
-     - Gemini answering 429/5xx or timing out on its model is tried once
-       more on a fast model (CRM_AI_GEMINI_FAST_MODEL, default
-       gemini-2.0-flash) if the budget still has room;
+     - Gemini answering 404/429/5xx or timing out on its model is tried
+       down a chain of faster models while the budget has room
+       (CRM_AI_GEMINI_FALLBACK_MODELS, default gemini-2.5-flash,
+       gemini-2.0-flash, gemini-1.5-flash — the configured model is skipped);
+     - "DWT dikhao" / "open DWT" — a request only to open a screen — is
+       answered here at once with the OPEN line, with no provider call;
+     - a question on the firm's advisory house view (bucket strategy, the
+       Finowise Fund Basket, STP/SWP, rebalancing…) carries that view from
+       ria-knowledge.js to the provider, and to the built-in answer;
      - whatever is left unanswered is answered here, by ria-builtin.js, from
        the SOPs and records the page sent with the question (and, for total
        AUM, the Dashboard's Live AUM figure for the person's own scope), and
@@ -2993,15 +2999,31 @@ function httpProbeJsonAny(opts, cb) {
 const RiaBuiltin = require('./ria-builtin');
 const AI_PLAN_BUDGET_MS = Math.max(2000, Number(process.env.CRM_AI_PLAN_BUDGET_MS) || 6000);
 const AI_ANSWER_BUDGET_MS = Math.max(3000, Number(process.env.CRM_AI_ANSWER_BUDGET_MS) || 9000);
-const AI_GEMINI_FAST_MODEL = String(process.env.CRM_AI_GEMINI_FAST_MODEL || 'gemini-2.0-flash');
+const AI_GEMINI_CHAIN = String(process.env.CRM_AI_GEMINI_FALLBACK_MODELS || process.env.CRM_AI_GEMINI_FAST_MODEL || 'gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash')
+  .split(',').map(x => x.trim()).filter(x => /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(x));
+const AI_RETRY_FLOOR_MS = 2500;
+/* A model the provider does not have (404) is worth the next model too. */
+const aiChainRetryable = (r) => RiaBuiltin.retryable(r) || Number(r && r.status) === 404;
 function aiAnswerWithin(params, budgetMs, cb) {
   const t0 = Date.now();
-  aiProviderCall(Object.assign({}, params, { timeoutMs: budgetMs }), (r) => {
+  const first = String((params.config || {}).model || '');
+  const chain = params.id === 'gemini' ? AI_GEMINI_CHAIN.filter(m => m !== first) : [];
+  let tries = 0, firstFail = null;
+  const attempt = (model) => {
     const left = budgetMs - (Date.now() - t0);
-    const fast = params.id === 'gemini' && String((params.config || {}).model || '') !== AI_GEMINI_FAST_MODEL ? AI_GEMINI_FAST_MODEL : '';
-    if (r.ok || !fast || !RiaBuiltin.retryable(r) || left < 2500) return cb(Object.assign({ tries: 1 }, r));
-    aiProviderCall(Object.assign({}, params, { timeoutMs: left, model: fast }), (r2) => cb(Object.assign({ tries: 2, first: r.status || (r.timeout ? 'timeout' : 'error') }, r2, r2.ok ? { model: fast } : {})));
-  });
+    const more = chain.length > 0;
+    /* Leave room for the next model when there is one. */
+    const timeoutMs = more ? Math.max(AI_RETRY_FLOOR_MS, left - AI_RETRY_FLOOR_MS) : left;
+    tries++;
+    aiProviderCall(Object.assign({}, params, { timeoutMs }, model ? { model } : {}), (r) => {
+      const now = budgetMs - (Date.now() - t0);
+      if (!r.ok && firstFail === null) firstFail = r.status || (r.timeout ? 'timeout' : 'error');
+      if (r.ok || !chain.length || !aiChainRetryable(r) || now < AI_RETRY_FLOOR_MS)
+        return cb(Object.assign({ tries }, tries > 1 ? { first: firstFail } : {}, r, r.ok && model ? { model } : {}));
+      attempt(chain.shift());
+    });
+  };
+  attempt('');
 }
 /* A total-AUM question that reaches the fallback is answered with the
    Dashboard's own figure for the person's scope, as GET /api/ai/aum does. */
@@ -3059,8 +3081,19 @@ app.post('/api/ai/chat', checkApiKey, (req, res) => {
   const system = body.system ? String(body.system) : '';
   const callKind = RiaBuiltin.classify(system);
   const budget = callKind === 'plan' || callKind === 'report' ? AI_PLAN_BUDGET_MS : AI_ANSWER_BUDGET_MS;
+  /* "DWT dikhao": only a screen to open. Answered here, at once. */
+  if (callKind === 'chat') {
+    const nav = RiaBuiltin.pageOpenAnswer(system, messages);
+    if (nav) {
+      console.log('[ai] #' + seq + ' ' + id + ' page-open in=' + size + 'ch ' + (Date.now() - t0) + 'ms');
+      return res.json({ ok: true, text: nav, connector: id, reach: p.reach, via: 'builtin', navigation: true });
+    }
+  }
+  /* The firm's own advisory view, for a question on it. */
+  const houseView = callKind === 'chat' ? RiaBuiltin.knowledgeFor(RiaBuiltin.questionOf(messages)) : '';
+  const providerSystem = houseView ? system + '\n\nFINOWISE HOUSE VIEW (the firm\u2019s own advisory guidance for this question: answer from it, and say it is the firm\u2019s view):\n' + houseView : system;
   aiAnswerWithin({ id, kind: CONNECTOR_KIND[id], config: c.config || {}, secrets: c.secrets || {},
-    system, messages, maxTokens: body.maxTokens, temperature: body.temperature }, budget, (r) => {
+    system: providerSystem, messages, maxTokens: body.maxTokens, temperature: body.temperature }, budget, (r) => {
     /* What goes in the log: who, through what, how big, how long, and whether
        it worked. Not the prompt, not the answer, not a record id. */
     const tail = ' in=' + size + 'ch ' + callKind + ' tries=' + (r.tries || 1) + (r.first ? ' first=' + r.first : '') + ' ' + (Date.now() - t0) + 'ms';
@@ -3071,11 +3104,11 @@ app.post('/api/ai/chat', checkApiKey, (req, res) => {
     /* The provider could not answer: BOSS answers from what it was given. */
     let text;
     try {
-      const q = callKind === 'chat' ? ((messages[messages.length - 1].content.match(/Question:\s*([\s\S]*)$/) || [])[1] || messages[messages.length - 1].content) : '';
+      const q = callKind === 'chat' ? RiaBuiltin.questionOf(messages) : '';
       text = RiaBuiltin.answer({ system, messages, aum: callKind === 'chat' ? aiAumForFallback(req, q) : null });
     } catch (e) {
       console.error('[ai] #' + seq + ' built-in answer failed: ' + (e && e.message));
-      text = 'The AI service is busy right now. Please ask again in a minute.';
+      text = 'BOSS could not put an answer together for that. Name the client, the record or the process, or say which screen to open.';
     }
     console.log('[ai] #' + seq + ' ' + id + ' fallback (' + (r.status ? 'HTTP ' + r.status : r.timeout ? 'timeout' : 'no answer') + ') out=' + String(text).length + 'ch' + tail);
     res.json({ ok: true, text, connector: id, reach: p.reach, via: 'builtin', fallback: true });
