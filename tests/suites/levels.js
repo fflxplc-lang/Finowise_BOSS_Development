@@ -17,6 +17,7 @@ const {suite} = require('../lib/harness');
 
 /* A four-level firm, two branches wide, plus a viewer to be. */
 const SETUP = `async (asRole) => {
+  /* Phase 1: a deliberate wipe says how many records it removes (the page's own ssetBulkConfirm, as the system reset does). */ ssetBulkConfirm.team = (DB.team || []).length;
   DB.team = [
     {id:'T0', name:'ZZ Chief',   role:'Admin',   status:'Active', email:'t0@example.in',
      branch:'Varanasi', perms:fullPerms(true),  adminFlags:fullAdminFlags(true),  scope:'all'},
@@ -31,7 +32,7 @@ const SETUP = `async (asRole) => {
     {id:'T3', name:'ZZ Executive', role:asRole,  status:'Active', email:'t3@example.in',
      parentUserId:'T2', branch:'Varanasi', perms:fullPerms(true), adminFlags:fullAdminFlags(false), scope:'all'},
   ];
-  await save('team');
+  try { await save('team'); } finally { delete ssetBulkConfirm.team; }
   return memberDepths();
 }`;
 const BE = `(id) => { currentUser = id; render(); }`;
@@ -169,6 +170,8 @@ suite(async t => {
 
   await t.step('a reporting line that loops hides nobody', async () => {
     const r = await t.eval(async (be)=>{
+      /* Phase 1: a deliberate wipe says how many records it removes (the page's own ssetBulkConfirm, as the system reset does). */ 
+      ssetBulkConfirm.team = (DB.team || []).length;
       DB.team = [
         {id:'R1', name:'ZZ Ring One', role:'Manager', parentUserId:'R3', status:'Active', email:'r1@example.in',
          perms:fullPerms(true), adminFlags:fullAdminFlags(false)},
@@ -177,7 +180,7 @@ suite(async t => {
         {id:'R3', name:'ZZ Ring Three', role:'Manager', parentUserId:'R2', status:'Active', email:'r3@example.in',
          perms:fullPerms(true), adminFlags:fullAdminFlags(false)},
       ];
-      await save('team');
+      try { await save('team'); } finally { delete ssetBulkConfirm.team; }
       eval('(' + be + ')')('R2');
       return {depths: memberDepths(), seen: peopleOpenToMe(DB.team).length};
     }, BE);

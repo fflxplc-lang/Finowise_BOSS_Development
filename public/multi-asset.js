@@ -1227,11 +1227,15 @@ async function maResetAll(){
   if(typed !== 'DELETE' && typed !== 'RESET') return;
   const ups = (DB.assetUploads || []).slice();
   const nH = (DB.platformHoldings || []).length, nS = (DB.platformSips || []).length;
+  /* A deliberate wipe says how many records it removes (Phase 1: the server
+     refuses an unconfirmed save that empties a store), as the other
+     administrator purges do. */
+  const wipe = async (key, n) => { ssetBulkConfirm[key] = n; try { return await save(key); } finally { delete ssetBulkConfirm[key]; } };
   DB.assetUploads = [];
-  await save('assetUploads');
+  await wipe('assetUploads', ups.length);
   for(const u of ups){ delete DB[maRowsKey(u.id)]; await sdel(maRowsKey(u.id)); if(u.hasFile) await sdel(maFileKey(u.id)); }
   DB.platformHoldings = []; DB.platformSips = [];
-  await save('platformHoldings'); await save('platformSips');
+  await wipe('platformHoldings', nH); await wipe('platformSips', nS);
   const at = new Date().toISOString();
   (DB.importBatches || []).forEach(b=>{ if(!b.removedAt){ b.removedAt = at; b.removedBy = currentUser; } });
   await save('importBatches');

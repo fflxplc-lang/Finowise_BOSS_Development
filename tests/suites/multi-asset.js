@@ -541,13 +541,18 @@ suite(async t => {
     const r = await t.eval(async ()=>{
       const n = DB.clients.filter(c=>!c.deletedAt).length;
       window.prompt = () => 'DELETE';
+      const before = {ups: DB.assetUploads.length, h: DB.platformHoldings.length};
       await maResetAll();
-      return {ups: DB.assetUploads.length, h: DB.platformHoldings.length, s: DB.platformSips.length,
+      /* What the server holds now, not just this tab: a refused save would leave them there */
+      const onServer = {};
+      for(const k of ['assetUploads','platformHoldings','platformSips']) onServer[k] = (await sget(k, [])).length;
+      return {ups: DB.assetUploads.length, h: DB.platformHoldings.length, s: DB.platformSips.length, before, onServer,
         clients: DB.clients.filter(c=>!c.deletedAt).length, n, aum: mdBookRows().filter(x=>x.source !== 'BOSS ledger').length};
     });
-    if(r.ups || r.h || r.s || r.aum) throw new Error(JSON.stringify(r));
+    if(r.ups || r.h || r.s || r.aum || r.onServer.assetUploads || r.onServer.platformHoldings || r.onServer.platformSips
+       || !r.before.ups || !r.before.h) throw new Error(JSON.stringify(r));
     if(r.clients !== r.n) throw new Error('clients went too: ' + r.n + ' → ' + r.clients);
-    return 'no uploads, no imported lines; ' + r.clients + ' clients kept';
+    return 'no uploads, no imported lines (' + r.before.ups + ' uploads, ' + r.before.h + ' holding lines before; 0 on the server after); ' + r.clients + ' clients kept';
   });
   await t.step('imported clients go to an RM: the upload\'s RM, the list of those without one, and the client card', async () => {
     const r = await t.eval(async ()=>{
