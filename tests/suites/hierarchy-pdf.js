@@ -126,12 +126,15 @@ suite(async t => {
 
   await t.step('a loop in the reporting line neither hangs the page nor doubles anybody', async () => {
     const r = await t.eval(async ()=>{
+      /* Phase 1: a deliberate wipe says how many records it removes (the page's own ssetBulkConfirm, as the system reset does). */ 
+      ssetBulkConfirm.team = DB.team.length;
       DB.team = [
         {id:'L1', name:'ZZ Loop One', role:'Manager', parentUserId:'L3', status:'Active', email:'l1@example.in'},
         {id:'L2', name:'ZZ Loop Two', role:'Manager', parentUserId:'L1', status:'Active', email:'l2@example.in'},
         {id:'L3', name:'ZZ Loop Three', role:'Manager', parentUserId:'L2', status:'Active', email:'l3@example.in'},
       ];
       await save('team');
+      delete ssetBulkConfirm.team;
       const raw = hierarchyPdfRaw();
       const said = (raw.match(/\(((?:\\.|[^()\\])*)\) Tj/g)||[]).map(x=>x.slice(1,-4));
       return {said: said.filter(x=>/^ZZ Loop/.test(x))};

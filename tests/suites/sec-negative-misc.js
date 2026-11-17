@@ -68,7 +68,7 @@ secSuite(async (t) => {
     await page.goto(t.base + '/login', { waitUntil: 'domcontentloaded' });
     await page.fill('#email', email); await page.fill('#password', password);
     await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('button[type=submit]')]);
-    await ready(page); await page.waitForTimeout(600);
+    await ready(page); await page.waitForFunction(() => appBooted === true, null, { timeout: 30000 });
     return { ctx, page };
   };
   try {

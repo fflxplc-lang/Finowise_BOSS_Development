@@ -1097,11 +1097,42 @@ function auditWho(req) {
   const p = accessControl.principal(signedInUser(req));
   return p ? { userId: p.userId, email: p.email, memberId: p.memberId } : { userId: null, email: '', memberId: '' };
 }
+/* A scoped read is written down once per person and store every ten
+   minutes, not on every page load: the count is what matters. */
+const scopedReadNoted = new Map();
+const SCOPED_READ_EVERY_MS = 10 * 60 * 1000;
+function scopedReadKey(p, key) { return (p ? p.userId : '?') + '\u0000' + key; }
+function scopedReadRecent(p, key) { return Date.now() - (scopedReadNoted.get(scopedReadKey(p, key)) || 0) < SCOPED_READ_EVERY_MS; }
+function noteScopedRead(req, p, key, view) {
+  const k = scopedReadKey(p, key);
+  const last = scopedReadNoted.get(k) || 0;
+  if (Date.now() - last < SCOPED_READ_EVERY_MS) return;
+  scopedReadNoted.set(k, Date.now());
+  const enforce = accessControl.enforcing();
+  auditLog.append(Object.assign(auditWho(req), { action: 'store.read', target: key, mode: accessControl.MODE,
+    outcome: enforce ? 'scoped' : 'would-scope', count: view.hidden,
+    reason: view.refused ? 'store_has_no_rule' : (view.stubs ? view.stubs + ' placeholder(s)' : 'records outside scope') }));
+}
 
 // GET /api/storage/:key -> { key, value } | 404
 app.get('/api/storage/:key', checkApiKey, (req, res) => {
   const value = store[req.params.key];
   if (value === undefined) return res.status(404).json({ error: 'not found' });
+  /* Phase 1: what this person may read of the store (access-control.js).
+     Report mode serves the store as before and writes down, at most once
+     every ten minutes per person and store, how much would have been
+     withheld. Enforce mode serves only what the rule allows. */
+  const p = accessControl.principal(signedInUser(req));
+  /* Report mode only needs the count, and only once per ten minutes per
+     person and store: skip the work when it was counted just now. */
+  if (!accessControl.enforcing() && scopedReadRecent(p, req.params.key)) return res.json({ key: req.params.key, value });
+  const view = accessControl.readView(p, req.params.key, value);
+  if (view.refused || view.hidden || view.stubs) noteScopedRead(req, p, req.params.key, view);
+  else scopedReadNoted.set(scopedReadKey(p, req.params.key), Date.now());
+  if (accessControl.enforcing()) {
+    if (view.refused) return res.status(403).json({ error: 'This store is not open to your account.' });
+    return res.json({ key: req.params.key, value: view.value });
+  }
   res.json({ key: req.params.key, value });
 });
 
@@ -1473,27 +1504,55 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
     }
     if (checked) value = checked.value;
   }
-  /* The team record decides roles, scope and permissions. Phase 1 step 1
-     only records who would be refused (report mode); step 2 enforces it. */
-  if (req.params.key === 'team') {
-    let next = null;
-    try { next = JSON.parse(value); } catch (e) { next = null; }
-    if (Array.isArray(next)) {
-      let prev = [];
-      try { const v = JSON.parse(store.team || '[]'); prev = Array.isArray(v) ? v : []; } catch (e) { prev = []; }
-      const p = accessControl.principal(signedInUser(req));
-      const bad = accessControl.teamViolations(p, prev, next);
-      if (bad.length) {
-        auditLog.append(Object.assign(auditWho(req), { action: 'team.write', target: 'team', outcome: 'would-deny',
-          mode: 'report', ids: bad.map((v) => v.memberId),
-          fields: Array.from(new Set([].concat(...bad.map((v) => v.fields)))),
-          reason: bad.map((v) => v.reason).join(' | ') }));
+  /* Phase 1: who may change what in this store (access-control.js), record
+     by record. Report mode records what would be refused and saves as
+     before. Enforce mode refuses, and otherwise keeps every record the
+     person could not see exactly as it was. */
+  let nextValue;
+  try { nextValue = JSON.parse(value); } catch (e) { nextValue = undefined; }
+  if (nextValue !== undefined) {
+    const key = req.params.key;
+    const p = accessControl.principal(signedInUser(req));
+    const enforce = accessControl.enforcing();
+    const merge = accessControl.mergeWrite(p, key, store[key], nextValue);
+    if (merge.violations.length) {
+      const reasons = Array.from(new Set(merge.violations.map((v) => v.reason)));
+      auditLog.append(Object.assign(auditWho(req), { action: 'store.write', target: key, mode: accessControl.MODE,
+        outcome: enforce ? 'deny' : 'would-deny', count: merge.violations.length,
+        ids: merge.violations.map((v) => v.id).filter(Boolean), reason: reasons.join(',') }));
+      if (enforce) {
+        return res.status(403).json({ error: 'Not saved: this change includes records or fields your account may not change.',
+          reasons, ids: merge.violations.map((v) => v.id).filter(Boolean).slice(0, 20) });
       }
     }
+    if (merge.advisory.length) {
+      auditLog.append(Object.assign(auditWho(req), { action: 'store.write', target: key, mode: accessControl.MODE,
+        outcome: 'advisory', count: merge.advisory.length, ids: merge.advisory.map((v) => v.id).filter(Boolean),
+        reason: Array.from(new Set(merge.advisory.map((v) => v.reason))).join(',') }));
+    }
+    const finalValue = enforce ? merge.value : nextValue;
+    /* Day 1, whatever the mode: a save that would empty a store, or remove
+       more than max(5, 10%) of its records, is refused unless an
+       administrator account confirms the number (X-CRM-Confirm-Bulk). */
+    const shrink = accessControl.shrinkCheck(p, key, store[key], finalValue, req.get('X-CRM-Confirm-Bulk'));
+    if (shrink) {
+      auditLog.append(Object.assign(auditWho(req), { action: 'store.shrink', target: key, outcome: 'deny', count: shrink.removed,
+        reason: (shrink.emptied ? 'would empty the store' : 'would remove ' + shrink.removed + ' of ' + shrink.total) + (shrink.confirmed ? '; confirmation not accepted' : '') }));
+      return res.status(409).json({ error: 'would_remove_records', removed: shrink.removed, total: shrink.total, emptied: shrink.emptied,
+        message: 'Not saved: this would ' + (shrink.emptied ? 'empty' : 'remove ' + shrink.removed + ' of the ' + shrink.total + ' records in')
+          + ' this store. If this tab could not load the data, reload before editing.' });
+    }
+    if (enforce && finalValue !== nextValue) value = JSON.stringify(finalValue);
   }
   store[req.params.key] = value;
   writeToDisk();
   publishChange([req.params.key], req.get('X-Client-Id') || '');
+  /* The answer echoes what is stored, so in enforce mode it is cut to what
+     this person may read: the kept records they could not see stay unseen. */
+  if (accessControl.enforcing()) {
+    const view = accessControl.readView(accessControl.principal(signedInUser(req)), req.params.key, value);
+    return res.json({ key: req.params.key, value: view.value });
+  }
   res.json({ key: req.params.key, value });
 });
 
@@ -1502,7 +1561,26 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
 // and Appraisal modules, the old partner/level hierarchy), so their rows don't linger in
 // data.json or reappear in a full-system export.
 app.delete('/api/storage/:key', checkApiKey, (req, res) => {
-  if (store[req.params.key] === undefined) return res.status(404).json({ error: 'not found' });
+  /* Phase 1, enforced from the first deploy whatever the mode: deleting a
+     whole store is for an administrator account only, and the store is
+     copied to backups/store-delete/ first. No copy, no delete. */
+  const key = req.params.key;
+  const p = accessControl.principal(signedInUser(req));
+  if (!p || !p.admin) {
+    auditLog.append(Object.assign(auditWho(req), { action: 'store.delete', target: key, outcome: 'deny', reason: 'admin_account_only' }));
+    return res.status(403).json({ error: 'Only an administrator account can delete a whole store. Nothing was deleted.' });
+  }
+  if (store[key] === undefined) return res.status(404).json({ error: 'not found' });
+  try {
+    const dir = path.join(path.dirname(DB_FILE), 'backups', 'store-delete');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(dir, stamp + '-' + key.replace(/[^A-Za-z0-9._-]/g, '_') + '.json'), store[key], { mode: 0o600 });
+  } catch (e) {
+    console.error('[store-delete] snapshot failed; nothing deleted:', e.code || e.message);
+    return res.status(500).json({ error: 'The store could not be backed up first, so it was not deleted.' });
+  }
+  auditLog.append(Object.assign(auditWho(req), { action: 'store.delete', target: key, outcome: 'ok' }));
   delete store[req.params.key];
   writeToDisk();
   publishChange([req.params.key], req.get('X-Client-Id') || '');

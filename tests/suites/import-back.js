@@ -147,8 +147,11 @@ suite(async t => {
 
   await t.step('several modules in one file arrive together, links intact', async () => {
     const r = await t.eval(async (src)=>{
+      /* Phase 1: a deliberate wipe says how many records it removes (the page's own ssetBulkConfirm, as the system reset does). */ 
+      ['leads','clients','tasks'].forEach(k=>{ ssetBulkConfirm[k] = (DB[k] || []).length; });
       DB.leads = []; DB.clients = []; DB.tasks = [];
       await save('leads'); await save('clients'); await save('tasks');
+      ['leads','clients','tasks'].forEach(k=>{ delete ssetBulkConfirm[k]; });
       const file = {exportedAt:new Date().toISOString(), exportedBy:'ZZ Tester', company:'ZZ Firm', modules:{
         leads: [{id:'ZZL9', leadName:'ZZ Linked Lead', firstName:'ZZ', lastName:'Linked',
                  email:'linked@example.in', assignedTo:currentUser, status:'new'}],

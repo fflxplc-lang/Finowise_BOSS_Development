@@ -179,4 +179,87 @@ secSuite(async (t) => {
     if (lines.length !== 5 || newest !== 'n4,n3') throw new Error(lines.length + ' lines; newest ' + newest);
     return '5 appends → 5 lines, read newest first';
   });
+
+  /* ---- step 2: the store rules, without a server ---- */
+  const S2 = {
+    team: TEAM.concat([{ id: 'U-HRA', name: 'HR Admin', role: 'Executive', scope: 'own', hrAccess: { admin: 1 } }]),
+    hrLeave: [{ id: 'L1', userId: 'U-R1', approverId: 'U-TL' }, { id: 'L2', userId: 'U-R3', approverId: 'U-BM' }],
+    notifications: [{ id: 'N1', userId: 'U-R1', by: 'U-TL' }, { id: 'N2', userId: 'U-R2', by: 'U-TL' }],
+    auditLog: [{ id: 'A1', by: 'U-R2', module: 'CMS', recordId: 'C1' }, { id: 'A2', by: 'U-R3', module: 'CMS', recordId: 'C3' }],
+    clients: [{ id: 'C1', rmName: 'U-R1', branch: 'A' }, { id: 'C3', rmName: 'U-R3', branch: 'B' }],
+    settingsAudit: [{ id: 'S1', by: 'U-ADM' }],
+    apiInbox: [{ id: 'Q1' }],
+    sops: [{ id: 'P1' }],
+  };
+  const { ac: a2, raw: r2 } = make(S2);
+  const P2 = (m) => a2.principal(user(20, 'user', m));
+  const readIds = (p, key) => { const v = a2.readView(p, key, r2[key]); return v.refused ? 'refused' : JSON.parse(v.value).map((x) => x.id).join(','); };
+
+  await t.step('HR leave: own, the approver, HR, and nobody else', async () => {
+    const got = { r1: readIds(P2('U-R1'), 'hrLeave'), tl: readIds(P2('U-TL'), 'hrLeave'), r2: readIds(P2('U-R2'), 'hrLeave'), hr: readIds(P2('U-HRA'), 'hrLeave') };
+    if (got.r1 !== 'L1' || got.tl !== 'L1' || got.r2 !== '' || got.hr !== 'L1,L2') throw new Error(JSON.stringify(got));
+    return JSON.stringify(got);
+  });
+
+  await t.step('notifications: only your own to read, but anyone may send one to somebody else', async () => {
+    const r1 = P2('U-R1');
+    if (readIds(r1, 'notifications') !== 'N1') throw new Error(readIds(r1, 'notifications'));
+    const sent = a2.mergeWrite(r1, 'notifications', r2.notifications, [{ id: 'N1', userId: 'U-R1', by: 'U-TL' }, { id: 'N3', userId: 'U-R3', by: 'U-R1' }]);
+    const edited = a2.mergeWrite(r1, 'notifications', r2.notifications, JSON.parse(r2.notifications).map((n) => n.id === 'N2' ? Object.assign({}, n, { read: true }) : n));
+    if (sent.violations.length || !edited.violations.some((v) => v.reason === 'edit_outside_scope')) throw new Error(JSON.stringify({ sent: sent.violations, edited: edited.violations }));
+    if (sent.value.length !== 3) throw new Error('the merge lost a notification: ' + sent.value.length);
+    return 'reads N1 only; sending N3 to RM Three allowed; marking RM Two’s as read refused';
+  });
+
+  await t.step('the audit log: lines about records you can see, your own lines; settings history for flag holders', async () => {
+    const got = { r1: readIds(P2('U-R1'), 'auditLog'), r3: readIds(P2('U-R3'), 'auditLog'), sa_r1: readIds(P2('U-R1'), 'settingsAudit'), sa_pm: readIds(P2('U-PM'), 'settingsAudit') };
+    if (got.r1 !== 'A1' || got.r3 !== 'A2' || got.sa_r1 !== '' || got.sa_pm !== 'S1') throw new Error(JSON.stringify(got));
+    return JSON.stringify(got);
+  });
+
+  await t.step('system queues and unknown stores', async () => {
+    const r1 = P2('U-R1');
+    const q = readIds(r1, 'apiInbox');
+    const unknown = a2.readView(r1, 'zzNoRule', '[{"id":"X"}]');
+    const unknownW = a2.mergeWrite(r1, 'zzNoRule', '[]', [{ id: 'X' }]);
+    const sops = a2.mergeWrite(r1, 'sops', r2.sops, [{ id: 'P1', title: 'changed' }]);
+    if (q !== '' || !unknown.refused || !unknownW.violations.length || !sops.violations.length) throw new Error(JSON.stringify({ q, unknown, unknownW, sops: sops.violations }));
+    return 'API inbox closed to an RM; a store with no rule refused both ways; SOP edit without a flag refused';
+  });
+
+  await t.step('a team write keeps private fields the writer could not see', async () => {
+    const team = [{ id: 'U-R1', name: 'RM One', panNumber: 'ZZZPA1111A', monthlySalary: 5 }, { id: 'U-R2', name: 'RM Two', panNumber: 'ZZZPB2222B', monthlySalary: 6 }];
+    const { ac: a3 } = make({ team });
+    const p = a3.principal(user(30, 'user', 'U-R1'));
+    const seen = JSON.parse(a3.readView(p, 'team', JSON.stringify(team)).value);
+    const out = a3.mergeWrite(p, 'team', JSON.stringify(team), seen.map((m) => m.id === 'U-R1' ? Object.assign({}, m, { phone: '9000000004' }) : m));
+    const r2v = out.value.find((m) => m.id === 'U-R2');
+    if (seen.find((m) => m.id === 'U-R2').panNumber || r2v.panNumber !== 'ZZZPB2222B' || r2v.monthlySalary !== 6) throw new Error(JSON.stringify(out.value));
+    return "RM Two's PAN and salary hidden on read, and kept on save";
+  });
+
+  await t.step('the wipe guard: two or more removed into empty, or over max(5, 10%); queues and upload rows exempt', async () => {
+    const { ac: a4 } = make({ team: TEAM });
+    const adm = a4.principal(user(40, 'admin', ''));
+    const rm = a4.principal(user(41, 'user', 'U-R1'));
+    const list = (n) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ id: 'R' + i })));
+    const cases = [
+      [a4.shrinkCheck(rm, 'leads', list(1), [], undefined), null, 'last single record'],
+      [!!a4.shrinkCheck(rm, 'leads', list(2), [], undefined), true, 'emptying two'],
+      [a4.shrinkCheck(rm, 'leads', list(100), JSON.parse(list(100)).slice(10), undefined), null, 'removing 10 of 100 (the limit)'],
+      [!!a4.shrinkCheck(rm, 'leads', list(100), JSON.parse(list(100)).slice(11), undefined), true, 'removing 11 of 100'],
+      [!!a4.shrinkCheck(rm, 'leads', list(100), [{ id: 'NEW' }], undefined), true, 'a near-wipe with one new record'],
+      [a4.shrinkCheck(adm, 'leads', list(100), [], '100'), null, 'administrator confirming 100'],
+      [!!a4.shrinkCheck(adm, 'leads', list(100), [], '99'), true, 'administrator confirming too few'],
+      [!!a4.shrinkCheck(rm, 'leads', list(100), [], '100'), true, 'an RM confirming'],
+      [a4.shrinkCheck(rm, 'apiInbox', list(50), [], undefined), null, 'a queue drained'],
+      [a4.shrinkCheck(rm, 'maRows.U1', list(50), [], undefined), null, 'per-upload rows replaced'],
+      [a4.shrinkCheck(rm, 'aumMonthly', JSON.stringify([{ m: 1 }, { m: 2 }, { m: 3 }]), [{ m: 1 }, { m: 2 }, { m: 4 }], undefined), null, 'a list without ids rebuilt in place'],
+      [!!a4.shrinkCheck(rm, 'settings', JSON.stringify({ a: 1, b: 2 }), {}, undefined), true, 'an object store with two keys emptied'],
+      [a4.shrinkCheck(rm, 'settings', JSON.stringify({ a: 1 }), {}, undefined), null, 'an object store with one key emptied (same rule as a last record)'],
+    ];
+    const bad = cases.filter(([got, want]) => got !== want);
+    if (bad.length) throw new Error(bad.map((c) => c[2]).join('; '));
+    return cases.length + ' cases agree';
+  });
 });

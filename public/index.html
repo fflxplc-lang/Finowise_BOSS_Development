@@ -3001,11 +3001,33 @@ async function sget(key, fallback, shared){
   try{
     const res = await fetch('/api/storage/'+encodeURIComponent(key), { headers: apiHeaders() });
     if(res.status===401){ crmSessionGone(); return fallback; }
-    if(res.status===404) return fallback;
+    if(res.status===404){ crmLoadFailed.delete(key); return fallback; }
     if(!res.ok) throw new Error('storage get failed: '+res.status);
     const r = await res.json();
-    return JSON.parse(r.value);
-  }catch(e){ console.error('storage get failed', e); return fallback; }
+    const v = JSON.parse(r.value);
+    crmLoadFailed.delete(key);
+    return v;
+  }catch(e){ crmLoadFailed.add(key); console.error('storage get failed', e); return fallback; }
+}
+/* A STORE THAT DID NOT LOAD IS NOT SAVED BACK.
+
+   sget() hands back the fallback (usually an empty list) when a read
+   fails, so the screen still draws. Saving that store afterwards would
+   write the empty list over everything on the server. So a store whose
+   last read failed is remembered here, and sset() refuses to save it
+   until a read succeeds again (a reload, or the live stream re-reading
+   it). Not found (404) is not a failure: the store is simply new. The
+   server refuses such a wipe as well; this stops it leaving the tab. */
+var crmLoadFailed = new Set();
+function crmLoadFailedNotice(key){
+  console.warn('not saved: "'+key+'" did not load in this tab');
+  if(document.getElementById('crmLoadFailedNotice')) return;
+  const d = document.createElement('div');
+  d.id = 'crmLoadFailedNotice';
+  d.setAttribute('role', 'alert');
+  d.style.cssText = 'position:sticky;top:0;z-index:9999;background:#fdecea;color:#8a1c12;border-bottom:1px solid #f1a39a;padding:10px 16px;font-size:14px';
+  d.textContent = 'Some of your data did not load, so BOSS did not save changes to it. Reload the page before editing; nothing on the server was changed.';
+  if(document.body) document.body.insertBefore(d, document.body.firstChild);
 }
 /* ---- A WRITE BY THIS TAB REDRAWS THIS TAB --------------------------
 
@@ -3052,6 +3074,12 @@ function drawAfterWrite(){
 /* Set by a form that wants the server to hold its write to that form's
    rules (the client form). Everything else writes as it always has. */
 let ssetFormHeader = '';
+/* A save that deliberately removes many records says how many, so the
+   server can tell it from a store that failed to load and is being saved
+   back half-empty. Set only around those saves (the system reset, one
+   migration); the count is what this tab had loaded, so a store that did
+   not load confirms nothing. */
+var ssetBulkConfirm = {};
 async function sset(key, value, shared){
   liveWriteUntil = Date.now() + 1200;   // see liveBusy(): a tab mid-write is not interrupted
   if(inPublicMode() && shared!==false) return publicSave(key, value);
@@ -3059,10 +3087,13 @@ async function sset(key, value, shared){
     try{ localStorage.setItem('crm_local_'+key, JSON.stringify(value)); }catch(e){ console.error('local storage set failed', e); }
     return;
   }
+  if(crmLoadFailed.has(key)){ crmLoadFailedNotice(key); return false; }
   drawAfterWrite();
   try{
+    const bulk = ssetBulkConfirm[key];
     const res = await fetch('/api/storage/'+encodeURIComponent(key), {
-      method:'PUT', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders(), ssetFormHeader ? {'X-CRM-Form': ssetFormHeader} : {}),
+      method:'PUT', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders(), ssetFormHeader ? {'X-CRM-Form': ssetFormHeader} : {},
+        bulk !== undefined ? {'X-CRM-Confirm-Bulk': String(bulk)} : {}),
       body: JSON.stringify({ value: JSON.stringify(value) }),
     });
     /* A store the server checks (clients) may refuse a write that breaks
@@ -3074,6 +3105,17 @@ async function sset(key, value, shared){
       return false;
     }
     if(res.status === 401){ crmSessionGone(); return false; }
+    /* The server's own rules (Phase 1). Refused while the page is still
+       starting, it is a background tidy-up that is not this account's to
+       do: noted quietly, and left for an administrator's next visit. After
+       that it is something the person did, and they are told. */
+    if(res.status === 403 || (res.status === 409 && key !== 'hrAttendance')){
+      const r = await res.json().catch(()=>({}));
+      const msg = r.message || r.error || 'The server refused to save this.';
+      if(appBooted && !systemResetting) alert(msg);
+      else console.warn('not saved ('+res.status+'): '+key+' — '+msg);
+      return false;
+    }
     if(!res.ok) throw new Error('storage set failed: '+res.status);
   }catch(e){ console.error('storage set failed', e); }
 }
@@ -14680,7 +14722,9 @@ async function migrateWarmCallsOutOfMeetings(){
   // The meeting rows go; the call entries above now hold the same facts.
   const ids = new Set(stragglers.map(m=>m.id));
   DB.meetings = DB.meetings.filter(m=>!ids.has(m.id));
-  await save('callEntries'); await save('meetings');
+  await save('callEntries');
+  ssetBulkConfirm.meetings = ids.size;
+  try{ await save('meetings'); } finally { delete ssetBulkConfirm.meetings; }
   await logAudit('Calls', 'migration', 'Warm Calls Moved Out of Meetings', [
     {field:'Records moved', oldValue:String(stragglers.length)+' meetings', newValue:String(stragglers.length)+' call logs'}]);
   return stragglers.length;
@@ -42217,8 +42261,12 @@ async function emptyRecycleBin(){
     for(const [module,dbKey] of Object.entries(MODULE_DB_KEY)){
       const purged = (DB[dbKey]||[]).filter(r=>r.deletedAt);
       if(!purged.length) continue;
+      const was = DB[dbKey];
       DB[dbKey] = DB[dbKey].filter(r=>!r.deletedAt);
-      await save(dbKey);
+      ssetBulkConfirm[dbKey] = purged.length;
+      let wrote;
+      try { wrote = await save(dbKey); } finally { delete ssetBulkConfirm[dbKey]; }
+      if(wrote === false){ DB[dbKey] = was; continue; }
       for(const r of purged) await logAudit(module, r.id, 'Permanently Deleted (Recycle Bin Emptied)', []);
     }
     await logAudit('Settings', 'recyclebin', 'Recycle Bin Emptied', [{field:'Records', oldValue:String(total), newValue:'permanently deleted'}]);
@@ -42280,8 +42328,15 @@ async function autoPurgeExpiredRecords(){
         else kept.push(r);
       });
       if(purged.length){
+        const was = DB[dbKey];
         DB[dbKey] = kept;
-        await save(dbKey);
+        /* Many records may go at once; the save says how many (see
+           ssetBulkConfirm). If the server refuses, nothing was purged and
+           nothing is written down as purged: it happens on a later load. */
+        ssetBulkConfirm[dbKey] = purged.length;
+        let wrote;
+        try { wrote = await save(dbKey); } finally { delete ssetBulkConfirm[dbKey]; }
+        if(wrote === false){ DB[dbKey] = was; continue; }
         for(const r of purged){ await logAudit(module, r.id, 'Auto-Purged After '+RECYCLE_BIN_DAYS+' Days', []); purgedCount++; }
       }
     }
@@ -55694,14 +55749,16 @@ async function confirmSystemReset(){
     // rebuilt from scratch on the next load rather than merged into leftovers.
     for(const key of stores){
       if(key==='config' || key==='settings'){ await sdel(key); DB[key] = key==='config'? defaultConfig() : {}; continue; }
+      ssetBulkConfirm[key] = Array.isArray(DB[key]) ? DB[key].length : 0;
       DB[key] = [];
-      await sset(key, []);
+      try{ await sset(key, []); } finally { delete ssetBulkConfirm[key]; }
     }
     if(everything){
       /* Roles, permissions and the hierarchy are configuration, so a new
          system resets them. The accounts themselves are people, and they
          are kept unless the firm said otherwise: what a new system means
          is that nobody carries yesterday's access into it. */
+      const teamBefore = DB.team.length;
       const me_ = DB.team.find(x=>x.id===currentUser);
       const admin = me_ ? Object.assign({}, me_, {role: ADMIN_ROLE, scope:'all', parentUserId: null,
         perms: fullPerms(true), adminFlags: fullAdminFlags(true)}) : null;
@@ -55714,7 +55771,8 @@ async function confirmSystemReset(){
           perms: fullPerms(false, {view:1}), adminFlags: fullAdminFlags(false),
         }));
       }
-      await sset('team', DB.team);
+      ssetBulkConfirm.team = teamBefore;
+      try{ await sset('team', DB.team); } finally { delete ssetBulkConfirm.team; }
       if(wipeConnections){
         for(const id of ['email','whatsapp','sms','gcal','outlook','txnplatform','exchange']){
           try{ await fetch('/api/connections/'+id, {method:'DELETE', headers: apiHeaders()}); }catch(e){}
@@ -55963,8 +56021,11 @@ async function confirmRestoreBackup(){
   try{
     for(const key of look.found){
       const value = parsed[key];
+      /* A restore may hold fewer records than today: it says so, with what
+         this tab had loaded (see ssetBulkConfirm). */
+      ssetBulkConfirm[key] = Array.isArray(DB[key]) ? DB[key].length : (DB[key] && typeof DB[key] === 'object' ? Object.keys(DB[key]).length : 0);
       DB[key] = value;
-      await sset(key, value);
+      try{ await sset(key, value); } finally { delete ssetBulkConfirm[key]; }
     }
     /* The restoring account goes back in if the backup did not carry it,
        with the keys, so a firm cannot restore its way out of its own

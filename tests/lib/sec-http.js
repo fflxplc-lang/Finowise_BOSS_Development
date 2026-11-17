@@ -8,37 +8,49 @@
 
      const {secSuite} = require('../lib/sec-http');
      secSuite(async t => {
-       const admin = await t.admin();
+       const admin = await t.admin();                 // the runner's server (report mode)
+       const srv = await t.startServer({CRM_ACCESS_MODE:'enforce'});   // a second one, its own data
+       const a2 = await srv.admin();
        await t.step('what must hold', async () => { ...; return 'what was seen'; });
      });
-*/
+
+   A second server is started from this checkout on a port of its own
+   (the runner's port + 500) with an empty data folder in the system temp
+   directory, and stopped when the suite ends. Synthetic data only. */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn, execFileSync } = require('child_process');
 const PORT = Number(process.env.BOSS_PORT || 3000);
 const BASE = 'http://localhost:' + PORT;
+const ROOT = path.join(__dirname, '..', '..');
 const signIn = require('./signin');
 
-async function login(email, password) {
+async function login(email, password, base) {
+  base = base || BASE;
   const body = new URLSearchParams({ email, password, next: '/' }).toString();
-  const res = await fetch(BASE + '/login', { method: 'POST', redirect: 'manual',
+  const res = await fetch(base + '/login', { method: 'POST', redirect: 'manual',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
   const cookies = (res.headers.getSetCookie ? res.headers.getSetCookie() : []).map((c) => c.split(';')[0]);
   const session = cookies.find((c) => /^finowise_session=/.test(c));
   if (!session) throw new Error('could not sign in as ' + email + ' (HTTP ' + res.status + ')');
-  const cfg = await (await fetch(BASE + '/config.js', { headers: { Cookie: session } })).text();
+  const cfg = await (await fetch(base + '/config.js', { headers: { Cookie: session } })).text();
   const key = (/CRM_API_KEY = "([^"]*)"/.exec(cfg) || [])[1] || '';
-  return client(session, key, email);
+  return client(session, key, email, base);
 }
 
-function client(cookie, apiKey, email) {
-  async function call(method, path, body, extra) {
+function client(cookie, apiKey, email, base) {
+  base = base || BASE;
+  async function call(method, p, body, extra) {
     const headers = Object.assign({}, cookie ? { Cookie: cookie } : {}, apiKey ? { 'X-API-Key': apiKey } : {}, extra || {});
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const res = await fetch(BASE + path, { method, headers, redirect: 'manual', body: body === undefined ? undefined : JSON.stringify(body) });
+    const res = await fetch(base + p, { method, headers, redirect: 'manual', body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await res.text();
     let json = null; try { json = JSON.parse(text); } catch (e) { json = null; }
     return { status: res.status, json, text };
   }
   return {
-    email, cookie, apiKey, call,
+    email, cookie, apiKey, base, call,
     get: (p, x) => call('GET', p, undefined, x),
     put: (p, b, x) => call('PUT', p, b, x),
     post: (p, b, x) => call('POST', p, b, x),
@@ -55,19 +67,50 @@ function client(cookie, apiKey, email) {
   };
 }
 
+/* An account for a team member, made the way the CRM makes one. */
+async function account(admin, memberId, email, password, opts) {
+  const r = await admin.post('/api/users/sync', Object.assign({ memberId, email, password, crmRole: '' }, opts || {}));
+  if (!r.json || !r.json.ok) throw new Error('could not create the account for ' + memberId + ': ' + r.text.slice(0, 200));
+  return login(email, password, admin.base);
+}
+
+const started = [];
+async function startServer(env) {
+  const port = PORT + 500 + started.length;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sec-srv-'));
+  const base = 'http://localhost:' + port;
+  const usersDb = path.join(dir, 'users.db');
+  const run = (args) => execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'user.js')].concat(args),
+    { cwd: ROOT, env: Object.assign({}, process.env, { CRM_USERS_DB: usersDb }), stdio: 'ignore' });
+  run(['add', signIn.EMAIL, signIn.PASSWORD]); run(['role', signIn.EMAIL, 'admin']);
+  const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
+    env: Object.assign({}, process.env, env || {}, { PORT: String(port), CRM_DB_FILE: path.join(dir, 'data.json'),
+      CRM_USERS_DB: usersDb, CRM_CONNECTIONS_FILE: path.join(dir, 'connections.json'), CRM_REMINDERS: 'manual',
+      CRM_BUSINESS_TZ: 'UTC', CRM_PIN_LOOKUP_URL: 'http://127.0.0.1:9/', CRM_IFSC_LOOKUP_URL: 'http://127.0.0.1:9/' }) });
+  let log = '';
+  child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
+  const srv = { base, dir, port, child, log: () => log,
+    admin: () => login(signIn.EMAIL, signIn.PASSWORD, base),
+    login: (e, p) => login(e, p, base),
+    account: (admin, ...a) => account(admin, ...a),
+    stop: () => new Promise((r) => { if (child.exitCode !== null) return r(); child.once('exit', () => r()); child.kill(); }) };
+  started.push(srv);
+  for (let i = 0; i < 150; i++) {
+    try { if ((await fetch(base + '/api/health')).ok) return srv; } catch (e) { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('the second server on ' + port + ' never answered: ' + log.slice(-400));
+}
+
 function secSuite(body) {
   const errors = [];
   const t = {
     base: BASE,
-    anonymous: () => client('', '', ''),
-    admin: () => login(signIn.EMAIL, signIn.PASSWORD),
-    login,
-    /* An account for a team member, made the way the CRM makes one. */
-    async account(admin, memberId, email, password, opts) {
-      const r = await admin.post('/api/users/sync', Object.assign({ memberId, email, password, crmRole: '' }, opts || {}));
-      if (!r.json || !r.json.ok) throw new Error('could not create the account for ' + memberId + ': ' + r.text.slice(0, 200));
-      return login(email, password);
-    },
+    anonymous: () => client('', '', '', BASE),
+    admin: () => login(signIn.EMAIL, signIn.PASSWORD, BASE),
+    login: (e, p) => login(e, p, BASE),
+    account,
+    startServer,
     async step(name, fn) {
       try {
         const note = await fn();
@@ -81,9 +124,13 @@ function secSuite(body) {
   (async () => {
     try { await body(t); }
     catch (e) { const msg = 'SUITE CRASHED  ' + (e && e.stack || e); console.log(msg); errors.push(msg); }
+    for (const s of started) {
+      await s.stop();
+      try { fs.rmSync(s.dir, { recursive: true, force: true }); } catch (e) { /* temp folder */ }
+    }
     if (errors.length) { console.log('\n' + errors.length + ' PROBLEM(S):\n' + errors.join('\n')); process.exitCode = 1; }
     else console.log('\nALL CLEAN');
   })();
 }
 
-module.exports = { secSuite, login, BASE };
+module.exports = { secSuite, login, account, startServer, BASE };

@@ -37,9 +37,11 @@ const SEED = `async function(lines){
     dob:'1988-02-02', mg_goals:[{goal:'Car', years:'5', currentValue:'2500000',
                                  inflation:'7', returns:'12'}]}};
   l.planRounds = [];
+  /* Phase 1: a deliberate wipe says how many records it removes (the page's own ssetBulkConfirm, as the system reset does). */ ssetBulkConfirm.businessEntries = (DB.businessEntries||[]).length; ssetBulkConfirm.recommendations = (DB.recommendations||[]).length;
   DB.businessEntries = (DB.businessEntries||[]).filter(b=>b.leadId !== l.id);
   DB.recommendations = (DB.recommendations||[]).filter(r=>r.leadId !== l.id);
   await save('leads'); await save('businessEntries'); await save('recommendations');
+  delete ssetBulkConfirm.businessEntries; delete ssetBulkConfirm.recommendations;
   await markPlanInputSubmitted(l, 'Client');
   const round = await recomputePlan(l);
   round.allocation.lines = lines;

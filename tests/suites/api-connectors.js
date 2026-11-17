@@ -125,8 +125,11 @@ suite(async t => {
 
   await t.step('their records come in, mapped and transformed', async () => {
     const r = await t.eval(async ()=>{
+      /* Phase 1: a deliberate wipe says how many records it removes (the page's own ssetBulkConfirm, as the system reset does). */ 
+      ssetBulkConfirm.leads = DB.leads.length;
       DB.leads = [];
       await save('leads');
+      delete ssetBulkConfirm.leads;
       DB.apiConnectors = [{id:'ZZIN', name:'ZZ Inbound', system:'ZZ Co',
         baseUrl:'https://example.com', path:'/leads', direction:'in', module:'LMS',
         method:'GET', auth:{kind:'none'}, headers:[], params:[], store:'leads',

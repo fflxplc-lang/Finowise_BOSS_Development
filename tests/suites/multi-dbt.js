@@ -24,11 +24,14 @@ const SEED = async ()=>{
   Object.assign(c, {cmsName:'ZZ Multi Client', mobile:'9800123457', email:'multi@example.com',
     rmName: currentUser, branch:'Varanasi', clientCategory:'A',
     createdAt:new Date().toISOString()});
+  /* Phase 1: a deliberate wipe says how many records it removes (the page's own ssetBulkConfirm, as the system reset does). */ 
+  ['businessEntries','recommendations','transactions'].forEach(k=>{ ssetBulkConfirm[k] = (DB[k] || []).length; });
   DB.businessEntries = (DB.businessEntries || []).filter(e=>e.clientId !== 'CMS-MULTI');
   DB.recommendations = (DB.recommendations || []).filter(r=>r.clientId !== 'CMS-MULTI');
   DB.transactions = (DB.transactions || []).filter(t=>t.clientId !== 'CMS-MULTI');
   await save('clients'); await save('businessEntries');
   await save('recommendations'); await save('transactions');
+  ['businessEntries','recommendations','transactions'].forEach(k=>{ delete ssetBulkConfirm[k]; });
   return c.id;
 };
 
