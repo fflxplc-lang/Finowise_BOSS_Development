@@ -59734,7 +59734,11 @@ async function bossRunChat(q){
   /* A question about one client ("what is pending on this client") keeps
      the SOPs for what is wrong on that account. */
   if(countQ || (!people.length && bossCountQuestion(q) && bossLooksLikeData(q))) sops = [];
-  const mktNames = !chart && !chartQ && !countQ ? lexiMarketAsk(q, people) : null;
+  /* "Complete portfolio analysis", "risk analysis sharpe beta", "tax
+     harvesting", "future projection"…: worked out here, with its charts. */
+  const intel = !chart && !countQ ? riaIntel(q, people) : null;
+  if(intel) data.intel = riaIntelForAi(intel);
+  const mktNames = !chart && !chartQ && !countQ && !intel ? lexiMarketAsk(q, people) : null;
   let market = null;
   if(mktNames){
     ai.phase = 'RIA AI is reading live prices'; aiDrawPanel();
@@ -59747,7 +59751,7 @@ async function bossRunChat(q){
     data.liveMarket = lexiMarketForAi(market, lexiMoneyIn(q), shortlist);
     data.marketZone = lexiLiveZoneLabel(market.quotes);
     sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean))];
-  } else if(!chart && !chartQ && !countQ && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
+  } else if(!chart && !chartQ && !countQ && !intel && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
     ai.phase = 'RIA AI is reading the live market'; aiDrawPanel();
     const now = await lexiMarketRead(['NIFTY 50']);
     if(now.quotes.length){
@@ -59756,7 +59760,7 @@ async function bossRunChat(q){
       sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean).concat(sops))].slice(0, 5);
     }
   }
-  if(!countQ && !mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
+  if(!countQ && !intel && !mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
     ai.phase = 'RIA AI is checking the records'; aiDrawPanel();
     const plan = await bossPlanReads(q);
     if(plan.error) return {error: plan.error};
@@ -59767,7 +59771,7 @@ async function bossRunChat(q){
   }
   if(people.length) data.clients = people.slice(0,3).map(bossClientDossier).filter(Boolean);
   /* "Kis client ka kya sell karna hai": the book's signals, as computed. */
-  if(!mktNames && !people.length && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
+  if(!mktNames && !people.length && !(intel && intel.actions) && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
     data.portfolioSignals = lexiBookSignals().filter(x=>x.need).slice(0, 15).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
       rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold').map(r=>r.action+': '+r.scheme+' ('+r.why+')')}));
     data.marketZone = lexiZoneLabel();
@@ -59785,6 +59789,7 @@ async function bossRunChat(q){
   const turn = {role:'assistant', content:'', live:true,
     clients: people.slice(0,3).map(c=>({id:c.id, name:clientDisplayName(c)})),
     sops: sops.map(s=>({id:s.id, t:s.t})), chart: chart || undefined,
+    charts: intel && intel.charts.length ? intel.charts : undefined, intel: intel || undefined,
     market: market && market.quotes.length ? market.quotes : undefined};
   let shown = false;
   const r = await aiAsk(history.concat([{role:'user', content: ask}]), {system: sys, maxTokens: 1200,
@@ -59796,6 +59801,10 @@ async function bossRunChat(q){
   if(m){
     const opened = bossOpen(m[1]);
     if(opened){ turn.opened = opened; ai.context = aiContextOf(); }
+  }
+  /* "…aur PDF banao": the report downloads with the answer. */
+  if(RIA_PDF_RE.test(q) && (turn.charts || turn.chart || turn.intel)){
+    try{ turn.pdf = bossDownloadTurnPdf(ai.turns.indexOf(turn)); }catch(e){ turn.pdf = {error: String(e && e.message || e)}; }
   }
   return {};
 }
@@ -59837,7 +59846,11 @@ function bossTurnFoot(t){
       ${analyticsBarSvg(t.chart.rows, ANALYTICS_COLORS[0], t.chart.title)}
       <button class="btn sm ghost" onclick="aiCloseP();${t.chart.src==='tasks' ? `navigate('analytics');setTimeout(()=>{const e=document.getElementById('anTasks');if(e)e.scrollIntoView({behavior:'smooth'})},50)` : `window._anSrc='${t.chart.src||'clients'}';navigate('analytics')`}">Open Analytics</button></div>` : '';
   const mk = (t.market||[]).map((q, qi) => lexiQuoteCard(q, ai.turns.indexOf(t), qi)).join('');
-  return (cl || sp || op || ch || mk) ? `${mk}${ch}<div class="ai-acts" style="flex-wrap:wrap">${op}${cl}</div>${sp}` : '';
+  const chs = (t.charts||[]).map(riaChartHtml).join('');
+  const pdf = (t.charts && t.charts.length) || t.intel || t.chart
+    ? `<button class="btn sm ghost ria-pdf" onclick="bossDownloadTurnPdf(${ai.turns.indexOf(t)})">⬇ Download PDF Report</button>` : '';
+  const gov = t.intel ? `<div class="small-note" style="margin:4px 0">${esc(RIA_GOVERNANCE)}</div>` : '';
+  return (cl || sp || op || ch || mk || chs) ? `${mk}${ch}${chs}${gov}<div class="ai-acts" style="flex-wrap:wrap">${op}${pdf}${cl}</div>${sp}` : '';
 }
 
 /* =====================================================================
@@ -60997,6 +61010,548 @@ function bossChartFromReads(reads){
   return {title: g.source + ' by ' + g.groupBy.join(' · '), total: g.total,
     rows: g.groups.map(x=>({label: String(x.key), count: x.count}))};
 }
+/* =====================================================================
+   RIA AI — PORTFOLIO, RISK & WEALTH INTELLIGENCE
+
+   Seven analyses, worked out here from the records this user may see (the
+   open or named client, or the whole visible book), so every number on a
+   chart is BOSS's own and none is the model's:
+
+     1. portfolio     asset classes, AMC / category / scheme weights and
+                      concentration flags, gain and XIRR against reference
+                      returns, goals mapped;
+     2. actions       Buy / Hold / Switch / Review from the policy signals,
+                      and the risky-to-safe switch with exit load and tax;
+     3. tax           unrealised gains, the ₹1.25 lakh LTCG allowance, loss
+                      harvesting, before / after;
+     4. opportunities up-sell (SIP step-up, idle cash, goal shortfall) and
+                      cross-sell (protection, GAB, 7 Events, HUF, LAMF,
+                      diversification);
+     5. risk          Sharpe, beta, standard deviation and mu ± sigma,
+                      against the client's risk profile;
+     6. plan          bucket strategy on the actual corpus, GAB SWP income,
+                      HUF, trust and legacy checks;
+     7. projection    corpus + SIP at 9 / 12 / 15% over 3 to 20 years.
+
+   What the records hold decides how fine it gets: scheme-level holdings,
+   else the platform's sleeves (Equity / Debt / …), else SIP schemes, else
+   the BOSS ledger by scheme, else one unclassified figure. Risk figures
+   are estimates from category assumptions (not NAV history), and every
+   answer says so. Suggestions only: the advisor and the client decide.
+   ===================================================================== */
+const RIA_RF = 6.5;                                   // risk-free rate, % a year
+const RIA_REF = [{label:'Nifty 50 (long-run reference)', r:12}, {label:'CRISIL Hybrid 35+65 (long-run reference)', r:10}];
+const RIA_GOVERNANCE = 'RIA AI provides analytical suggestions; human advisor & client approval is mandatory before executing any transaction.';
+const RIA_PDF_FOOT = 'Generated by RIA AI from live BOSS records. Human advisor approval required before execution.';
+/* [expected return %, standard deviation %, beta to Nifty 50] by category. */
+const RIA_CAT_RISK = {
+  'large cap':[12,16,0.95], 'index':[12,16,1], 'flexi cap':[13,17,0.95], 'multi cap':[13.5,18,1], 'large and mid':[13.5,18,1],
+  'focused':[13,18,1], 'value':[13,18,0.95], 'contra':[13,18,0.95], 'elss':[13,17.5,0.95], 'mid cap':[15,22,1.1], 'small cap':[16,26,1.2],
+  'thematic':[14,24,1.1], 'aggressive hybrid':[11,12,0.7], 'baf':[9.5,8,0.45], 'multi asset':[10.5,9,0.5], 'equity savings':[8.5,5.5,0.3],
+  'arbitrage':[7,1,0.02], 'liquid':[6.8,0.6,0], 'ultra short':[7,0.8,0], 'money market':[7,0.8,0], 'low duration':[7.2,1.2,0],
+  'short term':[7.4,2,0], 'floater':[7.4,1.8,0], 'corporate bond':[7.5,2.2,0], 'banking psu':[7.4,2.2,0], 'medium duration':[7.6,3,0],
+  'dynamic bond':[7.6,4,0], 'gilt':[7.6,5,0], 'credit risk':[8,4,0.05], 'gold':[10,14,0],
+  '_Equity':[13,18,1], '_Debt':[7.3,2,0], '_Hybrid':[10,10,0.55], '_Gold':[10,14,0], '_Liquid':[6.8,0.6,0], '_Unclassified':[11,14,0.75]};
+const RIA_CLASSES = ['Equity','Debt','Hybrid','Gold/Commodities','Liquid/Cash','Unclassified'];
+const RIA_THEMATIC = ['thematic','sectoral','infrastructure','infra','technology','tech','digital','pharma','healthcare','consumption','banking and financial',
+  'financial services','psu equity','manufacturing','innovation','momentum','esg','energy','auto','mnc','business cycle','special opportunities'];
+const RIA_SAFE = [{cat:'Arbitrage', w:0.25}, {cat:'Balanced Advantage', w:0.25}, {cat:'Multi-Asset', w:0.2}, {cat:'Corporate Bond', w:0.15}, {cat:'All Seasons Bond', w:0.15}];
+const RIA_SAFE_CONSERVATIVE = [{cat:'Arbitrage', w:0.3}, {cat:'Ultra Short Term', w:0.2}, {cat:'Corporate Bond', w:0.3}, {cat:'All Seasons Bond', w:0.2}];
+const RIA_AMCS = [['icici','ICICI Prudential'],['hdfc','HDFC'],['sbi','SBI'],['absl','Aditya Birla Sun Life'],['aditya birla','Aditya Birla Sun Life'],
+  ['nippon','Nippon India'],['kotak','Kotak'],['axis','Axis'],['dsp','DSP'],['mirae','Mirae Asset'],['parag parikh','PPFAS'],['ppfas','PPFAS'],
+  ['bandhan','Bandhan'],['idfc','Bandhan'],['invesco','Invesco'],['hsbc','HSBC'],['franklin','Franklin Templeton'],['uti','UTI'],['tata','Tata'],
+  ['quantum','Quantum'],['quant','Quant'],['motilal','Motilal Oswal'],['edelweiss','Edelweiss'],['canara','Canara Robeco'],['whiteoak','WhiteOak Capital'],
+  ['bajaj','Bajaj Finserv'],['360 one','360 ONE'],['sundaram','Sundaram'],['mahindra','Mahindra Manulife'],['pgim','PGIM India'],['baroda','Baroda BNP Paribas'],
+  ['lic','LIC'],['union','Union'],['jm','JM Financial'],['navi','Navi'],['groww','Groww'],['zerodha','Zerodha'],['iti','ITI'],['samco','Samco'],
+  ['helios','Helios'],['old bridge','Old Bridge'],['shriram','Shriram']];
+function riaAmcOf(name){
+  const t = String(name||'').toLowerCase().replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
+  const hit = RIA_AMCS.find(([k])=>t === k || t.indexOf(k + ' ') === 0);
+  return hit ? hit[1] : '';
+}
+/* A scheme's category: the policy's own list first, then thematic names. */
+function riaCategoryOf(name){
+  const c = typeof lexiCategoryOf === 'function' ? lexiCategoryOf(name) : null;
+  if(c) return {id:c.id, label:c.label, mix:c.mix};
+  const t = ' ' + String(name||'').toLowerCase().replace(/[^a-z0-9]+/g,' ') + ' ';
+  if(RIA_THEMATIC.some(w=>t.indexOf(' '+w+' ')>=0)) return {id:'thematic', label:'Thematic / sectoral', mix:[1,0,0]};
+  return null;
+}
+function riaClassOf(cat){
+  if(!cat) return 'Unclassified';
+  if(cat.id==='gold') return 'Gold/Commodities';
+  if(['liquid','ultra short','money market','overnight'].includes(cat.id)) return 'Liquid/Cash';
+  if(['multi asset','baf','equity savings','aggressive hybrid','arbitrage'].includes(cat.id)) return 'Hybrid';
+  if(cat.mix && cat.mix[0] >= 1) return 'Equity';
+  if(cat.mix && cat.mix[1] >= 1) return 'Debt';
+  return 'Unclassified';
+}
+const RIA_SLEEVE_CLASS = {Equity:'Equity', Debt:'Debt', Structured:'Hybrid', Hybrid:'Hybrid', Gold:'Gold/Commodities', Commodity:'Gold/Commodities',
+  Commodities:'Gold/Commodities', Liquid:'Liquid/Cash', Cash:'Liquid/Cash'};
+const riaYearsSince = d => { const t = Date.parse(String(d||'').slice(0,10)); return isFinite(t) ? (Date.now() - t) / (365.25*864e5) : null; };
+/* A client's positions, as finely as the records allow. */
+function riaPositions(c){
+  const out = [];
+  const add = (p) => { if(numVal(p.current) > 0 || numVal(p.invested) > 0) out.push(Object.assign({clientId:c.id, amc:'', cat:null, start:'', xirr:null}, p)); };
+  const asPos = (scheme, invested, current, start, xirr, src) => {
+    const cat = riaCategoryOf(scheme);
+    return {scheme, invested: numVal(invested), current: numVal(current), start: start || '', xirr: xirr==='' || xirr==null ? null : numVal(xirr),
+      amc: riaAmcOf(scheme), cat, cls: riaClassOf(cat), src};
+  };
+  const holdings = (DB.platformHoldings||[]).filter(h=>h.clientId===c.id && !h.deletedAt);
+  let unclassified = 0, uInv = 0, uX = null;
+  holdings.forEach(h=>{
+    const cur = typeof lexiHoldingValue==='function' ? lexiHoldingValue(h).value : numVal(h.current);
+    if(h.schemeName) return add(asPos(h.schemeName, h.invested, cur, h.purchaseDate || h.startDate || h.accountOpenDate, h.xirr, 'holding'));
+    const sl = h.sleeves && typeof h.sleeves==='object' ? Object.keys(h.sleeves).filter(k=>numVal((h.sleeves[k]||{}).current) > 0) : [];
+    if(sl.length) return sl.forEach(k=>{ const s = h.sleeves[k]; add({scheme: k + ' (platform sleeve)', invested: numVal(s.invested), current: numVal(s.current),
+      start: h.accountOpenDate || '', xirr: s.xirr==null || s.xirr==='' ? null : numVal(s.xirr), cls: RIA_SLEEVE_CLASS[k] || 'Unclassified',
+      cat: RIA_SLEEVE_CLASS[k]==='Equity' ? {id:'_Equity', label:'Equity (sleeve)', mix:[1,0,0]} : RIA_SLEEVE_CLASS[k]==='Debt' ? {id:'_Debt', label:'Debt (sleeve)', mix:[0,1,0]} : null, src:'sleeve'}); });
+    unclassified += cur; uInv += numVal(h.invested); if(h.xirr!=null && h.xirr!=='') uX = numVal(h.xirr);
+  });
+  /* SIP schemes say what a client-level total is made of. */
+  const sips = (DB.platformSips||[]).filter(s=>s.clientId===c.id && !s.deletedAt && s.schemeName && numVal(s.current) > 0);
+  if(!out.some(p=>p.src==='holding')){
+    const sipSum = sips.reduce((n,s)=>n + numVal(s.current), 0);
+    if(sips.length && (!holdings.length || unclassified >= sipSum * 0.98)){
+      sips.forEach(s=>add(asPos(s.schemeName, s.invested, s.current, s.startDate || s.regDate, s.xirr, 'sip')));
+      unclassified = Math.max(0, unclassified - sipSum); uInv = Math.max(0, uInv - sips.reduce((n,s)=>n + numVal(s.invested), 0));
+    }
+  }
+  if(unclassified > 0) add({scheme:'Unclassified holdings (no scheme in the report)', invested: uInv, current: unclassified, xirr: uX, cls:'Unclassified', src:'holding'});
+  /* No platform data at all: the BOSS ledger, scheme by scheme. */
+  if(!holdings.length && !out.length){
+    const by = {};
+    (DB.transactions||[]).filter(t=>t.clientId===c.id && !t.deletedAt && t.status==='Completed').forEach(t=>{
+      const name = t.schemeId ? schemeName(t.schemeId) : (t.schemeName || '');
+      const k = name && name !== '—' ? name : 'Unclassified (no scheme on the transaction)';
+      const amt = numVal(t.amount) * (/Redemption/i.test(t.transactionType||'') ? -1 : 1);
+      const d = String(t.initiatedDate || t.createdAt || '').slice(0,10);
+      by[k] = by[k] || {amt:0, start:d}; by[k].amt += amt; if(d && (!by[k].start || d < by[k].start)) by[k].start = d;
+    });
+    Object.keys(by).filter(k=>by[k].amt > 0).forEach(k=>add(Object.assign(asPos(/^Unclassified/.test(k) ? '' : k, by[k].amt, by[k].amt, by[k].start, null, 'ledger'), /^Unclassified/.test(k) ? {scheme:k} : {})));
+  }
+  return out;
+}
+const riaPct = (x, t) => t ? Math.round(x / t * 1000) / 10 : 0;
+const riaR = x => Math.round(x);
+/* The scope a question is about: one client, or the visible book. */
+function riaScope(q, people){
+  if(people && people.length) return {kind:'client', clients:[people[0]], label: clientDisplayName(people[0])};
+  const clients = (typeof analyticsRecords==='function' ? analyticsRecords('clients') : null) || [];
+  return {kind:'book', clients, label: 'Visible book (' + clients.length + ' client' + (clients.length===1 ? '' : 's') + ')'};
+}
+/* Which of the seven a question asks for. */
+const RIA_MODULE_WORDS = {
+  portfolio: /\b(portfolio analysis|complete portfolio|portfolio review|asset allocation|allocation|diversif\w*|concentration|benchmark|performance|amc[- ]?wise|category[- ]?wise|top schemes?)\b/,
+  actions: /\b(buy|sell|hold|switch|redeem|redemption|kharid\w*|bech\w*|risky|safe|de-?risk\w*)\b/,
+  tax: /\b(tax[- ]?harvest\w*|harvest\w*|ltcg|stcg|capital gains?|tax[- ]?loss|tax saving|tax bach\w*)\b/,
+  opportunities: /\b(cross[- ]?sell\w*|up[- ]?sell\w*|opportunit\w*|step[- ]?up|top[- ]?up)\b/,
+  risk: /\b(risk analysis|risk analytics|sharpe|beta|standard deviation|std dev|volatil\w*|sigma|risk meter|risk level)\b|σ|β/,
+  plan: /\b(gab|golden age|bucket\w*|huf|huff|trust|legacy|will|succession|swp|retire\w*)\b/,
+  projection: /\b(projection|project\w*|future|forecast|grow\w*|corpus after|in \d+ (?:years|saal))\b/,
+};
+const RIA_COMPLETE = /\b(complete|full|comprehensive|360|entire|whole|detailed|poora|pura|sab kuch|everything)\b.*\b(analysis|report|review|picture)\b|\ball (?:seven|7|modules)\b/;
+const RIA_PDF_RE = /\b(pdf|download\s*pdf|pdf\s*banao|pdf\s*de|report\s*pdf)\b/i;
+function riaIntelModules(q){
+  /* As typed, and with doubled letters collapsed ("buckket"): either matches. */
+  const raw = ' ' + String(q||'').toLowerCase() + ' ', t = raw.replace(/(.)\1+/g, '$1');
+  if(RIA_COMPLETE.test(raw) || RIA_COMPLETE.test(t)) return Object.keys(RIA_MODULE_WORDS);
+  const mods = Object.keys(RIA_MODULE_WORDS).filter(k=>RIA_MODULE_WORDS[k].test(raw) || RIA_MODULE_WORDS[k].test(t));
+  /* "Buy sell hold" alone goes to the existing signals answer, unless it
+     also asks about the portfolio or risky-to-safe. */
+  if(mods.length===1 && mods[0]==='actions' && !/\b(risky|safe|de-?risk\w*|portfolio|analysis|switch analysis|chart|graph)\b/.test(raw)) return [];
+  return mods;
+}
+/* ---- the seven analyses ---- */
+function riaIntel(q, people){
+  const mods = riaIntelModules(q);
+  if(!mods.length || !can('CMS','view')) return null;
+  const scope = riaScope(q, people);
+  if(!scope.clients.length) return null;
+  const positions = [].concat(...scope.clients.map(riaPositions));
+  const total = positions.reduce((s,p)=>s + p.current, 0);
+  const invested = positions.reduce((s,p)=>s + p.invested, 0);
+  const sip = scope.clients.reduce((s,c)=>s + numVal(clientBookSip(c)), 0);
+  const one = scope.kind==='client' ? scope.clients[0] : null;
+  const profile = one ? (lexiProfileOf(one) || '') : '';
+  const out = {scope: {kind: scope.kind, label: scope.label, clients: scope.clients.length, clientId: one ? one.id : ''},
+    asOf: new Date().toISOString().slice(0,10), total: riaR(total), invested: riaR(invested), monthlySip: riaR(sip), profile, modules: mods, charts: [], sections: []};
+  const need = m => mods.includes(m);
+  const byClass = {}; RIA_CLASSES.forEach(k=>byClass[k] = 0); positions.forEach(p=>byClass[p.cls] = (byClass[p.cls]||0) + p.current);
+  const groupBy = (key) => { const m = {}; positions.forEach(p=>{ const k = key(p) || 'Not known'; m[k] = (m[k]||0) + p.current; }); return Object.keys(m).map(k=>({label:k, value:m[k]})).sort((a,b)=>b.value-a.value); };
+  const riskOf = p => RIA_CAT_RISK[p.cat && RIA_CAT_RISK[p.cat.id] ? p.cat.id : '_' + (p.cls==='Gold/Commodities' ? 'Gold' : p.cls==='Liquid/Cash' ? 'Liquid' : p.cls)] || RIA_CAT_RISK._Unclassified;
+  const ltRate = 12.5, stRate = 20, allowance = 125000;
+  const equityTaxed = p => p.cls==='Equity' || (p.cat && ['aggressive hybrid','arbitrage','equity savings','baf'].includes(p.cat.id));
+
+  /* 1. Complete portfolio analysis */
+  if(need('portfolio')){
+    const classes = RIA_CLASSES.map(k=>({label:k, value:riaR(byClass[k]), pct: riaPct(byClass[k], total)})).filter(x=>x.value > 0).sort((a,b)=>b.value-a.value);
+    const amcs = groupBy(p=>p.amc).map(x=>Object.assign(x, {pct: riaPct(x.value, total)}));
+    const cats = groupBy(p=>p.cat ? p.cat.label : (p.cls==='Unclassified' ? '' : p.cls)).map(x=>Object.assign(x, {pct: riaPct(x.value, total)}));
+    const schemes = {}; positions.forEach(p=>{ schemes[p.scheme] = (schemes[p.scheme]||0) + p.current; });
+    const top = Object.keys(schemes).map(k=>({label:k, value:riaR(schemes[k]), pct: riaPct(schemes[k], total)})).sort((a,b)=>b.value-a.value);
+    const flags = [];
+    top.filter(s=>s.pct > 25 && !/^Unclassified/.test(s.label)).forEach(s=>flags.push('Single scheme above 25%: ' + s.label + ' is ' + s.pct + '%.'));
+    amcs.filter(a=>a.pct > 40 && a.label!=='Not known').forEach(a=>flags.push('Single AMC above 40%: ' + a.label + ' is ' + a.pct + '%.'));
+    const gain = total - invested, gainPct = invested ? Math.round(gain / invested * 1000) / 10 : null;
+    const xw = positions.filter(p=>p.xirr!=null && p.current > 0), xirr = xw.length ? Math.round(xw.reduce((s,p)=>s + p.xirr * p.current, 0) / xw.reduce((s,p)=>s + p.current, 0) * 10) / 10 : null;
+    const goals = scope.clients.reduce((n,c)=>n + clientGoals(c).length, 0);
+    out.portfolio = {classes, amcs: amcs.slice(0, 8), categories: cats.slice(0, 10), topSchemes: top.slice(0, 8), flags, gain: riaR(gain), gainPct, xirr,
+      reference: RIA_REF, goalsMapped: goals, unclassifiedPct: riaPct(byClass.Unclassified, total)};
+    out.charts.push({kind:'donut', module:'portfolio', title:'Asset allocation — ' + scope.label, sub: 'Total ' + money(total) + ' across ' + positions.length + ' position' + (positions.length===1?'':'s'),
+      items: classes.map(x=>({label:x.label, value:x.value})), centre: money(total)});
+    out.charts.push({kind:'hbar', module:'portfolio', title:'Portfolio return vs reference returns', fmt:'pct', series:['% a year'],
+      sub: 'Portfolio XIRR from the platform reports' + (xirr==null ? ' (not reported: absolute gain shown)' : '') + '. References are long-run assumptions, not live index returns.',
+      rows: [{label: xirr!=null ? 'Portfolio XIRR' : 'Portfolio absolute gain', values:[xirr!=null ? xirr : (gainPct||0)]}].concat(RIA_REF.map(r=>({label:r.label, values:[r.r]})))});
+    if(amcs.length > 1 || cats.length > 1) out.charts.push({kind:'hbar', module:'portfolio', title:'Concentration — AMC and category weights', fmt:'pct', series:['% of portfolio'],
+      sub: flags.length ? flags.join(' ') : 'No scheme above 25% and no AMC above 40%.',
+      rows: amcs.slice(0, 5).map(a=>({label:'AMC: ' + a.label, values:[a.pct]})).concat(cats.slice(0, 5).map(x=>({label:'Category: ' + x.label, values:[x.pct]})))});
+  }
+
+  /* 2. Buy / Sell / Hold / Switch, and risky to safe */
+  if(need('actions') || need('portfolio')){
+    const sig = scope.clients.map(c=>lexiClientSignals(c)).filter(s=>s.rows.length);
+    const count = {}; const list = [];
+    sig.forEach(s=>{ s.rows.forEach(r=>{ count[r.action] = (count[r.action]||0) + 1; if(r.action!=='Hold') list.push({client: clientDisplayName(s.client), action:r.action, scheme:r.scheme, why:r.why, value: riaR(r.value)}); });
+      s.moves.forEach(m=>{ const k = m.action + ' (rebalance)'; count[k] = (count[k]||0) + 1; list.push({client: clientDisplayName(s.client), action: m.action, scheme: m.asset + ' rebalance', why: m.why, value: riaR(m.amount)}); }); });
+    const risky = positions.filter(p=>p.cat && ['small cap','mid cap','thematic'].includes(p.cat.id));
+    const riskyVal = risky.reduce((s,p)=>s + p.current, 0), riskyPct = riaPct(riskyVal, total);
+    const cap = profile==='Conservative' ? 10 : profile==='Aggressive' ? 40 : 25;
+    const excess = Math.max(0, riskyVal - cap / 100 * total);
+    const share = riskyVal ? excess / riskyVal : 0;
+    let load = 0, tax = 0, gainOut = 0, unknownAge = 0;
+    risky.forEach(p=>{
+      const amt = p.current * share, yrs = riaYearsSince(p.start), g = p.current ? Math.max(0, p.current - p.invested) * share : 0;
+      if(yrs===null) unknownAge += amt;
+      const short = yrs!==null && yrs < 1;
+      if(short) load += amt * 0.01;
+      tax += g * (short ? stRate : ltRate) / 100; gainOut += g;
+    });
+    const safe = profile==='Conservative' ? RIA_SAFE_CONSERVATIVE : RIA_SAFE;
+    const afterClass = Object.assign({}, byClass);
+    afterClass.Equity = Math.max(0, afterClass.Equity - excess);
+    safe.forEach(s=>{ const k = /Arbitrage|Balanced|Multi/.test(s.cat) ? 'Hybrid' : /Ultra/.test(s.cat) ? 'Liquid/Cash' : 'Debt'; afterClass[k] += excess * s.w; });
+    out.actions = {counts: count, list: list.slice(0, 25), clientsWithSignals: sig.length,
+      riskySafe: {riskyValue: riaR(riskyVal), riskyPct, capPct: cap, switchAmount: riaR(excess), exitLoad: riaR(load), tax: riaR(tax), gainRealised: riaR(gainOut),
+        unknownHoldingPeriod: riaR(unknownAge), to: safe.map(s=>({category:s.cat, amount: riaR(excess * s.w)})),
+        risky: risky.slice(0, 10).map(p=>({scheme:p.scheme, category:p.cat.label, value: riaR(p.current)}))},
+      governance: RIA_GOVERNANCE};
+    if(need('actions')){
+      const rows = Object.keys(count).map(k=>({label:k, values:[count[k]]})).sort((a,b)=>b.values[0]-a.values[0]);
+      if(rows.length) out.charts.push({kind:'hbar', module:'actions', title:'Buy / Sell / Hold / Switch — ' + scope.label, fmt:'count', series:['holdings'],
+        sub: 'From the firm’s recommended list, the risk-profile allocation and the market zone. ' + RIA_GOVERNANCE, rows});
+      out.charts.push({kind:'hbar', module:'actions', title:'Risky-to-safe switch: current vs recommended allocation', fmt:'pct', series:['Current %', 'After switch %'],
+        sub: riskyVal ? 'Small / mid / thematic ' + riskyPct + '% against a ' + cap + '% ceiling' + (profile ? ' for a ' + profile + ' profile' : '') + '. Switch ' + money(excess)
+          + (excess ? ': exit load about ' + money(load) + ', tax about ' + money(tax) + '.' : ' — nothing above the ceiling.') : 'No small-cap, mid-cap or thematic holdings found.',
+        rows: RIA_CLASSES.filter(k=>byClass[k] || afterClass[k]).map(k=>({label:k, values:[riaPct(byClass[k], total), riaPct(afterClass[k], total)]}))});
+    }
+  }
+
+  /* 3. Tax harvesting */
+  if(need('tax')){
+    let ltg = 0, stg = 0, losses = 0, debtGain = 0, unknown = 0;
+    const rows = [];
+    positions.forEach(p=>{
+      const g = p.current - p.invested; if(!p.invested) return;
+      const yrs = riaYearsSince(p.start);
+      if(g < 0){ losses += -g; rows.push({scheme:p.scheme, gain: riaR(g), term: yrs===null ? 'unknown' : yrs >= 1 ? 'long' : 'short', note:'loss: book to set off gains'}); return; }
+      if(!equityTaxed(p)){ debtGain += g; return; }
+      if(yrs===null){ unknown += g; ltg += g; } else if(yrs >= 1) ltg += g; else stg += g;
+      rows.push({scheme:p.scheme, gain: riaR(g), term: yrs===null ? 'unknown (taken as long)' : yrs >= 1 ? 'long' : 'short'});
+    });
+    const harvest = Math.min(ltg, allowance), saved = Math.round(harvest * ltRate / 100);
+    const perPan = scope.kind==='book' ? scope.clients.length : 1;
+    const unrealised = ltg + stg;
+    out.tax = {unrealisedEquityGain: riaR(unrealised), longTermGain: riaR(ltg), shortTermGain: riaR(stg), harvestTaxFree: riaR(scope.kind==='client' ? harvest : Math.min(ltg, allowance * perPan)),
+      taxSaved: riaR(scope.kind==='client' ? saved : Math.min(ltg, allowance * perPan) * ltRate / 100), losses: riaR(losses), debtGain: riaR(debtGain), unknownPeriodGain: riaR(unknown),
+      taxableRemaining: riaR(Math.max(0, ltg - (scope.kind==='client' ? harvest : Math.min(ltg, allowance * perPan)))), rows: rows.slice(0, 15),
+      rules: 'Equity LTCG (held over 12 months) is tax-free up to ₹1.25 lakh a financial year per PAN (an HUF has its own), then 12.5%; STCG 20%. Up to ₹15,625 tax saved a year per PAN. Losses set off gains (short-term against any, long-term against long-term only). Debt funds bought after 1 Apr 2023 are taxed at slab, with no LTCG allowance. Assumes no other LTCG realised this financial year; check exit loads before redeeming.'};
+    const t = out.tax;
+    out.charts.push({kind:'hbar', module:'tax', title:'Tax harvesting — before vs after', fmt:'money', series:['₹'],
+      sub: 'Booking ' + money(t.harvestTaxFree) + ' of long-term gain tax-free saves about ' + money(t.taxSaved) + (t.losses ? '; ' + money(t.losses) + ' of losses can set off gains' : '') + '.',
+      rows: [{label:'Total unrealised equity gain', values:[t.unrealisedEquityGain]}, {label:'Eligible tax-free harvest (₹1.25L)', values:[t.harvestTaxFree]},
+        {label:'Taxable gain remaining', values:[t.taxableRemaining]}, {label:'Estimated tax saved', values:[t.taxSaved]}].concat(t.losses ? [{label:'Losses available to set off', values:[t.losses]}] : [])});
+  }
+
+  /* 4. Cross-sell and up-sell */
+  if(need('opportunities')){
+    const opp = {}; const ex = [];
+    const note = (k, c, amt, why) => { opp[k] = opp[k] || {count:0, amount:0}; opp[k].count++; opp[k].amount += amt || 0; if(ex.length < 30) ex.push({client: clientDisplayName(c), opportunity:k, amount: riaR(amt||0), why}); };
+    scope.clients.forEach(c=>{
+      const ps = riaPositions(c), aum = ps.reduce((s,p)=>s + p.current, 0), csip = numVal(clientBookSip(c));
+      if(aum <= 0 && !csip) return;
+      const liq = ps.filter(p=>p.cls==='Liquid/Cash').reduce((s,p)=>s + p.current, 0);
+      const cls = {}; ps.forEach(p=>cls[p.cls] = (cls[p.cls]||0) + p.current);
+      if(aum > 0 && csip < aum * 0.01) note('Up-sell: SIP step-up / top-up', c, Math.max(1000, Math.round((aum * 0.01 - csip) / 500) * 500), 'Monthly SIP ' + money(csip) + ' is under 1% of ' + money(aum) + '.');
+      if(aum > 0 && liq > aum * 0.15) note('Up-sell: idle cash → STP into Flexi Cap / Multi-Asset', c, riaR(liq - aum * 0.1), money(liq) + ' sits in liquid / cash (' + riaPct(liq, aum) + '%).');
+      clientGoals(c).forEach(g=>{
+        const tgt = numVal(g.target), yrs = (Date.parse(g.targetDate) - Date.now()) / (365.25*864e5);
+        if(!tgt || !(yrs > 0)) return;
+        const fv = aum * Math.pow(1.12, yrs) + csip * ((Math.pow(1.01, yrs*12) - 1) / 0.01) * 1.01;
+        if(fv < tgt){ const gap = tgt - fv, need = gap / (((Math.pow(1.01, yrs*12) - 1) / 0.01) * 1.01); note('Up-sell: goal shortfall SIP', c, Math.round(need / 500) * 500, (g.name || 'Goal') + ': projected ' + money(fv) + ' against ' + money(tgt) + '.'); }
+      });
+      const pol = typeof insPoliciesOf==='function' ? insPoliciesOf(c.id) : [];
+      const term = pol.some(p=>p.insCategory==='Life Insurance' && /term/i.test(String(p.insLifeType||p.insPlanName||'')));
+      const health = pol.some(p=>/health/i.test(String(p.insGeneralCategory||'')));
+      if(!term || !health) note('Cross-sell: FSL / protection (term & health)', c, 0, (term ? '' : 'No term cover on file. ') + (health ? '' : 'No health cover on file.'));
+      const age = riaYearsSince(c.dob);
+      const retire = clientGoals(c).some(g=>/retire|golden|pension/i.test(String(g.name||'')));
+      if(age !== null && age >= 40 && !retire) note('Cross-sell: GAB (Golden Age Blueprint)', c, 0, 'Age ' + Math.floor(age) + ', no retirement goal mapped.');
+      if(!clientGoals(c).length) note('Cross-sell: 7 Events blueprint (goal mapping)', c, 0, 'No goals mapped.');
+      const tax = String(bossTaxStatus(c) || '').toLowerCase();
+      const ltgC = ps.filter(p=>equityTaxed(p) && p.current > p.invested && p.invested).reduce((s,p)=>s + p.current - p.invested, 0);
+      if(!/huf/.test(tax) && (aum >= 2500000 || ltgC > allowance)) note('Cross-sell: HUF folio (separate tax entity)', c, 0, 'Book ' + money(aum) + (ltgC > allowance ? ', equity gain ' + money(ltgC) + ' above one ₹1.25L allowance' : '') + '.');
+      const eq = (cls.Equity||0) + (cls.Hybrid||0);
+      const redeemed = (DB.transactions||[]).some(t=>t.clientId===c.id && !t.deletedAt && /Redemption/i.test(t.transactionType||'') && (riaYearsSince(t.initiatedDate || t.createdAt) ?? 9) < 1);
+      if(eq >= 500000 && (redeemed || aum >= 1500000)) note('Cross-sell: LA MF (loan against mutual funds)', c, riaR(eq * 0.45), (redeemed ? 'Redeemed in the last year; ' : '') + 'a lien on equity units gives about ' + money(eq * 0.45) + ' of credit without selling.');
+      if(aum > 0 && (!(cls['Gold/Commodities']) || (cls.Debt||0) + (cls['Liquid/Cash']||0) < aum * 0.1 || Math.max(...Object.values(cls)) > aum * 0.8))
+        note('Cross-sell: Multi-Asset / Gold / Debt diversification', c, 0, (cls['Gold/Commodities'] ? '' : 'No gold. ') + (Math.max(...Object.values(cls)) > aum * 0.8 ? 'One asset class above 80%.' : ''));
+    });
+    out.opportunities = {byType: Object.keys(opp).map(k=>({type:k, clients: opp[k].count, amount: riaR(opp[k].amount)})).sort((a,b)=>b.clients-a.clients), examples: ex};
+    out.charts.push({kind:'hbar', module:'opportunities', title:'Cross-sell & up-sell opportunities — ' + scope.label, fmt:'count', series:[scope.kind==='client' ? 'found' : 'clients'],
+      sub: 'Up-sell amounts are monthly SIP or STP figures; LA MF is the credit line available.',
+      rows: out.opportunities.byType.map(o=>scope.kind==='client' ? {label:o.type, values:[1], text: o.amount ? money(o.amount) : 'gap found'} : {label:o.type, values:[o.clients], note: o.amount ? money(o.amount) : ''})});
+  }
+
+  /* 5. Risk analysis */
+  if(need('risk')){
+    const w = positions.filter(p=>p.current > 0).map(p=>({p, w: p.current / (total||1), r: riskOf(p)}));
+    const mu = w.reduce((s,x)=>s + x.w * x.r[0], 0), beta = w.reduce((s,x)=>s + x.w * x.r[2], 0);
+    const grp = x => ['Equity','Hybrid'].includes(x.p.cls) && x.r[2] >= 0.6 ? 'E' : x.p.cls==='Gold/Commodities' ? 'G' : x.p.cls==='Hybrid' ? 'H' : x.p.cls==='Unclassified' ? 'U' : 'D';
+    const rho = (a, b) => { if(a===b) return a==='D' ? 0.7 : 0.9; const k = [a,b].sort().join(''); return ({DE:0.1, EH:0.8, DH:0.4, EG:0, DG:0.2, GH:0.2, EU:0.8, DU:0.3, GU:0.1, HU:0.6})[k] ?? 0.3; };
+    let v = 0; w.forEach(a=>w.forEach(b=>{ v += a.w * b.w * a.r[1] * b.r[1] * (a===b ? 1 : rho(grp(a), grp(b))); }));
+    const sigma = Math.sqrt(v), sharpe = sigma ? (mu - RIA_RF) / sigma : 0;
+    const level = sigma < 4 ? 'Low' : sigma < 8 ? 'Moderately low' : sigma < 12 ? 'Moderate' : sigma < 16 ? 'Moderately high' : 'High';
+    const levelIdx = ['Low','Moderately low','Moderate','Moderately high','High'].indexOf(level);
+    const profIdx = profile==='Conservative' ? 1 : profile==='Moderate' ? 2 : profile==='Aggressive' ? 4 : null;
+    const hhi = w.reduce((s,x)=>s + x.w * x.w, 0);
+    const amcN = new Set(positions.map(p=>p.amc).filter(Boolean)).size, catN = new Set(positions.map(p=>p.cat && p.cat.id).filter(Boolean)).size;
+    const score = Math.max(0, Math.min(100, Math.round((1 - hhi) * 60 + Math.min(amcN, 5) * 4 + Math.min(catN, 5) * 4)));
+    const r1 = x => Math.round(x * 100) / 100, r10 = x => Math.round(x * 10) / 10;
+    out.risk = {expectedReturn: r10(mu), sigma: r10(sigma), sharpe: r1(sharpe), beta: r1(beta), low: r10(mu - sigma), high: r10(mu + sigma), riskFree: RIA_RF,
+      level, profile: profile || (scope.kind==='book' ? 'Book (several profiles)' : 'Not recorded'),
+      fit: profIdx===null ? 'No risk profile to compare with.' : levelIdx > profIdx ? 'Portfolio risk is above what the risk profile allows.' : levelIdx < profIdx - 1 ? 'Portfolio risk is well below the risk profile: room to take more if the goals need it.' : 'Portfolio risk is in line with the risk profile.',
+      diversificationScore: score, amcs: amcN, categories: catN,
+      method: 'Estimated from each holding’s category assumptions (expected return, volatility, beta to Nifty 50) and category correlations; not computed from NAV history. Risk-free rate ' + RIA_RF + '%.'};
+    out.charts.push({kind:'risk', module:'risk', title:'Risk analytics — ' + scope.label, sub: out.risk.method, metrics: out.risk, profileIdx: profIdx, levelIdx});
+  }
+
+  /* 6. GAB, bucket strategy, HUF, trust and legacy */
+  if(need('plan')){
+    const yearly = total * 0.05;
+    const b1 = Math.min(total, yearly * 2), b2 = Math.min(total - b1, yearly * 4), b3 = Math.max(0, total - b1 - b2);
+    const cs = scope.clients;
+    const nominee = cs.filter(c=>String(c.firstNomineeName||'').trim()).length;
+    const joint = cs.filter(c=>/joint|survivor/i.test(String(c.modeOfHolding||''))).length;
+    const huf = cs.filter(c=>/huf/i.test(String(bossTaxStatus(c)||''))).length;
+    out.plan = {corpus: riaR(total), assumption: 'Withdrawal 5% of the corpus a year (' + money(yearly) + '); change it with the client’s real expenses.',
+      buckets: [{name:'Bucket 1 · 0–2Y Immediate cashflow & emergency', categories:'Liquid, Ultra Short, Arbitrage', amount: riaR(b1)},
+        {name:'Bucket 2 · 3–6Y Stability & income refill', categories:'Short Term Debt, Corporate Bond, Equity Savings, Multi-Asset, Hybrid', amount: riaR(b2)},
+        {name:'Bucket 3 · 7Y+ Wealth growth', categories:'Flexi Cap, Large & Mid Cap, Multi Cap, Value', amount: riaR(b3)}],
+      gab: {swpMonthly5: riaR(total * 0.05 / 12), swpMonthly4: riaR(total * 0.04 / 12),
+        note:'GAB (Golden Age Blueprint): run a monthly SWP from Bucket 1 and refill it from Buckets 2 and 3 by STP. SWP instalments are taxed only on the gain in each one, so the income is tax-efficient.'},
+      huf: {existing: huf, note:'HUF (Hindu Undivided Family): a separate PAN and tax entity with its own basic exemption and slab, its own ₹1.25 lakh LTCG allowance (about ₹15,625 a year more tax saved), and a way to pool family income. Needs a karta, members and an HUF deed; gifts into it from members are clubbed, so fund it with ancestral or inherited assets or gifts from relatives outside it.'},
+      legacy: {nomineeOnFile: nominee, clients: cs.length, jointOrSurvivor: joint,
+        checks: ['100% nomination on every folio and demat account (' + nominee + ' of ' + cs.length + ' client' + (cs.length===1?'':'s') + ' have a nominee on file).',
+          'Mode of holding: “Anyone or Survivor” for joint folios (' + joint + ' joint on file).',
+          'A registered Will naming the executor and each asset.',
+          'A Private Family Trust where assets need protection or continuity for a minor or a special-needs dependant.']}};
+    out.charts.push({kind:'donut', module:'plan', title:'Bucket strategy on the actual corpus — ' + scope.label, sub: out.plan.assumption,
+      items: out.plan.buckets.map(b=>({label:b.name, value:b.amount})), centre: money(total)});
+  }
+
+  /* 7. Future projection */
+  if(need('projection')){
+    const fv = (r, n) => { const i = r / 1200; return total * Math.pow(1 + r/100, n) + sip * ((Math.pow(1 + i, n*12) - 1) / i) * (1 + i); };
+    const years = [3, 5, 10, 15, 20], scen = [{name:'Conservative', r:9}, {name:'Moderate', r:12}, {name:'Optimistic', r:15}];
+    const table = years.map(n=>({years:n, conservative: riaR(fv(9, n)), moderate: riaR(fv(12, n)), optimistic: riaR(fv(15, n)), invested: riaR(total + sip * 12 * n)}));
+    const goals = [];
+    scope.kind==='client' && clientGoals(scope.clients[0]).forEach(g=>{
+      const tgt = numVal(g.target), n = (Date.parse(g.targetDate) - Date.now()) / (365.25*864e5);
+      if(tgt && n > 0) goals.push({goal: g.name || 'Goal', target: riaR(tgt), year: String(g.targetDate).slice(0,4), achievementPct: Math.min(999, Math.round(fv(12, n) / tgt * 100))});
+    });
+    out.projection = {corpus: riaR(total), monthlySip: riaR(sip), scenarios: scen, table, goals, note:'Corpus and monthly SIP compounded at 9% / 12% / 15% a year; SIP held flat. Illustrations, not guarantees.'};
+    const xs = [0].concat(years);
+    out.charts.push({kind:'line', module:'projection', title:'Future projection — ' + scope.label, sub: out.projection.note, fmt:'money', xs,
+      series: scen.map(s=>({name: s.name + ' (' + s.r + '%)', points: xs.map(n=>riaR(n ? fv(s.r, n) : total))})).concat([{name:'Money put in', points: xs.map(n=>riaR(total + sip*12*n)), dashed:true}])});
+  }
+  return out;
+}
+/* What the model is given: the same numbers, compact. */
+function riaIntelForAi(x){
+  if(!x) return null;
+  const o = {scope: x.scope, asOf: x.asOf, totalValue: x.total, invested: x.invested, monthlySip: x.monthlySip, riskProfile: x.profile || undefined, governance: RIA_GOVERNANCE};
+  ['portfolio','actions','tax','opportunities','risk','plan','projection'].forEach(k=>{ if(x[k]) o[k] = x[k]; });
+  return o;
+}
+
+/* ---- charts for the chat panel ---- */
+const RIA_COLORS = ['#164B5E','#F25C2A','#3ecf7e','#4a90d9','#9b6ad6','#f5a623','#2bb3b3','#e0607e'];
+function riaFmt(v, fmt){ return fmt==='money' ? money(v) : fmt==='pct' ? (Math.round(v*10)/10) + '%' : String(Math.round(v*10)/10); }
+function riaCompact2(v){ const a = Math.abs(v); return a >= 1e7 ? '₹' + (v/1e7).toFixed(2) + ' Cr' : a >= 1e5 ? '₹' + (v/1e5).toFixed(2) + ' L' : money(v); }
+/* ₹38.4L, ₹1.2Cr: an axis label that fits. */
+function riaCompact(v){ const a = Math.abs(v); return '₹' + (a >= 1e7 ? (v/1e7).toFixed(1).replace(/\.0$/, '') + 'Cr' : a >= 1e5 ? (v/1e5).toFixed(1).replace(/\.0$/, '') + 'L' : a >= 1e3 ? Math.round(v/1e3) + 'k' : Math.round(v)); }
+function analyticsDonutSvg(items, opts){
+  opts = opts || {};
+  const data = (items||[]).filter(i=>Number(i.value) > 0), tot = data.reduce((s,i)=>s + Number(i.value), 0) || 1;
+  const R = 70, r = 42, cx = 85, cy = 85;
+  let a = -Math.PI/2;
+  const arcs = data.map((d,i)=>{
+    const a1 = a + Number(d.value)/tot * Math.PI*2, large = a1 - a > Math.PI ? 1 : 0;
+    const p = (rad, ang) => (cx + rad*Math.cos(ang)).toFixed(2) + ' ' + (cy + rad*Math.sin(ang)).toFixed(2);
+    const path = data.length===1 ? `M ${cx-R} ${cy} A ${R} ${R} 0 1 1 ${cx+R} ${cy} A ${R} ${R} 0 1 1 ${cx-R} ${cy} M ${cx-r} ${cy} A ${r} ${r} 0 1 0 ${cx+r} ${cy} A ${r} ${r} 0 1 0 ${cx-r} ${cy} Z`
+      : `M ${p(R,a)} A ${R} ${R} 0 ${large} 1 ${p(R,a1)} L ${p(r,a1)} A ${r} ${r} 0 ${large} 0 ${p(r,a)} Z`;
+    a = a1;
+    return `<path d="${path}" fill="${RIA_COLORS[i % RIA_COLORS.length]}" fill-rule="evenodd"><title>${esc(d.label)}: ${esc(riaFmt(d.value, 'money'))}</title></path>`;
+  }).join('');
+  const legend = data.map((d,i)=>`<g transform="translate(190,${18 + i*20})"><rect width="11" height="11" rx="2" fill="${RIA_COLORS[i % RIA_COLORS.length]}"/>
+    <text x="17" y="10" font-size="11" style="fill:var(--text)">${esc(String(d.label).slice(0, 44))}</text>
+    <text x="330" y="10" font-size="11" text-anchor="end" style="fill:var(--muted)">${Math.round(Number(d.value)/tot*1000)/10}%</text></g>`).join('');
+  return `<svg class="ria-donut" viewBox="0 0 ${520} ${Math.max(175, 30 + data.length*20)}" role="img" aria-label="${esc(opts.title||'')}" style="width:100%;height:auto;display:block">
+    ${arcs}<text x="${cx}" y="${cy+4}" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--text)">${esc(opts.centre||'')}</text>${legend}</svg>`;
+}
+function analyticsCompareSvg(rows, series, fmt, title){
+  const data = (rows||[]).slice(0, 12), n = Math.max(1, (series||[]).length);
+  const W = 560, L = 250, R = 80, barH = 12, gap = 10, rowH = n*barH + gap, T = n > 1 ? 24 : 8, H = T + data.length*rowH + 6;
+  const max = Math.max(1, ...data.map(d=>Math.max(...d.values.map(v=>Math.abs(Number(v)||0)))));
+  const sx = v => (W - L - R) * Math.abs(Number(v)||0) / max;
+  const legend = n > 1 ? series.map((s,i)=>`<g transform="translate(${L + i*130},6)"><rect width="10" height="10" rx="2" fill="${RIA_COLORS[i]}"/><text x="15" y="9" font-size="10.5" style="fill:var(--muted)">${esc(s)}</text></g>`).join('') : '';
+  return `<svg class="ria-bars" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">${legend}
+    ${data.map((d,ri)=>{ const y0 = T + ri*rowH;
+      return `<text x="${L-8}" y="${y0 + n*barH/2 + 4}" text-anchor="end" font-size="10.5" style="fill:var(--text)">${esc(String(d.label).length > 44 ? String(d.label).slice(0, 43) + '…' : d.label)}<title>${esc(d.label)}</title></text>`
+        + d.values.map((v,i)=>`<rect x="${L}" y="${y0 + i*barH}" width="${Math.max(1, sx(v))}" height="${barH-2}" rx="2" fill="${RIA_COLORS[i % RIA_COLORS.length]}"><title>${esc(d.label)}: ${esc(riaFmt(v, fmt))}</title></rect>
+          <text x="${L + Math.max(1, sx(v)) + 4}" y="${y0 + i*barH + barH - 3}" font-size="10" style="fill:var(--muted)">${d.text!=null ? esc(d.text) : esc(riaFmt(v, fmt)) + (i===d.values.length-1 && d.note ? ' · ' + esc(d.note) : '')}</text>`).join(''); }).join('')}
+  </svg>`;
+}
+function analyticsLineSvg(xs, series, fmt, title){
+  const W = 520, H = 250, L = 70, R = 16, T = 30, B = 30;
+  const all = [].concat(...series.map(s=>s.points)), max = Math.max(1, ...all), min = 0;
+  const x = i => L + (W - L - R) * (xs[i] - xs[0]) / Math.max(1, xs[xs.length-1] - xs[0]);
+  const y = v => T + (H - T - B) * (1 - (v - min) / (max - min));
+  const grid = [0, 0.25, 0.5, 0.75, 1].map(f=>{ const v = min + (max - min) * f; return `<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-dasharray="3 3"/>
+    <text x="${L-6}" y="${y(v)+4}" text-anchor="end" font-size="9.5" style="fill:var(--muted)">${esc(fmt==='money' ? riaCompact(v) : riaFmt(v, fmt))}</text>`; }).join('');
+  const fan = series.length >= 3 ? `<path d="M ${series[0].points.map((v,i)=>x(i) + ' ' + y(v)).join(' L ')} L ${series[2].points.map((v,i)=>x(i) + ' ' + y(v)).reverse().join(' L ')} Z" fill="${RIA_COLORS[1]}" opacity="0.12"/>` : '';
+  const lines = series.map((s,si)=>`<polyline points="${s.points.map((v,i)=>x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ')}" fill="none" stroke="${s.dashed ? 'var(--muted)' : RIA_COLORS[si % RIA_COLORS.length]}" stroke-width="2" ${s.dashed ? 'stroke-dasharray="5 4"' : ''}/>
+    ${s.points.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="${s.dashed ? 'var(--muted)' : RIA_COLORS[si % RIA_COLORS.length]}"><title>${esc(s.name)} · ${xs[i]}Y: ${esc(riaFmt(v, fmt))}</title></circle>`).join('')}`).join('');
+  const legend = series.map((s,i)=>`<g transform="translate(${L + i*112},8)"><rect width="10" height="10" rx="2" fill="${s.dashed ? 'var(--muted)' : RIA_COLORS[i % RIA_COLORS.length]}"/><text x="14" y="9" font-size="10" style="fill:var(--muted)">${esc(s.name)}</text></g>`).join('');
+  return `<svg class="ria-line" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">${legend}${grid}${fan}${lines}
+    ${xs.map((v,i)=>`<text x="${x(i)}" y="${H-10}" text-anchor="middle" font-size="10" style="fill:var(--muted)">${v ? v + 'Y' : 'Now'}</text>`).join('')}</svg>`;
+}
+function analyticsRiskSvg(m, profileIdx, levelIdx){
+  const W = 520, H = 230, levels = ['Low','Mod. low','Moderate','Mod. high','High'], seg = (W - 40) / 5;
+  const tone = ['#3ecf7e','#8bd17c','#f5a623','#f28b4b','#e0607e'];
+  const meter = levels.map((l,i)=>`<rect x="${20 + i*seg}" y="36" width="${seg-3}" height="18" rx="3" fill="${tone[i]}"/><text x="${20 + i*seg + seg/2}" y="49" text-anchor="middle" font-size="10" font-weight="600" fill="#10202c">${l}</text>`).join('');
+  const mark = (idx, label, up) => idx==null || idx < 0 ? '' : `<g transform="translate(${20 + idx*seg + seg/2},${up ? 33 : 57})"><path d="${up ? 'M -6 -8 L 6 -8 L 0 0 Z' : 'M -6 8 L 6 8 L 0 0 Z'}" fill="var(--text)"/><text y="${up ? -11 : 20}" text-anchor="middle" font-size="10" font-weight="600" style="fill:var(--text)">${label}</text></g>`;
+  const badge = (x, label, val) => `<g transform="translate(${x},86)"><rect width="114" height="40" rx="8" fill="none" stroke="var(--line)"/><text x="57" y="15" text-anchor="middle" font-size="9.5" style="fill:var(--muted)">${label}</text><text x="57" y="32" text-anchor="middle" font-size="14" font-weight="700" style="fill:var(--text)">${val}</text></g>`;
+  const lo = Math.min(m.low, 0), hi = Math.max(m.high, m.expectedReturn + 1, 1), sx = v => 40 + (W - 80) * (v - lo) / (hi - lo);
+  const spread = `<line x1="${sx(lo)}" x2="${sx(hi)}" y1="190" y2="190" stroke="var(--line)"/>
+    <rect x="${sx(m.low)}" y="180" width="${Math.max(2, sx(m.high) - sx(m.low))}" height="20" rx="4" fill="${RIA_COLORS[3]}" opacity="0.25"/>
+    ${[[m.low,'μ − σ'], [m.expectedReturn,'μ'], [m.high,'μ + σ']].map(([v,l])=>`<line x1="${sx(v)}" x2="${sx(v)}" y1="174" y2="206" stroke="${l==='μ' ? RIA_COLORS[1] : RIA_COLORS[3]}" stroke-width="2"/>
+      <text x="${sx(v)}" y="170" text-anchor="middle" font-size="10.5" font-weight="600" style="fill:var(--text)">${l} ${v}%</text>`).join('')}
+    ${lo < 0 ? `<line x1="${sx(0)}" x2="${sx(0)}" y1="182" y2="198" stroke="var(--muted)" stroke-dasharray="2 2"/><text x="${sx(0)}" y="220" text-anchor="middle" font-size="9" style="fill:var(--muted)">0%</text>` : ''}
+    <text x="20" y="150" font-size="10.5" style="fill:var(--muted)">One-sigma range of the expected annual return (about two years in three)</text>`;
+  return `<svg class="ria-risk" viewBox="0 0 ${W} ${H}" role="img" aria-label="Risk analytics" style="width:100%;height:auto;display:block">
+    <text x="20" y="16" font-size="10.5" style="fill:var(--muted)">Risk meter: ▼ portfolio risk · ▲ client risk profile</text>${meter}${mark(levelIdx, 'Portfolio', true)}${mark(profileIdx, 'Profile', false)}
+    ${badge(20, 'Sharpe ratio', m.sharpe)}${badge(142, 'Beta (β) vs Nifty 50', m.beta)}${badge(264, 'Expected return (μ)', m.expectedReturn + '%')}${badge(386, 'Std deviation (σ)', m.sigma + '%')}
+    ${spread}</svg>`;
+}
+function riaChartHtml(ch){
+  const body = ch.kind==='donut' ? analyticsDonutSvg(ch.items, {title: ch.title, centre: ch.centre})
+    : ch.kind==='line' ? analyticsLineSvg(ch.xs, ch.series, ch.fmt, ch.title)
+    : ch.kind==='risk' ? analyticsRiskSvg(ch.metrics, ch.profileIdx, ch.levelIdx)
+    : analyticsCompareSvg(ch.rows, ch.series, ch.fmt, ch.title);
+  return `<div class="boss-chart ria-chart" data-kind="${esc(ch.kind)}" data-module="${esc(ch.module||'')}" style="margin:8px 0 4px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card)">
+    <div style="font-weight:600;font-size:13px">${esc(ch.title)}</div>${ch.sub ? `<div class="small-note" style="margin:2px 0 6px">${esc(ch.sub)}</div>` : ''}${body}</div>`;
+}
+
+/* ---- the PDF report of a turn ---- */
+function riaPdfClean(s){
+  return String(s||'').replace(/```[\s\S]*?```/g, '').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s*/gm, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/μ/g, 'mu').replace(/σ/g, 'sigma').replace(/β/g, 'beta');
+}
+function bossTurnPdfBlocks(i){
+  const t = ai.turns[i];
+  if(!t || t.role!=='assistant') return null;
+  const x = t.intel || null;
+  const q = (ai.turns.slice(0, i).reverse().find(u=>u.role==='user') || {}).content || '';
+  const b = [];
+  b.push({t:'title', text:'RIA AI Advisory Report'});
+  b.push({t:'kv', label:'Scope', value: x ? x.scope.label : (t.chart ? t.chart.title : 'RIA AI answer')});
+  b.push({t:'kv', label:'Date', value: fmtDate(new Date().toISOString().slice(0,10))});
+  b.push({t:'kv', label:'Prepared by', value: (typeof teamName==='function' ? teamName(currentUser) : '') + ' with RIA AI (BOSS)'});
+  if(q) b.push({t:'kv', label:'Question', value: q});
+  const short = v => money(v).length > 9 ? riaCompact2(v) : money(v);
+  if(x) b.push({t:'cards', items:[{label:'Portfolio value', value: short(x.total), note: money(x.total)}, {label:'Invested', value: short(x.invested), note: money(x.invested)}, {label:'Monthly SIP', value: short(x.monthlySip)},
+    {label:'Risk profile', value: x.profile || (x.scope.kind==='book' ? 'Book' : 'Not recorded')}]});
+  b.push({t:'band', text:'Executive summary & AI advisory notes'});
+  riaPdfClean(t.content).split('\n').map(l=>l.trim()).filter(Boolean).forEach(l=>{
+    if(/^[-*•]\s+/.test(l)) b.push({t:'bullet', text: l.replace(/^[-*•]\s+/, '')});
+    else if(/^\d+\.\s+/.test(l)) b.push({t:'bullet', text: l});
+    else b.push({t:'p', text: l});
+  });
+  const tbl = (cols, rows) => ({t:'table', cols: cols.map((c,k)=>({label:c, w: k ? 1 : 2, bold: !k})), rows});
+  if(t.chart && t.chart.rows){
+    b.push({t:'band', text: t.chart.title});
+    b.push({t:'bars', items: t.chart.rows.slice(0, 14).map(r=>({label:r.label, value:r.count, note:String(r.count)}))});
+  }
+  (t.charts||[]).forEach(ch=>{
+    b.push({t:'band', text: riaPdfClean(ch.title), sub: ch.sub ? riaPdfClean(ch.sub) : undefined});
+    if(ch.kind==='donut'){
+      b.push({t:'donut', items: ch.items.map(it=>({label:it.label, value:it.value})), centre: riaCompact2(ch.items.reduce((s,z)=>s+z.value,0)), centreNote:'total'});
+      b.push(tbl(['Part', 'Amount', 'Share'], ch.items.map(it=>[it.label, money(it.value), riaPct(it.value, ch.items.reduce((s,z)=>s+z.value,0)) + '%'])));
+    } else if(ch.kind==='line'){
+      b.push(tbl(['Horizon'].concat(ch.series.map(s=>s.name)), ch.xs.map((n,k)=>[n ? n + ' years' : 'Now'].concat(ch.series.map(s=>money(s.points[k]))))));
+      const last = ch.xs.length - 1;
+      b.push({t:'bars', items: ch.series.map(s=>({label: s.name + ' at ' + ch.xs[last] + 'Y', value: s.points[last], note: money(s.points[last])}))});
+    } else if(ch.kind==='risk'){
+      const m = ch.metrics;
+      b.push({t:'cards', items:[{label:'Sharpe ratio', value: String(m.sharpe)}, {label:'Beta vs Nifty', value: String(m.beta)},
+        {label:'Mean return (mu)', value: m.expectedReturn + '%'}, {label:'Std dev (sigma)', value: m.sigma + '%'}]});
+      b.push({t:'bars', items:[{label:'mu - sigma', value: Math.max(0.1, m.low), note: m.low + '%'}, {label:'mu (expected)', value: m.expectedReturn, note: m.expectedReturn + '%'},
+        {label:'mu + sigma', value: m.high, note: m.high + '%'}]});
+      b.push({t:'meter', label:'Portfolio risk level: ' + m.level, pct: (ch.levelIdx + 1) / 5, note: m.level, tone: [PDF_C.ok, PDF_C.ok, PDF_C.warn, PDF_C.bad, PDF_C.bad][ch.levelIdx] || PDF_C.warn});
+      b.push(tbl(['Measure', 'Value'], [['Client risk profile', m.profile], ['Fit', m.fit], ['Diversification score', m.diversificationScore + ' / 100'], ['Risk-free rate', m.riskFree + '%']]));
+    } else {
+      const txt = ch.rows.some(r=>r.text!=null);
+      if(!txt) b.push({t:'bars', items: ch.rows.map(r=>({label: r.label + (ch.series.length > 1 ? ' (' + ch.series[ch.series.length-1] + ')' : ''), value: r.values[r.values.length-1],
+        note: riaFmt(r.values[r.values.length-1], ch.fmt)}))});
+      b.push(txt ? tbl(['Item', 'Detail'], ch.rows.map(r=>[r.label, r.text])) : tbl(['Item'].concat(ch.series), ch.rows.map(r=>[r.label].concat(r.values.map(v=>riaFmt(v, ch.fmt)).concat(r.note ? [] : [])))));
+    }
+  });
+  if(x){
+    if(x.portfolio && x.portfolio.topSchemes.length) { b.push({t:'h3', text:'Top schemes'}); b.push(tbl(['Scheme', 'Value', 'Weight'], x.portfolio.topSchemes.map(s=>[s.label, money(s.value), s.pct + '%']))); }
+    if(x.portfolio && x.portfolio.flags.length) x.portfolio.flags.forEach(f=>b.push({t:'note', title:'Concentration', text:f}));
+    if(x.actions && x.actions.list.length){ b.push({t:'h3', text:'Buy / Sell / Hold / Switch actions'}); b.push(tbl(['Client · scheme', 'Action', 'Value'], x.actions.list.slice(0, 20).map(a=>[a.client + ' · ' + a.scheme, a.action, money(a.value)]))); }
+    if(x.actions && x.actions.riskySafe.switchAmount){ const r = x.actions.riskySafe; b.push({t:'h3', text:'Risky-to-safe switch'});
+      b.push(tbl(['Into', 'Amount'], r.to.map(z=>[z.category, money(z.amount)]).concat([['Exit load (1% if held under 12 months)', money(r.exitLoad)], ['Estimated capital gains tax', money(r.tax)]]))); }
+    if(x.tax){ b.push({t:'h3', text:'Tax harvesting'}); b.push({t:'p', text: riaPdfClean(x.tax.rules)}); if(x.tax.rows.length) b.push(tbl(['Scheme', 'Gain', 'Term'], x.tax.rows.map(r=>[r.scheme, money(r.gain), r.term]))); }
+    if(x.opportunities && x.opportunities.examples.length){ b.push({t:'h3', text:'Cross-sell & up-sell'}); b.push(tbl(['Client · opportunity', 'Amount', 'Why'], x.opportunities.examples.slice(0, 20).map(e=>[e.client + ' · ' + e.opportunity, e.amount ? money(e.amount) : '—', e.why]))); }
+    if(x.risk) b.push({t:'p', text: riaPdfClean(x.risk.method)});
+    if(x.plan){ b.push({t:'h3', text:'GAB, bucket strategy, HUF, trust & legacy'});
+      b.push(tbl(['Bucket', 'Amount', 'Categories'], x.plan.buckets.map(z=>[z.name, money(z.amount), z.categories])));
+      b.push({t:'kv', label:'GAB SWP income', value: money(x.plan.gab.swpMonthly4) + ' to ' + money(x.plan.gab.swpMonthly5) + ' a month (4–5% a year)'});
+      b.push({t:'p', text: riaPdfClean(x.plan.gab.note)}); b.push({t:'p', text: riaPdfClean(x.plan.huf.note)});
+      x.plan.legacy.checks.forEach(c=>b.push({t:'bullet', text: riaPdfClean(c)})); }
+    if(x.projection){ b.push({t:'h3', text:'Projection milestones'}); b.push(tbl(['Horizon', 'Conservative 9%', 'Moderate 12%', 'Optimistic 15%'], x.projection.table.map(r=>[r.years + ' years', money(r.conservative), money(r.moderate), money(r.optimistic)])));
+      if(x.projection.goals.length) b.push(tbl(['Goal', 'Target', 'Achieved at 12%'], x.projection.goals.map(g=>[g.goal + ' (' + g.year + ')', money(g.target), g.achievementPct + '%']))); }
+  }
+  b.push({t:'note', title:'Compliance', text: RIA_PDF_FOOT + ' ' + RIA_GOVERNANCE});
+  return b;
+}
+function bossTurnPdfName(i){
+  const t = ai.turns[i] || {}, x = t.intel;
+  const who = x ? x.scope.label : 'RIA-AI';
+  return ('RIA-AI-Report-' + who + '-' + new Date().toISOString().slice(0,10)).replace(/[^A-Za-z0-9-]+/g, '-').replace(/-+/g, '-') + '.pdf';
+}
+function bossDownloadTurnPdf(i){
+  const blocks = bossTurnPdfBlocks(i);
+  if(!blocks) return null;
+  const name = bossTurnPdfName(i);
+  downloadPdf(blocks, name, {title:'RIA AI Advisory Report', footer: RIA_PDF_FOOT});
+  return {filename: name, blocks: blocks.length};
+}
+
 /* ---------------------------------------------------------------------
    CONNECTOR SETUP GUIDES — "How to Configure / How to Confirm"
 

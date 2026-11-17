@@ -308,6 +308,75 @@ function describeClient(c) {
   if ((c.openTasks || []).length) lines.push('- Open tasks: ' + c.openTasks.slice(0, 3).map((t) => (t.title || t.type) + (t.due ? ' (due ' + t.due + ')' : '')).join('; '));
   return lines;
 }
+/* The portfolio, risk and wealth analysis the page worked out (data.intel). */
+function describeIntel(x) {
+  if (!x || !x.scope) return [];
+  const pct = (v) => (Math.round(Number(v) * 10) / 10) + '%';
+  const L = ['**' + x.scope.label + '** — portfolio ' + money(x.totalValue) + ', invested ' + money(x.invested) + ', monthly SIP ' + money(x.monthlySip)
+    + (x.riskProfile ? ', ' + x.riskProfile + ' risk profile' : '') + '.', ''];
+  const p = x.portfolio;
+  if (p) {
+    L.push('**1. Portfolio analysis**');
+    L.push('- Asset allocation: ' + p.classes.map((c) => c.label + ' ' + pct(c.pct)).join(', ') + '.');
+    if (p.amcs.length) L.push('- Top AMCs: ' + p.amcs.slice(0, 3).map((a) => a.label + ' ' + pct(a.pct)).join(', ') + '.');
+    if (p.topSchemes.length) L.push('- Top schemes: ' + p.topSchemes.slice(0, 3).map((a) => a.label + ' ' + pct(a.pct)).join(', ') + '.');
+    L.push('- ' + (p.flags.length ? 'Concentration: ' + p.flags.join(' ') : 'No scheme above 25% and no AMC above 40%.'));
+    L.push('- Return: ' + (p.xirr != null ? 'XIRR ' + pct(p.xirr) : 'absolute gain ' + (p.gainPct != null ? pct(p.gainPct) : 'not known')) + ' (gain ' + money(p.gain) + ') against long-run references of '
+      + (p.reference || []).map((r) => r.label.replace(/ \(long-run reference\)/, '') + ' ' + r.r + '%').join(' and ') + '. Goals mapped: ' + p.goalsMapped + '.', '');
+  }
+  const a = x.actions;
+  if (a) {
+    const c = Object.keys(a.counts || {}).map((k) => k + ' ' + a.counts[k]).join(', ');
+    L.push('**2. Buy / Sell / Hold / Switch**');
+    L.push('- ' + (c ? 'Signals: ' + c + '.' : 'No scheme-level holdings to read signals from.'));
+    (a.list || []).slice(0, 5).forEach((r) => L.push('- ' + r.action + ': ' + r.scheme + (x.scope.kind === 'book' ? ' (' + r.client + ')' : '') + ' — ' + r.why));
+    const r = a.riskySafe;
+    if (r) L.push('- Risky to safe: small / mid / thematic ' + pct(r.riskyPct) + ' against a ' + r.capPct + '% ceiling. ' + (r.switchAmount
+      ? 'Switch about ' + money(r.switchAmount) + ' into ' + r.to.map((z) => z.category + ' ' + money(z.amount)).join(', ') + '; exit load about ' + money(r.exitLoad) + ', capital gains tax about ' + money(r.tax) + '.'
+      : 'Nothing above the ceiling to switch.'));
+    L.push('- ' + a.governance, '');
+  }
+  const t = x.tax;
+  if (t) {
+    L.push('**3. Tax harvesting**');
+    L.push('- Unrealised equity gain ' + money(t.unrealisedEquityGain) + ' (long-term ' + money(t.longTermGain) + ', short-term ' + money(t.shortTermGain) + ').');
+    L.push('- Book ' + money(t.harvestTaxFree) + ' of long-term gain tax-free under the ₹1.25 lakh allowance: about ' + money(t.taxSaved) + ' saved; taxable gain remaining ' + money(t.taxableRemaining) + '.');
+    if (t.losses) L.push('- Losses of ' + money(t.losses) + ' can be booked to set off gains.');
+    L.push('- ' + t.rules, '');
+  }
+  const o = x.opportunities;
+  if (o) {
+    L.push('**4. Cross-sell & up-sell**');
+    if (!o.byType.length) L.push('- No gaps found in the records.');
+    o.byType.forEach((b) => L.push('- ' + b.type + ': ' + b.clients + (x.scope.kind === 'book' ? ' client' + (b.clients === 1 ? '' : 's') : '') + (b.amount ? ' (' + money(b.amount) + ')' : '')));
+    L.push('');
+  }
+  const r = x.risk;
+  if (r) {
+    L.push('**5. Risk analysis**');
+    L.push('- Sharpe ratio ' + r.sharpe + ' · Beta (β) ' + r.beta + ' · Expected return (μ) ' + pct(r.expectedReturn) + ' · Standard deviation (σ) ' + pct(r.sigma) + '.');
+    L.push('- One-sigma range (μ − σ to μ + σ): ' + pct(r.low) + ' to ' + pct(r.high) + ' a year. Portfolio risk ' + r.level + '; profile ' + r.profile + '. ' + r.fit);
+    L.push('- Diversification score ' + r.diversificationScore + ' / 100. ' + r.method, '');
+  }
+  const g = x.plan;
+  if (g) {
+    L.push('**6. GAB, bucket strategy, HUF, trust & legacy**');
+    g.buckets.forEach((b) => L.push('- ' + b.name + ': ' + money(b.amount) + ' (' + b.categories + ')'));
+    L.push('- ' + g.assumption);
+    L.push('- GAB SWP income: ' + money(g.gab.swpMonthly4) + ' to ' + money(g.gab.swpMonthly5) + ' a month. ' + g.gab.note);
+    L.push('- ' + g.huf.note);
+    g.legacy.checks.forEach((c) => L.push('- ' + c));
+    L.push('');
+  }
+  const j = x.projection;
+  if (j) {
+    L.push('**7. Future projection** (' + money(j.corpus) + ' + ' + money(j.monthlySip) + ' a month)');
+    j.table.forEach((row) => L.push('- ' + row.years + ' years: ' + money(row.conservative) + ' / ' + money(row.moderate) + ' / ' + money(row.optimistic) + ' (9% / 12% / 15%)'));
+    (j.goals || []).forEach((q) => L.push('- Goal ' + q.goal + ' (' + q.year + '): ' + q.achievementPct + '% of ' + money(q.target) + ' at 12%.'));
+    L.push('- ' + j.note, '');
+  }
+  return L;
+}
 /* "How many KYCs are pending": the number first, then each status. */
 function describeCount(c, q) {
   if (!c || typeof c.matching !== 'number') return [];
@@ -360,6 +429,7 @@ function chat(messages, opts) {
 
   if (data) {
     if (data.countSummary) out.push(...describeCount(data.countSummary, q));
+    if (data.intel) out.push(...describeIntel(data.intel));
     (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c)); out.push(''); });
     if (data.openLead) out.push('Lead on screen: ' + rowLine(data.openLead) + '.');
     if (data.chart) out.push(...describeChart(data.chart));
@@ -375,7 +445,7 @@ function chat(messages, opts) {
   while (out.length && out[out.length - 1] === '') out.pop();
 
   /* A count question is answered by its numbers; an SOP under it is noise. */
-  const countQ = isCountQ(q) && !house && !(data && Array.isArray(data.clients) && data.clients.length);   // a client's own question keeps its SOPs
+  const countQ = isCountQ(q) && !house && !(data && data.intel) && !(data && Array.isArray(data.clients) && data.clients.length);   // a client's own question keeps its SOPs
   if (countQ) {
     if (!data || !(data.reads || data.countSummary || data.clients)) out.push(isHinglish(q)
       ? 'Is ginti ke liye BOSS ne koi records nahi padhe. Status ka naam likhiye — jaise "kitne KYC pending hain" ya "how many mandates are pending".'

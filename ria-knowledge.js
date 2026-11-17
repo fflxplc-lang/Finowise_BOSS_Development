@@ -201,6 +201,24 @@ const TOPICS = [
     '- **Transfer** (living holder to another person): units held in demat move by an off-market transfer (DIS slip); units held in statement (SOA) form can be transferred through the RTA’s online transfer facility (CAMS / KFintech) — the receiver needs KYC and a folio in the same scheme or an AMC account.',
     '- **Transmission** (on a holder’s death): the nominee, joint holder or legal heir submits the transmission request form, the death certificate, their own KYC and bank proof; without a nominee, legal-heir documents are needed as well.',
     '- Log the request in QMS and track it to the RTA’s confirmation.'] },
+  { id: 'huf', words: ['huf', 'huff', 'hindu undivided family', 'huf account', 'huf folio'], text: [
+    '**HUF (Hindu Undivided Family)**',
+    '- A separate PAN and tax entity: its own basic exemption and slab, and its own ₹1.25 lakh equity LTCG allowance — about ₹15,625 more tax saved a year when gains are harvested in both names.',
+    '- Pools family income and assets under a karta (the eldest member, or a woman karta), with the members as coparceners; needs an HUF deed, PAN, bank account and KYC for the HUF.',
+    '- Fund it with ancestral or inherited assets, or gifts from relatives outside the HUF: gifts from members into it are clubbed back to them.',
+    '- Open separate HUF folios; nominations are not allowed on HUF folios, so record the succession plan in the HUF deed.'] },
+  { id: 'legacy', words: ['trust and legacy', 'legacy', 'family trust', 'private trust', 'private family trust', 'succession', 'estate planning', 'make a will', 'registered will', 'will and nomination'], text: [
+    '**Trust & legacy planning**',
+    '- 100% nomination on every folio, demat and bank account; for joint folios, “Anyone or Survivor”.',
+    '- A registered Will naming an executor and every asset; review it after any life event.',
+    '- A Private Family Trust where assets need protection from creditors or continuity for a minor or a special-needs dependant; the trustee runs it by the trust deed.',
+    '- Keep a family asset register (folios, policies, accounts) with the Will so transmission is quick.'] },
+  { id: 'risk-measures', words: ['sharpe', 'sharpe ratio', 'beta', 'standard deviation', 'std dev', 'volatility', 'sigma'], text: [
+    '**Risk measures**',
+    '- **Standard deviation (σ)**: how far returns swing around the average in a year; about two years in three fall within μ ± σ.',
+    '- **Sharpe ratio** = (portfolio return − risk-free rate) ÷ σ: return earned per unit of risk; above 0.5 is reasonable, above 1 is good.',
+    '- **Beta (β)**: how much the portfolio moves with the Nifty 50; 1 moves with it, 0.5 half as much, 0 not at all.',
+    '- Read them against the client\u2019s risk profile (ISEQ): a portfolio riskier than the profile allows is a rebalance.'] },
   { id: 'qms-escalation', words: ['escalation', 'escalate', 'escalation matrix', 'qms escalation', 'complaint escalation'], text: [
     '**QMS escalation path**',
     '- Every client query or complaint is logged in QMS with a category and priority; the owner must respond within the first-response SLA set in Setup → Queries.',
