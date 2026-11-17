@@ -15,6 +15,9 @@
      their dashboards and the SIPs page. Its own file because it is a
      module of its own; it only defines functions, and BOSS calls them. -->
 <script src="/multi-asset.js"></script>
+<!-- The Live AUM book: one calculation for the Dashboard and for RIA AI's
+     total AUM (the server require()s the same file). -->
+<script src="/book-aum.js"></script>
 <script src="/review/review-report.js"></script>
 <title>BOSS</title>
 <!-- THE TAB SHOULD SAY WHOSE SYSTEM THIS IS.
@@ -38361,27 +38364,21 @@ document.addEventListener('scroll', function(){ if(typeof aiHideSelBtn==='functi
    A record names a product category from Settings; anything that is not one
    of the three falls into Others rather than being dropped, so the parts
    always add to the whole. */
-function mdProductBucket(x){
-  const s = String((x && (x.productCategory || x.product || x.fundCategory)) || '').toLowerCase();
-  if(/equity|large|mid|small|flexi|multi|focused|elss|index|international/.test(s)) return 'Equity';
-  if(/debt|liquid|gilt|bond/.test(s)) return 'Debt';
-  if(/hybrid|balanced/.test(s)) return 'Hybrid';
-  return 'Others';
-}
+function mdProductBucket(x){ return BookAum.productBucket(x); }   /* public/book-aum.js */
 const MD_PRODUCTS = ['Equity','Debt','Hybrid','Others'];
 
 /* The money that is actually in the book: completed, undeleted, and
    redemptions taken off rather than added on — the same arithmetic the
    client profile's AUM uses, so the two can never disagree. */
 function mdTxns(){
-  const list = txnBusinessOnly(DB.transactions.filter(t=>!t.deletedAt && t.status==='Completed'));
+  const list = BookAum.eligibleTxns(DB.transactions);   /* completed, undeleted, not a Main — public/book-aum.js */
   return visibleRecords(list, t=>(DB.clients.find(c=>c.id===t.clientId)||{}).rmName,
                               t=>(DB.clients.find(c=>c.id===t.clientId)||{}).branch);
 }
 function mdClients(){
   return visibleRecords(DB.clients.filter(c=>!c.deletedAt), c=>c.rmName, c=>c.branch);
 }
-function mdSigned(t){ return /redemption/i.test(t.transactionType||'') ? -numVal(t.amount) : numVal(t.amount); }
+function mdSigned(t){ return BookAum.signed(t); }   /* public/book-aum.js */
 
 /* Group rows into {label, value} pairs, biggest first, dropping the empties
    so a branch nobody works is not a row of zeroes. */
@@ -38431,64 +38428,17 @@ const MD_CUT_LABELS = {product:'Product', platform:'Platform', branch:'Branch', 
    answers the question somebody actually asks after an import: did it
    land, and how much of this figure is it?
    --------------------------------------------------------------------- */
-const MD_SLEEVE_BUCKET = {Equity:'Equity', Debt:'Debt', Hybrid:'Hybrid', Physical:'Others',
-  Structured:'Others', WealthPlus:'Others', Cash:'Others', Tax:'Others',
-  NonARequity:'Equity', Others:'Others',
-  Stocks:'Equity', IAP:'Equity', FD:'Debt', Bonds:'Debt', MutualFund:'Others', PMS:'Others',
-  AIF:'Others', PE:'Others', Ledger:'Others'};
-/* A report that gives one total and no breakdown is not guessed at. */
-const MD_NO_SPLIT = 'Not broken out';
+/* The sleeve buckets and the "not broken out" label live in public/book-aum.js,
+   with the book itself, so the Dashboard and RIA AI share one definition. */
+const MD_SLEEVE_BUCKET = BookAum.SLEEVE_BUCKET;
+const MD_NO_SPLIT = BookAum.NO_SPLIT;
 
 function mdBookRows(){
-  const clients = mdClients();
-  const mine = new Set(clients.map(c=>c.id));
-  const hold = {}, sips = {}, txn = {};
-  DB.platformHoldings.filter(h=>!h.deletedAt && mine.has(h.clientId))
-    .forEach(h=>{ (hold[h.clientId] = hold[h.clientId] || []).push(h); });
-  DB.platformSips.filter(s=>!s.deletedAt && mine.has(s.clientId))
-    .forEach(s=>{ (sips[s.clientId] = sips[s.clientId] || []).push(s); });
-  mdTxns().forEach(t=>{ (txn[t.clientId] = txn[t.clientId] || []).push(t); });
-
-  const rows = [];
-  clients.forEach(c=>{
-    const base = {clientId:c.id, branch:c.branch, rm:teamName(c.rmName), category:c.clientCategory};
-    const push = o => rows.push(Object.assign({aum:0, sip:0}, base, o));
-
-    if(hold[c.id]){
-      hold[c.id].forEach(h=>{
-        const pl = impPlatformLabel(h.platform);
-        const src = pl + ' (imported)';
-        const sleeves = Object.entries(h.sleeves || {})
-          .filter(([,v])=>numVal(v.current) || numVal(v.invested));
-        sleeves.forEach(([name, v])=>push({source:src, platform:pl,
-          product: MD_SLEEVE_BUCKET[name] || 'Others', aum: numVal(v.current)}));
-        /* The sleeves need not add to the reported total — a report can
-           carry both, and the total is the one to trust. Whatever the
-           sleeves do not account for is carried as its own row so the
-           cut still sums to the figure on the card. */
-        const covered = sleeves.reduce((s,[,v])=>s + numVal(v.current), 0);
-        const rest = numVal(h.current) - covered;
-        if(Math.round(rest) !== 0) push({source:src, platform:pl,
-          product: sleeves.length ? 'Others' : MD_NO_SPLIT, aum: rest});
-      });
-    } else {
-      (txn[c.id] || []).forEach(t=>push({source:'BOSS ledger', platform: t.platform || '—',
-        product: mdProductBucket(t), aum: mdSigned(t)}));
-    }
-
-    if(sips[c.id]){
-      sips[c.id].forEach(s=>{
-        const pl = impPlatformLabel(s.platform);
-        push({source: pl + ' (imported)', platform: pl, product: MD_NO_SPLIT,
-              sip: numVal(s.monthlyAmount || s.amount)});
-      });
-    } else {
-      (txn[c.id] || []).filter(t=>/sip/i.test(t.transactionType||''))
-        .forEach(t=>push({source:'BOSS ledger', platform: t.platform || '—',
-          product: mdProductBucket(t), sip: numVal(t.amount)}));
-    }
-  });
-  return rows;
+  /* The book is computed in public/book-aum.js — the same file the server
+     uses for RIA AI's total AUM. This card decides only who is in scope. */
+  return BookAum.bookRows(
+    {clients: mdClients(), holdings: DB.platformHoldings, sips: DB.platformSips, txns: mdTxns()},
+    {platformLabel: impPlatformLabel, teamName: teamName});
 }
 /* The five ways a money figure is cut, over those rows. */
 function mdBookCuts(rows, valOf){
@@ -58798,13 +58748,17 @@ const AI_SOURCES = {
       blueprint:r=>approachFormLabel(planTypeOf(r)||'')||'', iseq:r=>r.iseqCategory||'',
       fq:r=>r.fqCategory||'', expectedLumpsum:r=>numVal(r.expectedLumpsum), expectedSip:r=>numVal(r.expectedSip),
     }},
-  clients: {label:'Clients', perm:'CMS', list:()=>DB.clients, owner:r=>r.assignedTo, branch:r=>r.branch,
+  /* Scoped by rmName, the field the Dashboard scopes clients by, so the
+     assistant and the Dashboard see the same clients. "aum" is the
+     Dashboard's figure for the client (platform report, else the BOSS
+     ledger), not the manual AUM field on the record. */
+  clients: {label:'Clients', perm:'CMS', list:()=>DB.clients, owner:r=>r.rmName, branch:r=>r.branch,
     date:r=>r.createdAt,
     cols:{
       id:r=>r.id, name:r=>r.cmsName||clientName(r.id), mobile:r=>r.mobile, email:r=>r.email,
       stage:r=>stateLabel('CMS', stateOf('CMS', r)), category:r=>r.clientCategory||'',
-      branch:r=>r.branch, rm:r=>teamName(r.assignedTo), created:r=>r.createdAt,
-      aum:r=>numVal(r.aum), sip:r=>numVal(r.monthlySip),
+      branch:r=>r.branch, rm:r=>teamName(r.rmName), created:r=>r.createdAt,
+      aum:r=>clientBookAum(r), sip:r=>numVal(r.monthlySip),
     }},
   reviews: {label:'Reviews', perm:'RMS', list:()=>DB.reviews, owner:r=>r.assignedTo, branch:r=>r.branch,
     date:r=>r.createdAt,
@@ -58881,7 +58835,13 @@ function aiSummariseSource(name, opts){
   if(got.error) return got;
   const by = (opts && opts.groupBy) || [];
   const sums = (opts && opts.sum) || [];
-  if(!by.length) return {label:got.label, total:got.total, groups:[]};
+  /* A total with nothing to group by is still a total: added up over every
+     record in scope, not left for anybody to add up from a list. */
+  if(!by.length){
+    const totals = {};
+    sums.forEach(sName=>{ totals[sName] = got.rows.reduce((n, r)=>n + (Number(r[sName])||0), 0); });
+    return {label:got.label, total:got.total, groups:[], sums: totals};
+  }
   const map = {};
   got.rows.forEach(r=>{
     const key = by.map(b=>String(r[b]==null||r[b]===''? '—' : r[b])).join(' · ');
@@ -59252,6 +59212,57 @@ function aiCopy(i){
 /* Does this read like a request for a report? Worth asking, because a
    report takes a different route: the model writes a specification and
    BOSS builds the thing from records. */
+/* "What is the total firm AUM?" — answered from the server's calculation
+   (public/book-aum.js, the Dashboard's own Live AUM logic, over every record
+   in the account's scope), never from a table the model was shown and never
+   by the model. Narrow on purpose: a named client, a named branch, a
+   breakdown, a comparison or a growth question is not a total, and goes
+   where it went before. */
+function riaTotalAumIntent(q){
+  const t = ' ' + String(q || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  if(!/ (aum|assets under management|asset under management) /.test(t)) return false;
+  if(/ (by|per|each|wise|branchwise|rmwise|breakdown|split|growth|grow|trend|change|mom|qoq|yoy|compare|comparison|vs|versus|chart|graph|report|pdf|excel|top|list|client|rm|branch|project|scheme|amc|sip|last|previous|month|quarter|year) /.test(t)) return false;
+  if((DB.config.branches || []).some(b=>{ const n = String(b || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); return n && t.indexOf(' ' + n + ' ') >= 0; })) return false;
+  if(bossClientsNamedIn(q).length) return false;
+  return / (total|firm|firms|overall|entire|whole|complete|aggregate|book|kitna|kitni|kya|how much|what is|whats|current|live|our|my) /.test(t)
+      || /^\s*(total\s+|live\s+)?aum\s*\??\s*$/i.test(String(q || ''));
+}
+async function riaTotalAumTurn(){
+  if(!can('CMS','view')){
+    ai.turns.push({role:'assistant', content:'Your account cannot see client AUM (it needs CMS view), so no AUM total was calculated.'});
+    return {};
+  }
+  ai.phase = 'RIA AI is calculating AUM from BOSS records'; aiDrawPanel();
+  let res, body = {};
+  try {
+    res = await fetch('/api/ai/aum', {headers: apiHeaders()});
+    body = await res.json().catch(()=>({}));
+  } catch(e) {
+    ai.turns.push({role:'assistant', content:'BOSS could not be reached to calculate AUM just now, so nothing was estimated. Please try again.'});
+    return {};
+  }
+  if(!res.ok || !body.ok){
+    ai.turns.push({role:'assistant', content: body.message || 'BOSS could not calculate AUM for your account, so nothing was estimated.'});
+    return {};
+  }
+  ai.turns.push({role:'assistant', content: riaAumText(body), aum: body});
+  return {};
+}
+function riaAumText(b){
+  const c = b.composition || {}, d = b.dataDate || {};
+  const asOn = Object.entries(d.platformAsOn || {}).map(([p, dt])=>impPlatformLabel(p) + ' report as on ' + fmtDate(dt));
+  const lines = [
+    (b.scope && b.scope.kind === 'firm' ? 'Total firm AUM: ' : 'AUM in your scope: ') + money(b.total),
+    'Scope: ' + ((b.scope && b.scope.label) || '—'),
+    'Source: ' + b.source,
+    'Data date: ' + (asOn.length ? asOn.join('; ') + '; ' : '') + 'BOSS ledger read at ' + new Date(b.computedAt).toLocaleString(),
+    'Made of: ' + money(c.fromPlatformHoldings) + ' from platform reports (' + c.clientsUsingPlatformHoldings + ' clients) and '
+      + money(c.fromBossLedger) + ' from completed BOSS transactions (' + c.clientsUsingLedger + ' clients).',
+    'Clients: ' + c.clientsInScope + ' in scope, ' + c.clientsWithAum + ' with AUM, ' + c.clientsWithoutAum + ' with none.',
+  ];
+  if((b.notes || []).length) lines.push('', 'Notes:', ...b.notes.map(n=>'- ' + n));
+  return lines.join('\n');
+}
 function aiLooksLikeReport(q){
   return /\breport\b|\bmis\b|\bexcel\b|\bxlsx\b|\bcsv\b|\bspreadsheet\b|\bbranch[- ]wise\b|\brm[- ]wise\b|\bdownload\b/i.test(q);
 }
@@ -59263,7 +59274,8 @@ async function aiSend(){
   ai.error = null;
   ai.turns.push({role:'user', content:q});
   ai.busy = true; aiDrawPanel();
-  const out = aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
+  const out = riaTotalAumIntent(q) ? await riaTotalAumTurn()
+            : aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
   ai.busy = false; ai.phase = '';
   if(out && out.error) ai.error = out.error;
   aiDrawPanel();
@@ -59770,6 +59782,13 @@ function bossDoReads(reads){
     if(opts.groupBy.length){
       const s = aiSummariseSource(rd.source, opts);
       return s.error ? {source: rd.source, error: s.error} : {source: s.label, total: s.total, groupBy: s.groupBy, groups: s.groups.slice(0,60)};
+    }
+    /* "Total X" with no grouping: the sum over every record in scope, never a
+       150-row list the model is left to add up. */
+    if(opts.sum.length){
+      const s = aiSummariseSource(rd.source, opts);
+      return s.error ? {source: rd.source, error: s.error}
+        : {source: s.label, total: s.total, sums: s.sums, note: 'Totals over all ' + s.total + ' records in your scope.'};
     }
     const got = aiReadSource(rd.source, opts);
     if(got.error) return {source: rd.source, error: got.error};

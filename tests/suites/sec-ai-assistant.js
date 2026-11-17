@@ -137,5 +137,51 @@ secSuite(async (t) => {
     if (r.status !== 200 || !e) throw new Error(r.status + ' ' + JSON.stringify(e));
     return '200 (as before); would-deny: ' + e.reason;
   });
+
+  /* Carried over with the AUM and fallback fixes: they keep to Phase 1. */
+  const aumSrv = await t.startServer({ CRM_ACCESS_MODE: 'enforce' });
+  const aAdmin = await aumSrv.admin();
+  const aData = seed.build(20);
+  aData.transactions = aData.clients.map((c, i) => ({ id: 'TX-AUM' + i, clientId: c.id, status: 'Completed', transactionType: 'Purchase', amount: 10000 * (i + 1) }));
+  await seed.load(aAdmin, aData);
+  await t.step('total AUM follows Phase 1 scope: firm-wide for the administrator account, own book for an RM, refused for Inactive and firm-wide members', async () => {
+    const firm = (await aAdmin.get('/api/ai/aum')).json;
+    const rm = await seed.signIn(aAdmin, 'U-RMA');
+    const mine = (await rm.get('/api/ai/aum')).json;
+    /* what the Dashboard's own module says RM A's book is */
+    const BookAum = require('../../public/book-aum.js');
+    const own = aData.clients.filter((c) => c.rmName === 'U-RMA' && !c.deletedAt);
+    const ids = new Set(own.map((c) => c.id));
+    const input = { clients: own, holdings: aData.platformHoldings || [], sips: aData.platformSips || [], txns: BookAum.eligibleTxns(aData.transactions).filter((x) => ids.has(x.clientId)) };
+    const ownWant = BookAum.aumSummary(BookAum.bookRows(input), input).total;
+    const all = await seed.signIn(aAdmin, 'U-ALL');
+    const wide = await all.get('/api/ai/aum');
+    const rmB = await seed.signIn(aAdmin, 'U-RMB');
+    const team = await aAdmin.store('team', []);
+    await aAdmin.save('team', team.map((m) => (m.id === 'U-RMB' ? Object.assign({}, m, { status: 'Inactive' }) : m)));
+    const inactive = (await rmB.get('/api/ai/aum')).status;
+    const auditDir = path.join(aumSrv.dir, 'audit');
+    const audit = fs.readdirSync(auditDir).map((f) => fs.readFileSync(path.join(auditDir, f), 'utf8')).join('');
+    if (firm.scope.kind !== 'firm' || mine.scope.kind !== 'own' || mine.total !== ownWant || wide.status !== 403 || inactive !== 401 || !/"ai\.aum"/.test(audit))
+      throw new Error(JSON.stringify({ firm: firm.scope, mine: mine.total, ownWant, wide: wide.status, inactive }));
+    return 'admin firm-wide ₹' + firm.total.toLocaleString('en-IN') + '; RM A own ₹' + mine.total.toLocaleString('en-IN') + ' (= its clients); scope-all member 403; Inactive member 401; audited';
+  });
+  await t.step('a model address the outbound guard refuses is never contacted, and the person still gets an answer', async () => {
+    let metaHits = 0;
+    const meta = await listen((req, res) => { metaHits++; res.end('{}'); });
+    try {
+    /* the firm's own model saved at a link-local address: the guard refuses it on every call */
+    const file = path.join(aumSrv.dir, 'connections.json');
+    await aumSrv.stop();
+    const conn = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    conn.bossai = { enabled: true, status: 'Connected', config: { baseUrl: 'http://169.254.169.254/v1', model: 'm' }, secrets: {} };
+    fs.writeFileSync(file, JSON.stringify(conn));
+    const again = await t.startServer({ CRM_ACCESS_MODE: 'enforce' }, { dir: aumSrv.dir });
+    const a2 = await again.admin();
+    const r = await a2.post('/api/ai/chat', { connector: 'bossai', system: 'You are RIA AI.', messages: [{ role: 'user', content: '<sops>\n[kyc-physical] Physical KYC (offline) (KYC · CAMS office)\n  1. Collect documents\n  2. Submit at nearest CAMS office\n</sops>\n\n<data>none read for this question</data>\n\nQuestion: How do I do a physical KYC?' }] });
+    if (r.status !== 200 || !r.json.ok || !/Collect documents/.test(r.json.text) || metaHits !== 0 || !/fallback/i.test(again.log())) throw new Error(r.status + ' ' + r.text.slice(0, 160) + ' hits=' + metaHits);
+    return 'guard refused 169.254.169.254 (nothing reached it); answer 200 from the SOP';
+    } finally { meta.close(); }
+  });
   model.close(); thief.close();
 });

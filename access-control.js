@@ -1149,7 +1149,7 @@ const ROUTE_POLICY = {
   'GET /login': 'public', 'POST /login': 'public', 'GET /login/otp': 'public', 'POST /login/otp': 'public',
   'POST /login/otp/resend': 'public', 'POST /logout': 'public', 'GET /logout': 'public',
   'POST /login/json': 'public', 'POST /login/otp/json': 'public',
-  'GET /api/session': 'signed-in', 'POST /api/session/activity': 'signed-in', 'POST /api/audit/export': 'signed-in',
+  'GET /api/ai/aum': 'scoped', 'GET /api/session': 'signed-in', 'POST /api/session/activity': 'signed-in', 'POST /api/audit/export': 'signed-in',
   'GET /api/storage/:key': 'scoped', 'PUT /api/storage/:key': 'scoped', 'DELETE /api/storage/:key': 'day1-admin',
   'GET /api/connections': 'signed-in', 'PUT /api/connections/:id': 'day1-admin',
   'DELETE /api/connections/:id': 'day1-admin', 'POST /api/connections/:id/test': 'day1-admin',
