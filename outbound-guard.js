@@ -30,7 +30,8 @@ const http = require('http');
 const https = require('https');
 
 function v4parts(ip) { return ip.split('.').map(Number); }
-function classifyV4(p, q, r) {
+function classifyV4(p, q, r, t) {
+  if (p === 168 && q === 63 && r === 129 && t === 16) return 'always';    // Azure WireServer / metadata
   if (p === 0) return 'always';                                    // 0.0.0.0/8 "this network"
   if (p === 169 && q === 254) return 'always';                     // link-local, incl. 169.254.169.254 metadata
   if (p >= 224) return 'always';                                   // multicast and reserved
@@ -78,7 +79,7 @@ const v4of = (hi, lo) => [hi >> 8, hi & 255, lo >> 8, lo & 255];
    and the cloud metadata address over IPv6 are refused. */
 function classify(ip) {
   const a = String(ip || '').replace(/^\[|\]$/g, '').toLowerCase();
-  if (net.isIPv4(a)) { const [p, q, r] = v4parts(a); return classifyV4(p, q, r); }
+  if (net.isIPv4(a)) { const [p, q, r, t] = v4parts(a); return classifyV4(p, q, r, t); }
   const w = v6words(a);
   if (!w) return 'always';
   const z = (from, to) => w.slice(from, to).every((x) => x === 0);

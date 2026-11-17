@@ -244,6 +244,112 @@ secSuite(async (t) => {
     return 'guesses at the administrator: ' + st.join(',') + ' — 429 after ' + st.indexOf(429) + ', despite own sign-ins in between';
   });
 
+  /* ======== the second, fresh review (step 6b) ======== */
+  const linkTo = async (tok, extra) => {
+    const links = await admin.store('docLinks', []);
+    await admin.save('docLinks', links.concat([Object.assign({ id: 'DL-' + tok, token: tok, clientId: own.id, recordModule: 'CMS', recordId: own.id }, extra || {})]));
+  };
+  await t.step('R2-N1 a link, a lead or a review cannot be pointed at another RM’s client by any other field', async () => {
+    admin = await enf.admin();
+    const links = await rmA.store('docLinks', []);
+    const a = await rmA.save('docLinks', links.concat([{ id: 'DL-ZZN1', token: 'zz-tok-dddddddddddddddd1', clientId: own.id, leadId: theirs.id }]));
+    const leads = await rmA.store('leads', []);
+    const myLead = leads.find((l) => l.assignedTo === 'U-RMA' && !l._stub);
+    const b = await rmA.save('leads', leads.map((l) => (l.id === myLead.id ? Object.assign({}, l, { convertedToClientId: theirs.id }) : l)));
+    const reviews = await rmA.store('reviews', []);
+    const c = await rmA.save('reviews', reviews.concat([{ id: 'RMS-ZZN1', assignTo: 'U-RMA', clientId: theirs.id, ctFormToken: 'zz-tok-eeeeeeeeeeeeeeee1' }]));
+    const tx = await rmA.store('transactions', []);
+    const d = await rmA.save('transactions', tx.concat([{ id: 'TX-ZZN1', clientId: theirs.id, createdBy: 'U-RMA', amount: 1 }]));
+    if ([a, b, c, d].some((r) => r.status !== 403)) throw new Error([a.status, b.status, c.status, d.status].join(' / '));
+    return 'link leadId=client 403; own lead converted to their client 403; review on their client 403; transaction on their client 403';
+  });
+
+  await t.step('R2-N1/N5 a client link cannot move its client to another RM, or write to records outside the link', async () => {
+    admin = await enf.admin();
+    await linkTo('zz-tok-ffffffffffffffff1');
+    const otherLead = data.leads.find((l) => l.assignedTo === 'U-RMC');
+    const p = await fetch(enf.base + '/api/public/patch?token=zz-tok-ffffffffffffffff1', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: { clients: { [own.id]: { rmName: 'U-RMB', branch: 'B' } } },
+        appends: { docSubmissions: [{ id: 'DS-ZZN5', token: 'zz-tok-not-this-link', leadId: otherLead.id, type: 'ISEQ', score: 99 }],
+          transactions: [{ id: 'TX-ZZN5', clientId: theirs.id, amount: 5 }] } }) });
+    const cl = (await admin.store('clients', [])).find((c) => c.id === own.id);
+    const tx = (await admin.store('transactions', [])).find((x) => x.id === 'TX-ZZN5');
+    const ds = (await admin.store('docSubmissions', [])).find((x) => x.id === 'DS-ZZN5');
+    const ld = (await admin.store('leads', [])).find((l) => l.id === otherLead.id);
+    if (cl.rmName !== 'U-RMA' || cl.branch !== own.branch || tx || ds || (ld && ld.iseqScore === 99))
+      throw new Error(JSON.stringify({ patch: p.status, rm: cl.rmName, tx: !!tx, ds: !!ds }));
+    return 'patch ' + p.status + '; owner and branch unchanged; the other client’s transaction and the other lead’s submission refused';
+  });
+
+  await t.step('R2-N2 a colleague’s team PAN cannot be pulled into a visible field, and the link page masks the team', async () => {
+    admin = await enf.admin();
+    const team = await rmA.store('team', []);
+    const right = await rmA.save('team', team.map((m) => (m.id === 'U-RMB' ? Object.assign({}, m, { name: 'XXXXXX222B' }) : m)));
+    const wrong = await rmA.save('team', team.map((m) => (m.id === 'U-RMB' ? Object.assign({}, m, { name: 'XXXXXX999Q' }) : m)));
+    const b = (await admin.store('team', [])).find((m) => m.id === 'U-RMB');
+    await linkTo('zz-tok-gggggggggggggggg1');
+    const bundle = await (await fetch(enf.base + '/api/public/bundle?token=zz-tok-gggggggggggggggg1')).text();
+    if (right.status === 200 || right.text !== wrong.text || b.name === 'ZZZPB2222B' || /ZZZP[A-Z]\d{4}[A-Z]/.test(bundle))
+      throw new Error(JSON.stringify({ right: right.status, wrong: wrong.status, same: right.text === wrong.text, name: b.name, bundleLeak: /ZZZP[A-Z]\d{4}[A-Z]/.test(bundle) }));
+    return 'right ' + right.status + ' / wrong ' + wrong.status + ' (identical); name unchanged; no full PAN in the bundle';
+  });
+
+  await t.step('R2-N3 an RM cannot edit a colleague’s name, email or phone; their own phone, yes', async () => {
+    const team = await rmA.store('team', []);
+    const r = await rmA.save('team', team.map((m) => (m.id === 'U-RMB' ? Object.assign({}, m, { name: 'ZZ Renamed', email: 'planted@evil.test', mobile: '9000000001' }) : m)));
+    const mine = await rmA.save('team', team.map((m) => (m.id === 'U-RMA' ? Object.assign({}, m, { mobile: '9000000002' }) : m)));
+    if (r.status !== 403 || mine.status !== 200) throw new Error(r.status + ' / ' + mine.status);
+    return 'colleague’s record 403; own phone 200';
+  });
+
+  await t.step('R2-N4 an account without a team link cannot become a team member another account is linked to', async () => {
+    admin = await enf.admin();
+    await seed.signIn(admin, 'U-TADM');                                   // U-TADM's account, linked by member id
+    const { execFileSync } = require('child_process');
+    execFileSync(process.execPath, [path.join(__dirname, '..', '..', 'scripts', 'user.js'), 'add', 'legacy@zz.test', 'Legacy-pass-123'],
+      { env: Object.assign({}, process.env, { CRM_USERS_DB: path.join(enf.dir, 'users.db') }), stdio: 'ignore' });
+    const team = await admin.store('team', []);
+    await admin.save('team', team.map((m) => (m.id === 'U-TADM' ? Object.assign({}, m, { email: 'legacy@zz.test' }) : m)));
+    const leg = await enf.login('legacy@zz.test', 'Legacy-pass-123');
+    const seen = await visible(leg);
+    if (seen === data.clients.length) throw new Error('legacy account sees all ' + seen);
+    return 'the unlinked account sees ' + seen + ' clients, not U-TADM’s ' + data.clients.length;
+  });
+
+  await t.step('R2-N6 granting Manage Permissions or Manage Users needs the administrator account', async () => {
+    const pm = await seed.signIn(admin, 'U-PM');
+    const team = await pm.store('team', []);
+    const r = await pm.save('team', team.map((m) => (m.id === 'U-RMC' ? Object.assign({}, m, { adminFlags: Object.assign({}, m.adminFlags || {}, { managePermissions: 1 }) }) : m)));
+    if (r.status !== 403) throw new Error(String(r.status));
+    return '403';
+  });
+
+  await t.step('R2 #8 any status other than Active ends access ("inactive", "Left")', async () => {
+    admin = await enf.admin();
+    const exec = await seed.signIn(admin, 'U-EXEC');
+    const team = await admin.store('team', []);
+    await admin.save('team', team.map((m) => (m.id === 'U-EXEC' ? Object.assign({}, m, { status: 'inactive' }) : m)));
+    const s1 = (await exec.get('/api/session')).status;
+    if (s1 !== 401) throw new Error(String(s1));
+    return 'lower-case "inactive" → 401';
+  });
+
+  await t.step('R2 legacy webhooks and integration connector rows are not readable by everyone', async () => {
+    admin = await enf.admin();
+    await admin.save('webhooks', [{ id: 'WH-ZZ', name: 'ZZ', url: 'https://hooks.example/secret-path-zz', method: 'POST' }]);
+    await admin.save('integrationConnectors', [{ id: 'IC-ZZ', provider: 'zz', apiKey: 'zz-legacy-key' }]);
+    const ex = await seed.signIn(admin, 'U-RMC');
+    const a = await ex.get('/api/storage/webhooks'), b = await ex.get('/api/storage/integrationConnectors');
+    if (a.status !== 403 || b.status !== 403 || /secret-path-zz|zz-legacy-key/.test(a.text + b.text)) throw new Error(a.status + ' / ' + b.status);
+    return 'webhooks 403; integrationConnectors 403 for an RM';
+  });
+
+  await t.step('R2 Azure WireServer (168.63.129.16) is never reached', async () => {
+    const r = guard.classify('168.63.129.16');
+    if (r !== 'always') throw new Error(r);
+    return 'always refused';
+  });
+
   /* ---------- suspected: SMTP to a metadata address ---------- */
   await t.step('(suspected) the mail connector never connects to a link-local or metadata address', async () => {
     admin = await enf.admin();

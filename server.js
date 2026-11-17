@@ -1796,7 +1796,8 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
         return out;
       };
       const ownKey = req.params.key;
-      const mayUseOwn = accessControl.classOf(ownKey) === 'R' ? (was) => mayRead(ownKey, was) : null;
+      const ownCls = accessControl.classOf(ownKey);
+      const mayUseOwn = ownCls === 'R' || ownCls === 'T' ? (was) => mayRead(ownKey, was) : null;
       const fixed = AccessControl.restoreMaskedPans(current, incoming, linkedTo, mayUseOwn);
       if (fixed.unresolved) {
         auditLog.append(Object.assign(auditWho(req), { action: 'pan.masked-save', target: req.params.key, outcome: 'deny', count: fixed.unresolved,
@@ -3113,6 +3114,8 @@ function apiConnFetch(opts, cb) {
     res.on('data', d => { if (data.length < 400000) data += d; else over = true; });
     res.on('end', () => {
       const ok = res.statusCode >= 200 && res.statusCode < 300;
+      /* Step 6b: a stored secret echoed back is cut out before anything is trimmed, so no part of it survives a cut */
+      (opts.redact || []).forEach((x) => { if (x && String(x).length >= 4) data = data.split(String(x)).join('[stored secret]'); });
       let json = null;
       try { json = JSON.parse(data); } catch (e) { /* not json, which is itself informative */ }
       cb({
@@ -3209,7 +3212,8 @@ app.post('/api/apiconnectors/:id/call', checkApiKey, (req, res) => {
       url += sep + encodeURIComponent(String(auth.paramName || 'api_key')) + '=' + encodeURIComponent(secret);
     }
   }
-  apiConnFetch({ url, method: b.method || 'GET', headers, body: b.body, timeout: b.timeout, hosts }, (r) => {
+  const redact = secret ? [String(secret), encodeURIComponent(String(secret)), Buffer.from(String(auth.username || '') + ':' + secret).toString('base64')] : [];
+  apiConnFetch({ url, method: b.method || 'GET', headers, body: b.body, timeout: b.timeout, hosts, redact }, (r) => {
     auditLog.append(Object.assign(auditWho(req), { action: 'connector.call', target: 'apiconn:' + id, outcome: r.blocked ? 'deny' : 'ok',
       reason: r.blocked || ('HTTP ' + (r.status || 0)), fields: (() => { try { return [new URL(url).hostname]; } catch (e) { return []; } })() }));
     /* Step 6b: an approved host that echoes the request back must not hand
@@ -4317,8 +4321,13 @@ function scrubForClient(record) {
 // answers live under their own key and a page that only saw one of them must
 // not be able to wipe the others. The planner's half of a 7 Events sheet is
 // never sent out, so it is put back from what is on file.
+/* Step 6b: a client's link may fill in its record, never decide who owns
+   it or what it is joined to. */
+const PUBLIC_KEEP_FIELDS = ['rmName', 'assignedTo', 'assignTo', 'branch', 'createdBy', 'ownerId', 'convertedToClientId', 'convertedFromLeadId',
+  'supportToken', 'ctFormToken', 'clientId', 'leadId', 'recordId', 'recordModule', 'deletedAt'];
 function mergeFromClient(stored, incoming) {
   const out = Object.assign({}, stored, incoming, { id: stored.id });
+  PUBLIC_KEEP_FIELDS.forEach((k) => { if (k in stored) out[k] = stored[k]; else delete out[k]; });
   if (incoming && (incoming.formData || stored.formData)) {
     out.formData = Object.assign({}, stored.formData || {}, incoming.formData || {});
     const se = out.formData.SEVENEVENTS, old = (stored.formData || {}).SEVENEVENTS;
@@ -4433,7 +4442,7 @@ app.get('/api/public/bundle', (req, res) => {
      "unchanged" (see /api/public/patch). */
   const bundle = publicBundle(scope);
   const counter = { n: 0 };
-  ['docLinks', 'docSubmissions', 'leads', 'clients', 'reviews', 'recommendations', 'tasks', 'businessEntries', 'queries', 'queryReplies']
+  ['docLinks', 'docSubmissions', 'leads', 'clients', 'reviews', 'recommendations', 'tasks', 'businessEntries', 'queries', 'queryReplies', 'team']
     .forEach((k) => { if (bundle[k]) bundle[k] = AccessControl.maskPansDeep(bundle[k], counter); });
   res.json({ ok: true, kind: scope.kind, store: bundle, mail });
 });
@@ -4532,13 +4541,19 @@ app.post('/api/public/patch', (req, res) => {
         : 'Some of what was sent is not valid: ' + wrong.map((w) => w.message).join(' ') });
   }
 
-  for (const [key, rows] of Object.entries(appends)) {
+  for (const [key, sentRows] of Object.entries(appends)) {
     if (!PUBLIC_APPEND_KEYS.includes(key)) { refused.push('add to ' + key); continue; }
-    if (!Array.isArray(rows) || !rows.length) continue;
+    if (!Array.isArray(sentRows) || !sentRows.length) continue;
     const list = storeList(key);
     const have = new Set(list.map((x) => x && x.id));
-    rows.forEach((row) => {
+    const rows = [];                                   // what was accepted; only these go further
+    sentRows.forEach((row) => {
       if (!row || typeof row !== 'object' || !row.id || have.has(row.id)) return;
+      /* Step 6b: a row added through a link may only hang off that link's
+         own records, and a submission only belongs to this link. */
+      const outside = ['leadId', 'clientId', 'reviewId', 'allocationId'].some((f) => row[f] && !scope.ids.has(row[f]));
+      if (outside || (row.token && row.token !== scope.token && key === 'docSubmissions')) { refused.push(key + '/' + row.id); return; }
+      rows.push(row);
       list.push(row);
       have.add(row.id);
       // A row this page just created belongs to it, so it may amend it again.
@@ -5098,11 +5113,19 @@ function memberEmail(m) {
 }
 /* The member a signed-in account is, by the link the account was made with
    or, for older accounts, by its address. */
+/* Step 6b: the email match is only for an account with no team link of its
+   own, and only to a single team record that no other account is linked
+   to. Otherwise putting an account's email on somebody else's record (the
+   team Admin's, say) would make that account them. */
+const userLinkedToMember = usersDb.prepare('SELECT id FROM users WHERE member_id = ? AND id <> ? LIMIT 1');
 function memberOfUser(user) {
   if (!user) return null;
   const team = storeList('team');
-  return team.find((t) => t && t.id === user.member_id)
-    || team.find((t) => t && t.email && String(t.email).toLowerCase() === String(user.email || '').toLowerCase()) || null;
+  if (user.member_id) return team.find((t) => t && t.id === user.member_id) || null;
+  const email = String(user.email || '').toLowerCase();
+  const hits = email ? team.filter((t) => t && !t.deletedAt && t.email && String(t.email).trim().toLowerCase() === email) : [];
+  if (hits.length !== 1) return null;
+  return userLinkedToMember.get(hits[0].id, user.id) ? null : hits[0];
 }
 
 /* ---- the ledger: what went out, so nothing goes twice ---- */

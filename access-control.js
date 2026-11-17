@@ -55,6 +55,7 @@ const USER_FLAGS = ['useAiAssistant'];                                        //
    the page's own capability is needed (TEAM_FIELD_CAPABILITY). */
 const TEAM_PROTECTED = ['role', 'scope', 'branch', 'status', 'deletedAt', 'parentUserId', 'managerIds',
   'departments', 'perms', 'permsOff', 'pagePerms', 'stagePerms', 'adminFlags', 'hrAccess'];
+const TEAM_IDENTITY = ['name', 'email', 'personalEmail', 'officialEmail', 'mobile', 'phone', 'alternateMobile', 'whatsapp', 'panNumber'];
 const TEAM_FIELD_CAPABILITY = {
   role: 'teamEdit', scope: 'teamEdit', branch: 'teamEdit', status: 'teamEdit', deletedAt: 'teamDelete',
   parentUserId: 'manageUsers', managerIds: 'manageUsers', departments: 'manageUsers',
@@ -284,7 +285,8 @@ function create(opts) {
     if (!m) return { member: null, state: 'none' };
     const copies = team().filter((t) => t && t.id === m.id).length;
     if (copies > 1) return { member: null, state: 'ambiguous' };
-    if (m.status === 'Inactive' || m.deletedAt) return { member: null, state: 'inactive', id: m.id };
+    /* the page's rule: a member is active only when the status says Active (or says nothing) */
+    if ((m.status && String(m.status).trim().toLowerCase() !== 'active') || m.deletedAt) return { member: null, state: 'inactive', id: m.id };
     return { member: m, state: 'ok' };
   }
   function principal(user) {
@@ -368,8 +370,18 @@ function create(opts) {
     for (const [id, now] of a) {
       const was = b.get(id);
       const fields = TEAM_PROTECTED.filter((k) => (was ? !same(was[k], now[k]) : hasValue(now[k])));
+      /* Step 6b: a colleague's name, email and phone numbers identify them
+         (the email binds an account and vouches for mail): changing them on
+         somebody else's record needs Team edit or Manage Users. */
+      /* (a private field hidden from this person comes back without it; it is put back on save, so it is not a change) */
+      const hiddenHere = was && id !== p.memberId ? new Set(privateHidden(p, id)) : null;
+      const identity = was && id !== p.memberId ? TEAM_IDENTITY.filter((k) => !hiddenHere.has(k) && !same(was[k], now[k])) : [];
+      if (identity.length && !(holds.teamEdit || holds.manageUsers)) out.push({ memberId: id, fields: identity, reason: 'needs_teamEdit:identity' });
       if (!fields.length) continue;
       const reasons = [];
+      /* Step 6b: who may hand out the flags that make administrators is the administrator account's decision. */
+      if (fields.includes('adminFlags') && ['managePermissions', 'manageUsers'].some((f) => now.adminFlags && now.adminFlags[f] && !(was && was.adminFlags && was.adminFlags[f])))
+        reasons.push('grant_needs_admin_account');
       if (was && id === p.memberId) reasons.push('own_record');
       if (!was && !(holds.teamCreate || holds.manageUsers)) reasons.push('no_team_create');
       if (now.role === ADMIN_ROLE && (!was || was.role !== ADMIN_ROLE)) reasons.push('admin_role_needs_admin_account');
@@ -491,16 +503,23 @@ function create(opts) {
      read rule above takes the first reference it finds, so a link naming
      its own client and somebody else's record passed it. On a write,
      each named record that exists must be visible. */
-  const REF_FIELDS = [['clientId', 'clients'], ['leadId', 'leads'], ['reviewId', 'reviews'], ['queryId', 'queries'], ['allocationId', 'recommendations']];
-  function refsOk(r, c) {
+  /* Each field that names another record, and every store the name may be
+     found in (a lead id can also be the id of the client it became). */
+  const REF_FIELDS = [['clientId', ['clients']], ['leadId', ['leads', 'clients']], ['reviewId', ['reviews']], ['queryId', ['queries']],
+    ['allocationId', ['recommendations']], ['convertedToClientId', ['clients']], ['convertedFromLeadId', ['leads']], ['projectId', ['projects']]];
+  function refFieldsOk(r, c, onlyChangedFrom) {
     if (!r || typeof r !== 'object' || c.p.admin) return true;
-    for (const [f, st] of REF_FIELDS) if (r[f] && c.get(st, r[f]) && !c.visibleId(st, r[f])) return false;
-    if (r.recordId) {
+    for (const [f, stores] of REF_FIELDS) {
+      if (!r[f] || (onlyChangedFrom && onlyChangedFrom[f] === r[f])) continue;
+      for (const st of stores) if (c.get(st, r[f]) && !c.visibleId(st, r[f])) return false;
+    }
+    if (r.recordId && !(onlyChangedFrom && onlyChangedFrom.recordId === r.recordId && onlyChangedFrom.recordModule === r.recordModule)) {
       const st = MODULE_STORE[r.recordModule] || MODULE_STORE[r.module] || r.recordStore;
       for (const k of (st ? [st] : ['clients', 'leads', 'reviews'])) if (c.get(k, r.recordId) && !c.visibleId(k, r.recordId)) return false;
     }
     return true;
   }
+  const refsOk = (r, c) => refFieldsOk(r, c, null);
 
   /* The page's rule for each record store (R). */
   const RECORD_RULES = {
@@ -561,6 +580,7 @@ function create(opts) {
   /* Somebody may notify somebody else: a notification is the one record a
      person routinely creates that they cannot see afterwards. */
   const CREATE_FOR_OTHERS = new Set(['notifications', 'accessRequests', 'auditLog']);
+  const SECRET_SETTINGS = new Set(['webhooks', 'integrationConnectors']);
 
   /* Shared settings and reference data (S): everyone reads; these write. */
   const SETTINGS_WRITE = {
@@ -659,6 +679,8 @@ function create(opts) {
     if (raw === undefined || !p || p.admin || UNSCOPED) return out;
     if (!out.cls) { out.refused = true; out.value = undefined; return out; }    // a store with no rule
     if (DYNAMIC.test(key) && !dynamicAllowed(p, key, false)) { out.refused = true; out.value = undefined; return out; }
+    /* Step 6b: settings rows that hold endpoints and keys are read by those who may change them, nobody else. */
+    if (SECRET_SETTINGS.has(key) && !(p.teamAdmin || SETTINGS_WRITE[key](p))) { out.refused = true; out.value = undefined; return out; }
     const v = parsedRaw(key, raw);
     if (v === undefined) return out;
     const c = context(p);
@@ -837,7 +859,12 @@ function create(opts) {
       const was = curMap.get(k);
       if (was && JSON.stringify(was) === JSON.stringify(r)) continue;
       const id = r && r.id ? r.id : '';
-      if (LINKED_SET.has(key) && !refsOk(r, c)) { res.violations.push({ id, reason: 'reference_outside_scope' }); continue; }
+      /* Step 6b: a record may not be made to name a record outside the
+         writer's scope: on any record store, when it is created, and when
+         one of its references changes (a task that already names another
+         RM's client may still be worked on). Linked stores check every
+         reference on every save, as their read rule only looks at one. */
+      if (res.cls === 'R' && !(LINKED_SET.has(key) ? refsOk(r, c) : refFieldsOk(r, c, was || null))) { res.violations.push({ id, reason: 'reference_outside_scope' }); continue; }
       if (!was) {
         if (!rule(r) && !CREATE_FOR_OTHERS.has(key)) res.violations.push({ id, reason: 'create_outside_scope' });
         else if (module && !can(p, module, 'create')) res.advisory.push({ id, reason: 'module_create_right' });
@@ -1005,7 +1032,12 @@ function create(opts) {
   function readableFor(p) {
     if (!p || p.admin || UNSCOPED) return () => true;
     const c = context(p);
-    return (key, rec) => !!rec && classOf(key) === 'R' && readable(key, rec, c);
+    return (key, rec) => {
+      if (!rec) return false;
+      /* a team record is a source only when its private fields are open to this person (their own, or Manage Users) */
+      if (key === 'team') return !privateHidden(p, rec.id).length;
+      return classOf(key) === 'R' && readable(key, rec, c);
+    };
   }
   /* Step 6b: the addresses a record vouches for are its email fields, not
      any text in it (an address typed into remarks is not a recipient). */

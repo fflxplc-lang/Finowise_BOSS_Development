@@ -49,6 +49,14 @@ Object.keys(store).forEach((k) => {
 
 const bump = (o, k) => { o[k] = (o[k] || 0) + 1; };
 out.team.members = team.length;
+/* step 6b: a duplicate id gives the account behind it no member, and a new
+   duplicate is refused on save; an Inactive record with an active account
+   no longer signs in. Both should be 0, or put right in Team Members. */
+const allTeam = list('team');
+const idCount = new Map(); allTeam.forEach((t) => { if (t && t.id) idCount.set(t.id, (idCount.get(t.id) || 0) + 1); });
+out.team.duplicateIds = [...idCount.values()].filter((n) => n > 1).length;
+const mailCount = new Map(); team.forEach((t) => { const e = String(t.email || '').trim().toLowerCase(); if (e) mailCount.set(e, (mailCount.get(e) || 0) + 1); });
+out.team.duplicateEmails = [...mailCount.values()].filter((n) => n > 1).length;
 out.team.byRole = {}; out.team.byScope = {}; out.team.byStatus = {};
 team.forEach((t) => { bump(out.team.byRole, t.role || '(none)'); bump(out.team.byScope, t.scope || '(default)'); bump(out.team.byStatus, t.status || 'Active'); });
 
@@ -101,6 +109,8 @@ users.forEach((u) => {
   if (m.scope === 'all' && u.role !== 'admin') rc.scopeAllWithoutAdminAccount++;
 });
 team.forEach((t) => { if (!linked.has(t.id) && (t.status || 'Active') === 'Active') rc.membersWithoutAccount++; });
+rc.inactiveMemberWithActiveAccount = users.filter((u) => u.active !== 0 && u.role !== 'admin' && (() => {
+  const m = allTeam.find((t) => t && t.id === u.member_id); return !!m && ((m.status && String(m.status).trim().toLowerCase() !== 'active') || !!m.deletedAt); })()).length;
 out.reconcile = rc;
 
 /* ---- the audit trail: what report mode would have refused ---- */
@@ -135,7 +145,7 @@ const table = (o) => Object.entries(o).sort((a, b) => (typeof b[1] === 'number' 
 console.log('PHASE 1 CENSUS (counts only) — ' + out.generatedAt);
 console.log('\nAccounts'); table(out.accounts);
 console.log('\nAccounts vs team (GET /api/access/reconcile, as counts — all 0 before enforcing)'); table(out.reconcile);
-console.log('\nTeam'); line('members', out.team.members); line('by role', JSON.stringify(out.team.byRole)); line('by scope', JSON.stringify(out.team.byScope)); line('by status', JSON.stringify(out.team.byStatus));
+console.log('\nTeam'); line('members', out.team.members); line('duplicate ids (must be 0)', out.team.duplicateIds); line('duplicate emails (must be 0)', out.team.duplicateEmails); line('by role', JSON.stringify(out.team.byRole)); line('by scope', JSON.stringify(out.team.byScope)); line('by status', JSON.stringify(out.team.byStatus));
 console.log('\nClients'); table(out.clients);
 console.log('\nSessions'); table(out.sessions);
 console.log('\nAudit, last ' + DAYS + ' day(s): ' + audit.lines + ' lines' + (audit.note ? ' (' + audit.note + ')' : ''));
