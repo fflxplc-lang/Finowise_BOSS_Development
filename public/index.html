@@ -59349,6 +59349,9 @@ function aiDrawPanel(){
     document.body.appendChild(host);
   }
   if(!ai.open || !aiAvailable()){ host.innerHTML = ''; return; }
+  /* Where the reader was, before the panel is drawn again. */
+  const was = document.getElementById('aiTurns');
+  const keepTop = was ? was.scrollTop : null;
   const conn = aiPickConnector();
   const blocked = !conn;
   const sel = ai.selection;
@@ -59405,12 +59408,27 @@ function aiDrawPanel(){
       </div>
       <div class="ai-foot">Answers are generated. Check anything you are going to act on — and nothing here changes a BOSS record.</div>
     </aside>`;
-  const t = document.getElementById('aiTurns');
-  if(t) t.scrollTop = t.scrollHeight;
+  aiScrollTurns(keepTop);
+}
+/* A new answer opens at its start: the question just above it at the top
+   of the panel, the answer reading down from there, charts and all —
+   never at the bottom of the last chart. Any other redraw keeps the place
+   the reader was at; a panel opened afresh shows the latest exchange. */
+function aiAnchorTurn(i){ ai.scrollAnchor = i; }
+function aiScrollTurns(keepTop){
+  const box = document.getElementById('aiTurns');
+  if(!box) return;
+  let i = ai.scrollAnchor;
+  if(i == null && keepTop == null){ for(let k = ai.turns.length - 1; k >= 0; k--) if(ai.turns[k].role==='user'){ i = k; break; } }
+  if(i == null){ box.scrollTop = keepTop || 0; return; }
+  const el = box.querySelector('[data-ti="' + i + '"]');
+  if(!el){ if(keepTop != null) box.scrollTop = keepTop; return; }
+  box.scrollTop = Math.max(0, el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 8);
 }
 function aiTurnHtml(t){
-  if(t.role==='user') return `<div class="ai-turn ai-me"><div class="ai-bubble">${esc(t.content)}</div></div>`;
-  return `<div class="ai-turn ai-bot"><div class="ai-bubble${t.live?' ai-caret':''}"${t.live?' id="aiLiveBubble"':''}>${aiFormat(t.content)}</div>
+  const ti = ai.turns.indexOf(t);
+  if(t.role==='user') return `<div class="ai-turn ai-me" data-ti="${ti}"><div class="ai-bubble">${esc(t.content)}</div></div>`;
+  return `<div class="ai-turn ai-bot" data-ti="${ti}"><div class="ai-bubble${t.live?' ai-caret':''}"${t.live?' id="aiLiveBubble"':''}>${aiFormat(t.content)}</div>
     ${t.live? '' : bossTurnFoot(t)}
     ${t.replaceable? `<div class="ai-acts">
       <button class="btn sm ghost" onclick="aiCopy(${t.i})">Copy</button>
@@ -59499,6 +59517,7 @@ async function aiSend(){
   ai.draft = ''; if(el) el.value = '';
   ai.error = null;
   ai.turns.push({role:'user', content:q});
+  aiAnchorTurn(ai.turns.length - 1);
   ai.busy = true; aiDrawPanel();
   const nav = bossPageOpenIntent(q);
   const out = nav ? bossOpenNow(q, nav)
@@ -59507,6 +59526,7 @@ async function aiSend(){
   ai.busy = false; ai.phase = '';
   if(out && out.error) ai.error = out.error;
   aiDrawPanel();
+  ai.scrollAnchor = null;
 }
 async function aiRunChat(q){
   const ctx = aiContextLine(ai.context);
@@ -59634,6 +59654,7 @@ async function aiReframe(instruction){
   if(!sel || ai.busy) return;
   ai.error = null;
   ai.turns.push({role:'user', content: instruction + (sel.label? ' — '+sel.label : '')});
+  aiAnchorTurn(ai.turns.length - 1);
   ai.busy = true; aiDrawPanel();
   const sys = aiSystemBrief() + '\n\nYou are rewriting a passage for a wealth-management adviser.\n'
     + 'Return ONLY the rewritten passage. No preamble, no explanation, no quotation marks around it, '
@@ -59643,9 +59664,10 @@ async function aiReframe(instruction){
   const r = await aiAsk([{role:'user', content: instruction + '\n\n<selection>\n' + sel.text + '\n</selection>'}],
     {system: sys, temperature: 0.3, maxTokens: Math.min(2000, Math.max(400, sel.text.length))});
   ai.busy = false;
-  if(!r.ok){ ai.error = r.message; aiDrawPanel(); return; }
+  if(!r.ok){ ai.error = r.message; aiDrawPanel(); ai.scrollAnchor = null; return; }
   ai.turns.push({role:'assistant', content: r.text, replaceable: true, i: ai.turns.length});
   aiDrawPanel();
+  ai.scrollAnchor = null;
 }
 /* The only thing in the assistant that writes anything, and it writes into
    a form field rather than into a record: the Save that was always there
@@ -60365,8 +60387,8 @@ function bossPaintLive(text){
   const el = document.getElementById('aiLiveBubble');
   if(!el) return;
   el.innerHTML = aiFormat(bossStripOpen(text));
-  const box = document.getElementById('aiTurns');
-  if(box) box.scrollTop = box.scrollHeight;
+  /* No scrolling here: the panel was anchored at the question when the
+     answer began, and the reader stays at its start while it types. */
 }
 function bossTypeOut(turn, text){
   if(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches){ turn.content = text; bossPaintLive(text); return Promise.resolve(); }
@@ -62529,8 +62551,11 @@ function riaGroupOf(ch){
 }
 function riaDashFilter(btn, g){
   const box = btn.closest('.ria-dash'); if(!box) return;
+  const turns = btn.closest('#aiTurns'), before = btn.getBoundingClientRect().top;
   box.querySelectorAll('.ria-dash-tab').forEach(b=>b.classList.toggle('on', b===btn));
   box.querySelectorAll('.ria-chart').forEach(el=>{ el.style.display = g==='all' || el.dataset.group===g || el.dataset.group==='kpis' ? '' : 'none'; });
+  /* Fewer charts shown must not pull the panel elsewhere: the tabs stay put. */
+  if(turns) turns.scrollTop += btn.getBoundingClientRect().top - before;
 }
 function riaDashHtml(charts){
   const groups = [...new Set(charts.map(riaGroupOf))].filter(g=>g!=='kpis');

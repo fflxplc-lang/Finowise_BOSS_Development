@@ -44,7 +44,10 @@
        KPI cards, panels, donut + table, side-by-side donuts, multi-colour
        bars, vector lines, the bell curve), with none of the noise lines;
      - "clients by tax status" reads the PAN's fourth letter where the
-       tax status is blank. */
+       tax status is blank;
+     - a long answer opens at its start: the question at the top of the
+       panel, the first line of the answer in view — not the bottom of the
+       last chart — and a dashboard tab click does not move the panel. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -603,6 +606,30 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const r = await sugg('complete risk analysis', ['kpis', 'risk', 'donut']);
         if (r.intel.modules.join() !== 'risk') throw new Error(r.intel.modules.join());
         return r.charts.map((c) => c.kind).join(' + ');
+      });
+
+      await step('a multi-chart answer opens at its start: the question at the top of the panel, never the bottom of the last chart', async () => {
+        await askI('portfolio analysis of ZZ Intel Client');
+        const m = await pg2.evaluate(() => {
+          const box = document.getElementById('aiTurns'), b = box.getBoundingClientRect();
+          const me = [...box.querySelectorAll('.ai-turn.ai-me')].pop(), bot = [...box.querySelectorAll('.ai-turn.ai-bot')].pop();
+          const q = me.getBoundingClientRect(), a = bot.querySelector('.ai-bubble').getBoundingClientRect();
+          return { qTop: Math.round(q.top - b.top), aTop: Math.round(a.top - b.top), view: Math.round(b.height), scrollTop: Math.round(box.scrollTop),
+            bottom: Math.round(box.scrollHeight - box.clientHeight), turns: box.querySelectorAll('.ai-turn').length };
+        });
+        if (m.turns < 6 || m.bottom < 400 || m.qTop < 0 || m.qTop > 24 || m.aTop < 0 || m.aTop > m.view - 30 || m.bottom - m.scrollTop < 300) throw new Error(JSON.stringify(m));
+        /* A tab inside the dashboard leaves the panel where it is. */
+        const tab = await pg2.evaluate(() => {
+          const box = document.getElementById('aiTurns'), dash = [...box.querySelectorAll('.ria-dash')].pop();
+          const btn = [...dash.querySelectorAll('.ria-dash-tab')].find((x) => x.textContent === 'Pie');
+          btn.scrollIntoView({ block: 'center' });
+          const before = btn.getBoundingClientRect().top; btn.click();
+          const after = btn.getBoundingClientRect().top;
+          const shown = [...dash.querySelectorAll('.ria-chart')].filter((el) => el.style.display !== 'none').map((el) => el.dataset.group);
+          return { moved: Math.round(after - before), atBottom: Math.round(box.scrollHeight - box.clientHeight - box.scrollTop) < 2, shown: [...new Set(shown)] };
+        });
+        if (Math.abs(tab.moved) > 2 || tab.shown.some((g) => g !== 'pie' && g !== 'kpis')) throw new Error(JSON.stringify(tab));
+        return 'question ' + m.qTop + 'px from the top, answer starts at ' + m.aTop + 'px of ' + m.view + 'px; ' + (m.bottom - m.scrollTop) + 'px of charts below; the Pie tab moved the panel ' + tab.moved + 'px';
       });
 
       const MASTER = 'Show complete portfolio analysis, asset allocation donut chart, buy sell hold switch, risky to safe switch, tax harvesting, cross selling and up selling, complete risk analysis (Sharpe ratio, Beta, Standard Deviation), GAB bucket strategy, HUF suggestion, trust and legacy planning, and future portfolio projection with graphical charts and PDF';
