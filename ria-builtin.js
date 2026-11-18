@@ -361,7 +361,8 @@ function describeIntel(x) {
   const g = x.plan;
   if (g) {
     L.push('**6. GAB, bucket strategy, HUF, trust & legacy**');
-    g.buckets.forEach((b) => L.push('- ' + b.name + ': ' + money(b.amount) + ' (' + b.categories + ')'));
+    g.buckets.forEach((b) => L.push('- ' + b.name + (b.pct ? ' (' + b.pct + '%)' : '') + ': ' + money(b.amount) + ' — ' + b.categories + (b.schemes ? '; e.g. ' + b.schemes.slice(0, 3).join(', ') : '')));
+    if (g.gab && g.gab.swpMonthly6) L.push('- SWP income a month: ' + money(g.gab.swpMonthly4) + ' at 4%, ' + money(g.gab.swpMonthly5) + ' at 5%, ' + money(g.gab.swpMonthly6) + ' at 6% a year.');
     L.push('- ' + g.assumption);
     L.push('- GAB SWP income: ' + money(g.gab.swpMonthly4) + ' to ' + money(g.gab.swpMonthly5) + ' a month. ' + g.gab.note);
     L.push('- ' + g.huf.note);
@@ -430,6 +431,10 @@ function chat(messages, opts) {
   if (data) {
     if (data.countSummary) out.push(...describeCount(data.countSummary, q));
     if (data.intel) out.push(...describeIntel(data.intel));
+    if (Array.isArray(data.suggestedActions) && data.suggestedActions.length) {
+      out.push('', '**Suggested next actions** (drawn below):');
+      data.suggestedActions.forEach((x) => out.push('- ' + x.action + ': ' + Number(x.records).toLocaleString('en-IN')));
+    }
     (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c)); out.push(''); });
     if (data.openLead) out.push('Lead on screen: ' + rowLine(data.openLead) + '.');
     if (data.chart) out.push(...describeChart(data.chart));

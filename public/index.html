@@ -2839,6 +2839,22 @@ html,body{overflow-x:hidden;max-width:100%}
 @media print{
   .ai-panel,.ai-scrim,.ai-open-btn,.ai-selbtn{display:none!important}
 }
+
+/* RIA AI dashboards */
+.ria-dash{display:flex;flex-direction:column;gap:8px;margin:8px 0 4px}
+.ria-dash-tabs{display:flex;gap:4px;flex-wrap:wrap}
+.ria-dash-tab{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;padding:3px 10px;font-size:11.5px;cursor:pointer}
+.ria-dash-tab.on{background:var(--text);color:var(--card);border-color:var(--text)}
+.ria-chart{padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 1px 2px rgba(10,25,49,.04)}
+.ria-chart-h{display:flex;justify-content:space-between;gap:8px;align-items:center;font-weight:600;font-size:13px}
+.ria-tag{font-size:10px;font-weight:600;padding:2px 8px;border-radius:999px;background:rgba(242,92,42,.12);color:#C2410C;white-space:nowrap}
+.ria-suggest{border-color:rgba(242,92,42,.35)}
+.ria-kpi-card{padding:8px}
+.ria-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.ria-kpi{border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
+.ria-kpi-l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.ria-kpi-v{font-size:17px;font-weight:700;margin-top:2px}
+.ria-kpi-n{font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body>
@@ -59836,21 +59852,23 @@ function bossCountIntent(q){
   const rows = analyticsRecords(src);
   if(!rows) return null;
   /* Branch and RM counts often want a sum beside them: those stay with the planned read. */
-  const dim = ANALYTICS_SOURCES[src].dims.filter(d=>d.id!=='branch' && d.id!=='rm')
+  const dim = ANALYTICS_SOURCES[src].dims.concat(src==='clients' ? RIA_EXTRA_DIMS : []).filter(d=>d.id!=='branch' && d.id!=='rm')
     .find(d=>d.words.some(w=>t.indexOf(' '+one(w)+' ')>=0));
   if(!dim) return null;
-  const groups = analyticsGroup(rows, dim.value);
+  const groups = analyticsGroup(rows, riaDimValue(src, dim));
   const label = ANALYTICS_SOURCES[src].label;
   const read = {source: label, total: rows.length, groupBy: [dim.label], groups: groups.map(g=>({key:g.label, count:g.count}))};
   const done = src==='clients' ? BOSS_STATUS_DONE[dim.id] : null;
+  const doneRe = src==='clients' && RIA_SEGMENTS[dim.id] && RIA_SEGMENTS[dim.id].done ? RIA_SEGMENTS[dim.id].done : done && done.re;
   let summary = null;
   if(done && BOSS_PENDING_RE.test(q)){
-    const open = groups.filter(g=>!done.re.test(g.label));
+    const open = groups.filter(g=>!doneRe.test(g.label));
     summary = {asked:'pending', field: dim.label, rule: dim.label + ' ' + done.rule, of: label.toLowerCase(),
       matching: open.reduce((n,g)=>n+g.count, 0), total: rows.length,
       breakdown: open.map(g=>({key:g.label, count:g.count}))};
   }
-  return {read, summary};
+  const dash = riaDimDashboard(src, dim, rows, dim.label + ' (' + label + ')');
+  return {read, summary, dash};
 }
 const BOSS_ANSWER_RULES = `
 HOW RIA AI ANSWERS
@@ -60044,13 +60062,15 @@ async function bossRunChat(q){
      and the model only says what it shows. */
   const chartQ = bossChartIntent(q);
   let chart = bossChartFor(chartQ);
+  /* Every chart answer is a dashboard: at a glance, the donut, the breakdown, the next actions. */
+  let dash = chart ? riaDashForChart(chartQ, chart) : null;
   if(chart){ data.chart = chart; if(!bossLooksLikeHowTo(q)) sops = []; }
   /* "HDFC Bank ka share live dikhao": live prices, read now, and the
      policy's market view beside them instead of whatever SOP the words hit. */
   /* "How many KYCs are pending": the count is read here, now, and no SOP
      goes with it. */
   const countQ = !chart && !chartQ && !people.length ? bossCountIntent(q) : null;
-  if(countQ){ data.reads = [countQ.read]; if(countQ.summary) data.countSummary = countQ.summary; }
+  if(countQ){ data.reads = [countQ.read]; if(countQ.summary) data.countSummary = countQ.summary; if(!dash) dash = countQ.dash; }
   /* A question about one client ("what is pending on this client") keeps
      the SOPs for what is wrong on that account. */
   if(countQ || (!people.length && bossCountQuestion(q) && bossLooksLikeData(q))) sops = [];
@@ -60087,7 +60107,7 @@ async function bossRunChat(q){
     if(plan.client) bossClientsNamedIn(plan.client).forEach(c=>{ if(!people.includes(c)) people.push(c); });
     const reads = bossDoReads(plan.reads);
     if(reads.length) data.reads = reads;
-    if(chartQ && !chart){ chart = bossChartFromReads(reads); if(chart) data.chart = chart; }
+    if(chartQ && !chart){ chart = bossChartFromReads(reads); if(chart){ data.chart = chart; dash = riaDashFromRead(reads, chart); } }
   }
   if(people.length) data.clients = people.slice(0,3).map(bossClientDossier).filter(Boolean);
   /* "Kis client ka kya sell karna hai": the book's signals, as computed. */
@@ -60097,6 +60117,7 @@ async function bossRunChat(q){
     data.marketZone = lexiZoneLabel();
   }
   if(people.length > 3) data.note = (people.length-3)+' more clients matched the name; ask for a fuller name to see them.';
+  if(dash && dash.actions && dash.actions.length) data.suggestedActions = dash.actions.slice(0, 8).map(a=>({action:a.label, records:a.values[0]}));
   let dataText = JSON.stringify(data);
   if(dataText.length > 70000) dataText = dataText.slice(0, 70000) + '…(cut: ask a narrower question for the rest)';
   const sys = aiSystemBrief() + '\n' + BOSS_ANSWER_RULES + '\n' + bossOpenRules()
@@ -60109,7 +60130,7 @@ async function bossRunChat(q){
   const turn = {role:'assistant', content:'', live:true,
     clients: people.slice(0,3).map(c=>({id:c.id, name:clientDisplayName(c)})),
     sops: sops.map(s=>({id:s.id, t:s.t})), chart: chart || undefined,
-    charts: intel && intel.charts.length ? intel.charts : undefined, intel: intel || undefined,
+    charts: (dash ? dash.charts : []).concat(intel ? intel.charts : []).length ? (dash ? dash.charts : []).concat(intel ? intel.charts : []) : undefined, intel: intel || undefined,
     market: market && market.quotes.length ? market.quotes : undefined};
   let shown = false;
   const r = await aiAsk(history.concat([{role:'user', content: ask}]), {system: sys, maxTokens: 1200,
@@ -60160,13 +60181,13 @@ function bossTurnFoot(t){
   const cl = (t.clients||[]).filter(c=>!(t.opened && t.opened.kind==='cms' && t.opened.id===c.id)).map(c=>`<button class="btn sm ghost" onclick="aiCloseP();navigate('cms','${esc(c.id)}')">Open account: ${esc(c.name)}</button>`).join('');
   const sp = (t.sops||[]).length ? `<div class="small-note">SOP: ${t.sops.map(s=>esc(s.t)).join(' · ')}</div>` : '';
   const op = t.opened ? `<button class="btn sm" onclick="bossReopen(${ai.turns.indexOf(t)})">↗ Opened: ${esc(t.opened.label)}</button>` : '';
-  const ch = t.chart ? `<div class="boss-chart" style="margin:8px 0 4px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card)">
+  const ch = t.chart && !(t.charts && t.charts.length) ? `<div class="boss-chart" style="margin:8px 0 4px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card)">
       <div style="font-weight:600;font-size:13px">${esc(t.chart.title)}</div>
       <div class="small-note" style="margin:2px 0 4px">${t.chart.total} records, counted live</div>
       ${analyticsBarSvg(t.chart.rows, ANALYTICS_COLORS[0], t.chart.title)}
       <button class="btn sm ghost" onclick="aiCloseP();${t.chart.src==='tasks' ? `navigate('analytics');setTimeout(()=>{const e=document.getElementById('anTasks');if(e)e.scrollIntoView({behavior:'smooth'})},50)` : `window._anSrc='${t.chart.src||'clients'}';navigate('analytics')`}">Open Analytics</button></div>` : '';
   const mk = (t.market||[]).map((q, qi) => lexiQuoteCard(q, ai.turns.indexOf(t), qi)).join('');
-  const chs = (t.charts||[]).map(riaChartHtml).join('');
+  const chs = t.charts && t.charts.length ? riaDashHtml(t.charts) : '';
   const pdf = (t.charts && t.charts.length) || t.intel || t.chart
     ? `<button class="btn sm ghost ria-pdf" onclick="bossDownloadTurnPdf(${ai.turns.indexOf(t)})">⬇ Download PDF Report</button>` : '';
   const gov = t.intel ? `<div class="small-note" style="margin:4px 0">${esc(RIA_GOVERNANCE)}</div>` : '';
@@ -61287,7 +61308,7 @@ function lexiChartDraw(){
    Returns null when the question does not ask for a chart. */
 function bossChartIntent(q){
   const t = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9]+/g,' ') + ' ';
-  if(!/ (chart|charts|graph|graphs|graphical|graphically|bar|pie|plot|visual|visually|visualise|visualize|visualisation|visualization|representation|breakdown|distribution|graf) /.test(t)) return null;
+  if(!/ (chart|charts|graph|graphs|graphical|graphically|bar|pie|plot|visual|visually|visualise|visualize|visualisation|visualization|representation|breakdown|distribution|graf|analytics|dashboard|insights) /.test(t)) return null;
   if(/ (task|tasks|kaam|work|dst) /.test(t) && can('DST','view')){
     let card = ANALYTICS_TASK_CARDS[2], score = 0;
     ANALYTICS_TASK_CARDS.forEach(c=>{ const s = c.words.filter(w=>t.indexOf(' '+w+' ')>=0).length; if(s > score){ score = s; card = c; } });
@@ -61296,7 +61317,7 @@ function bossChartIntent(q){
   const src = / (lead|leads) /.test(t) && can('LMS','view') ? 'leads' : 'clients';
   const rows = analyticsRecords(src);
   if(!rows) return {src, dim:null};
-  const dims = ANALYTICS_SOURCES[src].dims.concat(analyticsAutoDims(src, rows));
+  const dims = ANALYTICS_SOURCES[src].dims.concat(src==='clients' ? RIA_EXTRA_DIMS : [], analyticsAutoDims(src, rows));
   let best = null, score = 0;
   dims.forEach(d=>{
     let s = d.words.filter(w=>t.indexOf(' '+w+' ')>=0).length * 2;
@@ -61309,7 +61330,8 @@ function bossChartIntent(q){
      channel") is left to the planned read instead. */
   const BARE = new Set(('give me show a an the of our my all for in on please pls draw make create get see representation graphical graphically chart charts '
     + 'graph graphs bar pie plot visual visually visualise visualize visualisation visualization breakdown distribution graf client clients lead leads data book '
-    + 'overall total entire whole us we have do can you i want to it picture view display kar karo dikhao do de ka ki ke mere hamare humare sabhi saare').split(' '));
+    + 'overall total entire whole us we have do can you i want to it picture view display kar karo dikhao do de ka ki ke mere hamare humare sabhi saare '
+    + 'analytics dashboard insights overview summary').split(' '));
   if(!best && t.trim().split(' ').every(w=>!w || BARE.has(w))) best = dims.find(d=>d.id==='stage') || dims.find(d=>d.id==='branch') || dims[0] || null;
   return {src, dim: best, rows};
 }
@@ -61320,7 +61342,7 @@ function bossChartFor(intent){
     return {title: c.label + ' by Assign To', total: c.rows.reduce((s,r)=>s+r.count, 0), rows: c.rows, src:'tasks'};
   }
   return {title: intent.dim.label + ' (' + ANALYTICS_SOURCES[intent.src].label + ')', total: intent.rows.length,
-    rows: analyticsGroup(intent.rows, intent.dim.value), src: intent.src};
+    rows: analyticsGroup(intent.rows, riaDimValue(intent.src, intent.dim)), src: intent.src};
 }
 /* A chart out of a read LEXI planned (grouped by one column), for a chart
    question none of the named groupings matched. */
@@ -61373,6 +61395,14 @@ const RIA_CAT_RISK = {
   'dynamic bond':[7.6,4,0], 'gilt':[7.6,5,0], 'credit risk':[8,4,0.05], 'gold':[10,14,0],
   '_Equity':[13,18,1], '_Debt':[7.3,2,0], '_Hybrid':[10,10,0.55], '_Gold':[10,14,0], '_Liquid':[6.8,0.6,0], '_Unclassified':[11,14,0.75]};
 const RIA_CLASSES = ['Equity','Debt','Hybrid','Gold/Commodities','Liquid/Cash','Unclassified'];
+/* The Finowise recommended 3-bucket split and the firm's schemes for each. */
+const RIA_BUCKET_SPLIT = [
+  {name:'Bucket 1 · Immediate cash (0–2Y)', pct:15, categories:'Liquid, Overnight, Ultra Short Term, Arbitrage',
+   schemes:['ABSL Liquid','ICICI Pru Liquid','HDFC Ultra Short Term','ABSL Arbitrage','Bandhan Arbitrage','Mirae Asset Arbitrage']},
+  {name:'Bucket 2 · Medium-term stability (3–6Y)', pct:35, categories:'Hybrid, Short Debt, Corporate Bond, All Seasons Bond, Multi-Asset, Equity Savings',
+   schemes:['HDFC Corporate Bond','ICICI Pru All Seasons Bond','HDFC Multi-Asset','Nippon India Multi Asset','ICICI Pru Equity & Debt','Kotak Aggressive Hybrid']},
+  {name:'Bucket 3 · Long-term growth (7Y+)', pct:50, categories:'Flexi Cap, Multi Cap, Large & Mid Cap, Value',
+   schemes:['Bandhan Flexi Cap','SBI Flexi Cap','HDFC Flexi Cap','Bandhan Large & Mid Cap','Invesco India Multi Cap','Kotak Multi Cap','HDFC Value']}];
 const RIA_THEMATIC = ['thematic','sectoral','infrastructure','infra','technology','tech','digital','pharma','healthcare','consumption','banking and financial',
   'financial services','psu equity','manufacturing','innovation','momentum','esg','energy','auto','mnc','business cycle','special opportunities'];
 const RIA_SAFE = [{cat:'Arbitrage', w:0.25}, {cat:'Balanced Advantage', w:0.25}, {cat:'Multi-Asset', w:0.2}, {cat:'Corporate Bond', w:0.15}, {cat:'All Seasons Bond', w:0.15}];
@@ -61456,8 +61486,12 @@ function riaPositions(c){
 const riaPct = (x, t) => t ? Math.round(x / t * 1000) / 10 : 0;
 const riaR = x => Math.round(x);
 /* The scope a question is about: one client, or the visible book. */
-function riaScope(q, people){
+const RIA_BOOK_WORDS = /\b(our|book|clients?|firm|all|hamare|humare|mere|my|portfolio of|branch|everyone)\b/i;
+function riaScope(q, people, mods){
   if(people && people.length) return {kind:'client', clients:[people[0]], label: clientDisplayName(people[0])};
+  /* "Give me suggestion of bucket strategy": a question about the idea, not
+     about anybody's money — illustrated on ₹1 crore. */
+  if(mods && mods.length && mods.every(m=>m==='plan') && !RIA_BOOK_WORDS.test(String(q||''))) return {kind:'model', clients:[], label:'Illustration on a ₹1 crore corpus'};
   const clients = (typeof analyticsRecords==='function' ? analyticsRecords('clients') : null) || [];
   return {kind:'book', clients, label: 'Visible book (' + clients.length + ' client' + (clients.length===1 ? '' : 's') + ')'};
 }
@@ -61476,8 +61510,8 @@ const RIA_PDF_RE = /\b(pdf|download\s*pdf|pdf\s*banao|pdf\s*de|report\s*pdf)\b/i
 function riaIntelModules(q){
   /* As typed, and with doubled letters collapsed ("buckket"): either matches. */
   const raw = ' ' + String(q||'').toLowerCase() + ' ', t = raw.replace(/(.)\1+/g, '$1');
-  if(RIA_COMPLETE.test(raw) || RIA_COMPLETE.test(t)) return Object.keys(RIA_MODULE_WORDS);
   const mods = Object.keys(RIA_MODULE_WORDS).filter(k=>RIA_MODULE_WORDS[k].test(raw) || RIA_MODULE_WORDS[k].test(t));
+  if((RIA_COMPLETE.test(raw) || RIA_COMPLETE.test(t)) && (!mods.length || (mods.length===1 && mods[0]==='portfolio'))) return Object.keys(RIA_MODULE_WORDS);
   /* "Buy sell hold" alone goes to the existing signals answer, unless it
      also asks about the portfolio or risky-to-safe. */
   if(mods.length===1 && mods[0]==='actions' && !/\b(risky|safe|de-?risk\w*|portfolio|analysis|switch analysis|chart|graph)\b/.test(raw)) return [];
@@ -61487,8 +61521,9 @@ function riaIntelModules(q){
 function riaIntel(q, people){
   const mods = riaIntelModules(q);
   if(!mods.length || !can('CMS','view')) return null;
-  const scope = riaScope(q, people);
-  if(!scope.clients.length) return null;
+  const scope = riaScope(q, people, mods);
+  if(!scope.clients.length && scope.kind!=='model') return null;
+  const model = scope.kind==='model';
   const positions = [].concat(...scope.clients.map(riaPositions));
   const total = positions.reduce((s,p)=>s + p.current, 0);
   const invested = positions.reduce((s,p)=>s + p.invested, 0);
@@ -61498,6 +61533,13 @@ function riaIntel(q, people){
   const out = {scope: {kind: scope.kind, label: scope.label, clients: scope.clients.length, clientId: one ? one.id : ''},
     asOf: new Date().toISOString().slice(0,10), total: riaR(total), invested: riaR(invested), monthlySip: riaR(sip), profile, modules: mods, charts: [], sections: []};
   const need = m => mods.includes(m);
+  /* The figures at a glance, first. */
+  if(!model){
+    const g = total - invested;
+    out.charts.push({kind:'kpis', module:'summary', title: scope.label + ' — at a glance', items:[{label:'Portfolio value', value: riaCompact2(total), note: money(total)},
+      {label:'Invested', value: riaCompact2(invested)}, {label:'Gain', value: invested ? (g >= 0 ? '+' : '') + Math.round(g / invested * 1000) / 10 + '%' : '—', note: money(g), tone: g >= 0 ? 'ok' : 'bad'},
+      {label:'Monthly SIP', value: money(sip)}]});
+  }
   const byClass = {}; RIA_CLASSES.forEach(k=>byClass[k] = 0); positions.forEach(p=>byClass[p.cls] = (byClass[p.cls]||0) + p.current);
   const groupBy = (key) => { const m = {}; positions.forEach(p=>{ const k = key(p) || 'Not known'; m[k] = (m[k]||0) + p.current; }); return Object.keys(m).map(k=>({label:k, value:m[k]})).sort((a,b)=>b.value-a.value); };
   const riskOf = p => RIA_CAT_RISK[p.cat && RIA_CAT_RISK[p.cat.id] ? p.cat.id : '_' + (p.cls==='Gold/Commodities' ? 'Gold' : p.cls==='Liquid/Cash' ? 'Liquid' : p.cls)] || RIA_CAT_RISK._Unclassified;
@@ -61527,6 +61569,22 @@ function riaIntel(q, people){
     if(amcs.length > 1 || cats.length > 1) out.charts.push({kind:'hbar', module:'portfolio', title:'Concentration — AMC and category weights', fmt:'pct', series:['% of portfolio'],
       sub: flags.length ? flags.join(' ') : 'No scheme above 25% and no AMC above 40%.',
       rows: amcs.slice(0, 5).map(a=>({label:'AMC: ' + a.label, values:[a.pct]})).concat(cats.slice(0, 5).map(x=>({label:'Category: ' + x.label, values:[x.pct]})))});
+    if(cats.length > 1) out.charts.push({kind:'donut', module:'portfolio', title:'Category split — ' + scope.label, fmt:'money',
+      items: cats.slice(0, 7).map(x=>({label:x.label, value:riaR(x.value)})).concat(cats.length > 7 ? [{label:'Other categories', value: riaR(cats.slice(7).reduce((s2,x)=>s2 + x.value, 0))}] : []), centre: riaCompact2(total)});
+    /* Portfolio vs the Nifty 50 reference: the money invested, grown at the
+       portfolio's own annualised return and at the reference's. */
+    const aged = positions.filter(p=>p.invested > 0 && riaYearsSince(p.start) !== null);
+    const yrs = aged.length ? aged.reduce((s2,p)=>s2 + p.invested * riaYearsSince(p.start), 0) / aged.reduce((s2,p)=>s2 + p.invested, 0) : null;
+    const rate = xirr != null ? xirr : (yrs && yrs >= 0.5 && invested > 0 && total > 0 ? Math.round((Math.pow(total / invested, 1 / yrs) - 1) * 1000) / 10 : null);
+    out.portfolio.annualised = rate; out.portfolio.annualisedFrom = xirr != null ? 'XIRR' : rate != null ? 'gain over the average holding period (' + Math.round(yrs * 10) / 10 + ' years)' : '';
+    if(rate != null){
+      const n = Math.max(1, Math.round(yrs || 3)), xs = Array.from({length: n + 1}, (_, k)=>k), diff = Math.round((rate - RIA_REF[0].r) * 10) / 10;
+      out.portfolio.vsNifty = diff;
+      out.charts.push({kind:'area', module:'portfolio', title:'Your portfolio vs Nifty 50 (reference)', fmt:'money', xs, xLabel: k=>k ? k + 'Y' : 'Start',
+        badge: (diff >= 0 ? 'Beating the Nifty 50 reference by +' : 'Behind the Nifty 50 reference by ') + Math.abs(diff) + '% a year', badgeTone: diff >= 0 ? 'ok' : 'bad',
+        sub: 'Money invested grown at the portfolio\u2019s annualised return (' + rate + '%, from ' + out.portfolio.annualisedFrom + ') and at the Nifty 50 long-run reference of ' + RIA_REF[0].r + '%. A reference, not live index data.',
+        series: [{name:'Your portfolio (' + rate + '%)', points: xs.map(k=>riaR(invested * Math.pow(1 + rate / 100, k)))}, {name:'Nifty 50 reference (' + RIA_REF[0].r + '%)', points: xs.map(k=>riaR(invested * Math.pow(1 + RIA_REF[0].r / 100, k)))}]});
+    }
   }
 
   /* 2. Buy / Sell / Hold / Switch, and risky to safe */
@@ -61565,6 +61623,10 @@ function riaIntel(q, people){
         sub: riskyVal ? 'Small / mid / thematic ' + riskyPct + '% against a ' + cap + '% ceiling' + (profile ? ' for a ' + profile + ' profile' : '') + '. Switch ' + money(excess)
           + (excess ? ': exit load about ' + money(load) + ', tax about ' + money(tax) + '.' : ' — nothing above the ceiling.') : 'No small-cap, mid-cap or thematic holdings found.',
         rows: RIA_CLASSES.filter(k=>byClass[k] || afterClass[k]).map(k=>({label:k, values:[riaPct(byClass[k], total), riaPct(afterClass[k], total)]}))});
+      out.charts.push({kind:'donut2', module:'actions', suggest:true, title:'Current vs suggested safe-rebalanced allocation', fmt:'money',
+        sub: excess ? 'Suggested: move ' + money(excess) + ' from small / mid / thematic into ' + safe.map(s2=>s2.cat + ' ' + Math.round(s2.w * 100) + '%').join(', ') + '. ' + RIA_GOVERNANCE : 'Nothing above the ceiling to switch.',
+        left: {title:'Current', items: RIA_CLASSES.filter(k=>byClass[k] > 0).map(k=>({label:k, value: riaR(byClass[k])}))},
+        right: {title:'Suggested', items: RIA_CLASSES.filter(k=>afterClass[k] > 0).map(k=>({label:k, value: riaR(afterClass[k])}))}});
     }
   }
 
@@ -61592,6 +61654,13 @@ function riaIntel(q, people){
       sub: 'Booking ' + money(t.harvestTaxFree) + ' of long-term gain tax-free saves about ' + money(t.taxSaved) + (t.losses ? '; ' + money(t.losses) + ' of losses can set off gains' : '') + '.',
       rows: [{label:'Total unrealised equity gain', values:[t.unrealisedEquityGain]}, {label:'Eligible tax-free harvest (₹1.25L)', values:[t.harvestTaxFree]},
         {label:'Taxable gain remaining', values:[t.taxableRemaining]}, {label:'Estimated tax saved', values:[t.taxSaved]}].concat(t.losses ? [{label:'Losses available to set off', values:[t.losses]}] : [])});
+    out.charts.push({kind:'donut', module:'tax', title:'Unrealised equity gain — what is taxed how', fmt:'money', centre: riaCompact2(t.unrealisedEquityGain),
+      items: [{label:'LTCG tax-free this year (up to ₹1.25L)', value: t.harvestTaxFree}, {label:'LTCG taxable at 12.5%', value: t.taxableRemaining}, {label:'STCG taxable at 20%', value: t.shortTermGain}].filter(x=>x.value > 0)});
+    const beforeL = t.longTermGain * ltRate / 100, afterL = t.taxableRemaining * ltRate / 100, st = t.shortTermGain * stRate / 100;
+    t.liability = {before: riaR(beforeL + st), after: riaR(afterL + st)};
+    out.charts.push({kind:'hbar', module:'tax', suggest:true, title:'Tax liability — before vs after harvesting', fmt:'money', series:['Before harvesting', 'After harvesting'],
+      sub: 'Before: every gain taxed when sold. After: ' + money(t.harvestTaxFree) + ' booked tax-free this year and reinvested — about ' + money(t.taxSaved) + ' saved.',
+      rows: [{label:'LTCG tax (12.5%)', values:[riaR(beforeL), riaR(afterL)]}, {label:'STCG tax (20%)', values:[riaR(st), riaR(st)]}, {label:'Total tax', values:[t.liability.before, t.liability.after]}]});
   }
 
   /* 4. Cross-sell and up-sell */
@@ -61632,6 +61701,9 @@ function riaIntel(q, people){
     out.charts.push({kind:'hbar', module:'opportunities', title:'Cross-sell & up-sell opportunities — ' + scope.label, fmt:'count', series:[scope.kind==='client' ? 'found' : 'clients'],
       sub: 'Up-sell amounts are monthly SIP or STP figures; LA MF is the credit line available.',
       rows: out.opportunities.byType.map(o=>scope.kind==='client' ? {label:o.type, values:[1], text: o.amount ? money(o.amount) : 'gap found'} : {label:o.type, values:[o.clients], note: o.amount ? money(o.amount) : ''})});
+    if(out.opportunities.byType.length) out.charts.push({kind:'donut', module:'opportunities', fmt:'count', title: scope.kind==='client' ? 'Opportunities found — up-sell vs cross-sell' : 'Clients by opportunity',
+      centre: riaN(scope.kind==='client' ? out.opportunities.byType.length : out.opportunities.byType.reduce((n2,o)=>n2 + o.clients, 0)), centreNote: scope.kind==='client' ? 'found' : 'openings',
+      items: out.opportunities.byType.map(o=>({label: o.type.replace(/^(Up|Cross)-sell: /, ''), value: o.clients}))});
   }
 
   /* 5. Risk analysis */
@@ -61640,7 +61712,8 @@ function riaIntel(q, people){
     const mu = w.reduce((s,x)=>s + x.w * x.r[0], 0), beta = w.reduce((s,x)=>s + x.w * x.r[2], 0);
     const grp = x => ['Equity','Hybrid'].includes(x.p.cls) && x.r[2] >= 0.6 ? 'E' : x.p.cls==='Gold/Commodities' ? 'G' : x.p.cls==='Hybrid' ? 'H' : x.p.cls==='Unclassified' ? 'U' : 'D';
     const rho = (a, b) => { if(a===b) return a==='D' ? 0.7 : 0.9; const k = [a,b].sort().join(''); return ({DE:0.1, EH:0.8, DH:0.4, EG:0, DG:0.2, GH:0.2, EU:0.8, DU:0.3, GU:0.1, HU:0.6})[k] ?? 0.3; };
-    let v = 0; w.forEach(a=>w.forEach(b=>{ v += a.w * b.w * a.r[1] * b.r[1] * (a===b ? 1 : rho(grp(a), grp(b))); }));
+    let v = 0; const rc = {};
+    w.forEach(a=>w.forEach(b=>{ const c2 = a.w * b.w * a.r[1] * b.r[1] * (a===b ? 1 : rho(grp(a), grp(b))); v += c2; rc[a.p.cls] = (rc[a.p.cls]||0) + c2; }));
     const sigma = Math.sqrt(v), sharpe = sigma ? (mu - RIA_RF) / sigma : 0;
     const level = sigma < 4 ? 'Low' : sigma < 8 ? 'Moderately low' : sigma < 12 ? 'Moderate' : sigma < 16 ? 'Moderately high' : 'High';
     const levelIdx = ['Low','Moderately low','Moderate','Moderately high','High'].indexOf(level);
@@ -61654,31 +61727,50 @@ function riaIntel(q, people){
       fit: profIdx===null ? 'No risk profile to compare with.' : levelIdx > profIdx ? 'Portfolio risk is above what the risk profile allows.' : levelIdx < profIdx - 1 ? 'Portfolio risk is well below the risk profile: room to take more if the goals need it.' : 'Portfolio risk is in line with the risk profile.',
       diversificationScore: score, amcs: amcN, categories: catN,
       method: 'Estimated from each holding’s category assumptions (expected return, volatility, beta to Nifty 50) and category correlations; not computed from NAV history. Risk-free rate ' + RIA_RF + '%.'};
+    out.risk.contribution = Object.keys(rc).filter(k=>rc[k] > 0).map(k=>({label:k, pct: Math.round(rc[k] / (v||1) * 1000) / 10})).sort((a,b)=>b.pct-a.pct);
+    out.charts.push({kind:'kpis', module:'risk', title:'Risk metrics — ' + scope.label, items:[{label:'Expected return (μ)', value: out.risk.expectedReturn + '%'},
+      {label:'Volatility (σ)', value: out.risk.sigma + '%'}, {label:'Sharpe ratio', value: String(out.risk.sharpe), tone: out.risk.sharpe >= 0.5 ? 'ok' : 'warn'}, {label:'Beta (β)', value: String(out.risk.beta)}]});
     out.charts.push({kind:'risk', module:'risk', title:'Risk analytics — ' + scope.label, sub: out.risk.method, metrics: out.risk, profileIdx: profIdx, levelIdx});
+    if(out.risk.contribution.length) out.charts.push({kind:'donut', module:'risk', fmt:'pct', title:'Where the risk comes from (share of variance)', centre: out.risk.sigma + '% σ', centreNote:'volatility',
+      items: out.risk.contribution.map(x=>({label:x.label, value:x.pct}))});
   }
 
   /* 6. GAB, bucket strategy, HUF, trust and legacy */
   if(need('plan')){
-    const yearly = total * 0.05;
-    const b1 = Math.min(total, yearly * 2), b2 = Math.min(total - b1, yearly * 4), b3 = Math.max(0, total - b1 - b2);
+    const corpus = model ? 10000000 : total;
     const cs = scope.clients;
     const nominee = cs.filter(c=>String(c.firstNomineeName||'').trim()).length;
     const joint = cs.filter(c=>/joint|survivor/i.test(String(c.modeOfHolding||''))).length;
     const huf = cs.filter(c=>/huf/i.test(String(bossTaxStatus(c)||''))).length;
-    out.plan = {corpus: riaR(total), assumption: 'Withdrawal 5% of the corpus a year (' + money(yearly) + '); change it with the client’s real expenses.',
-      buckets: [{name:'Bucket 1 · 0–2Y Immediate cashflow & emergency', categories:'Liquid, Ultra Short, Arbitrage', amount: riaR(b1)},
-        {name:'Bucket 2 · 3–6Y Stability & income refill', categories:'Short Term Debt, Corporate Bond, Equity Savings, Multi-Asset, Hybrid', amount: riaR(b2)},
-        {name:'Bucket 3 · 7Y+ Wealth growth', categories:'Flexi Cap, Large & Mid Cap, Multi Cap, Value', amount: riaR(b3)}],
-      gab: {swpMonthly5: riaR(total * 0.05 / 12), swpMonthly4: riaR(total * 0.04 / 12),
+    const split = RIA_BUCKET_SPLIT.map(b=>Object.assign({}, b, {amount: riaR(corpus * b.pct / 100)}));
+    out.plan = {corpus: riaR(corpus), illustrative: model,
+      assumption: 'Finowise recommended split 15% / 35% / 50%' + (model ? ', shown on a ₹1 crore corpus' : ' on ' + money(corpus)) + '; size Bucket 1 to about two years of the client’s real expenses.',
+      buckets: split.map(b=>({name: b.name, categories: b.categories, pct: b.pct, amount: b.amount, schemes: b.schemes})),
+      gab: {swpMonthly4: riaR(corpus * 0.04 / 12), swpMonthly5: riaR(corpus * 0.05 / 12), swpMonthly6: riaR(corpus * 0.06 / 12),
         note:'GAB (Golden Age Blueprint): run a monthly SWP from Bucket 1 and refill it from Buckets 2 and 3 by STP. SWP instalments are taxed only on the gain in each one, so the income is tax-efficient.'},
-      huf: {existing: huf, note:'HUF (Hindu Undivided Family): a separate PAN and tax entity with its own basic exemption and slab, its own ₹1.25 lakh LTCG allowance (about ₹15,625 a year more tax saved), and a way to pool family income. Needs a karta, members and an HUF deed; gifts into it from members are clubbed, so fund it with ancestral or inherited assets or gifts from relatives outside it.'},
+      huf: {existing: huf, extraTaxFree: 125000, extraTaxSaved: 15625,
+        note:'HUF (Hindu Undivided Family): a separate PAN and tax entity with its own basic exemption and slab, its own ₹1.25 lakh LTCG allowance (about ₹15,625 a year more tax saved), and a way to pool family income. Needs a karta, members and an HUF deed; gifts into it from members are clubbed, so fund it with ancestral or inherited assets or gifts from relatives outside it.'},
       legacy: {nomineeOnFile: nominee, clients: cs.length, jointOrSurvivor: joint,
-        checks: ['100% nomination on every folio and demat account (' + nominee + ' of ' + cs.length + ' client' + (cs.length===1?'':'s') + ' have a nominee on file).',
-          'Mode of holding: “Anyone or Survivor” for joint folios (' + joint + ' joint on file).',
+        checks: [(model ? '100% nomination on every folio and demat account.' : '100% nomination on every folio and demat account (' + nominee + ' of ' + cs.length + ' client' + (cs.length===1?'':'s') + ' have a nominee on file).'),
+          'Mode of holding: “Anyone or Survivor” for joint folios' + (model ? '.' : ' (' + joint + ' joint on file).'),
           'A registered Will naming the executor and each asset.',
           'A Private Family Trust where assets need protection or continuity for a minor or a special-needs dependant.']}};
-    out.charts.push({kind:'donut', module:'plan', title:'Bucket strategy on the actual corpus — ' + scope.label, sub: out.plan.assumption,
-      items: out.plan.buckets.map(b=>({label:b.name, value:b.amount})), centre: money(total)});
+    out.charts.push({kind:'kpis', module:'plan', title:'GAB & bucket plan — at a glance', items:[{label: model ? 'Illustrative corpus' : 'Corpus', value: riaCompact2(corpus)},
+      {label:'SWP income at 5%', value: money(out.plan.gab.swpMonthly5) + '/mo'}, {label:'Extra tax saved with an HUF', value:'₹15,625/yr', tone:'ok'}]});
+    out.charts.push({kind:'donut', module:'plan', suggest:true, title:'Recommended 3-bucket split — ' + scope.label, fmt:'money', sub: out.plan.assumption,
+      items: split.map(b=>({label: b.name + ' · ' + b.pct + '%', value: b.amount})), centre: riaCompact2(corpus)});
+    const schemeRows = [];
+    split.forEach((b, i)=>b.schemes.forEach(sc=>schemeRows.push({label:'B' + (i + 1) + ' · ' + sc, values:[Math.round(b.pct / b.schemes.length * 10) / 10]})));
+    out.charts.push({kind:'hbar', module:'plan', suggest:true, title:'Recommended scheme allocation (Finowise funds)', fmt:'pct', series:['% of corpus'], rows: schemeRows,
+      sub:'Each bucket’s share spread evenly across the firm’s schemes for it — an illustration; choose by the client’s risk profile and the Fund Basket.'});
+    out.charts.push({kind:'hbar', module:'plan', suggest:true, title:'GAB: monthly SWP income from the corpus', fmt:'money', series:['₹ a month'],
+      sub:'4% a year is the most durable; 6% draws on the growth bucket faster.',
+      rows: [{label:'SWP at 4% a year', values:[out.plan.gab.swpMonthly4]}, {label:'SWP at 5% a year', values:[out.plan.gab.swpMonthly5]}, {label:'SWP at 6% a year', values:[out.plan.gab.swpMonthly6]}]});
+    out.charts.push({kind:'hbar', module:'plan', suggest:true, title:'HUF: tax saving it adds', fmt:'money', series:['Individual only', 'Individual + HUF'],
+      sub:'Each PAN gets its own ₹1.25 lakh of tax-free equity LTCG a year; harvested in both names the saving doubles.',
+      rows: [{label:'Tax-free LTCG a year', values:[125000, 250000]}, {label:'LTCG tax saved a year (12.5%)', values:[15625, 31250]}]});
+    if(!model && cs.length) out.charts.push({kind:'hbar', module:'plan', suggest:true, title:'Legacy readiness', fmt:'count', series:['clients'],
+      rows: [{label:'Nominee on file', values:[nominee]}, {label:'No nominee — register one', values:[cs.length - nominee]}, {label:'Joint / survivor holding', values:[joint]}]});
   }
 
   /* 7. Future projection */
@@ -61695,6 +61787,10 @@ function riaIntel(q, people){
     const xs = [0].concat(years);
     out.charts.push({kind:'line', module:'projection', title:'Future projection — ' + scope.label, sub: out.projection.note, fmt:'money', xs,
       series: scen.map(s=>({name: s.name + ' (' + s.r + '%)', points: xs.map(n=>riaR(n ? fv(s.r, n) : total))})).concat([{name:'Money put in', points: xs.map(n=>riaR(total + sip*12*n)), dashed:true}])});
+    const at20 = fv(12, 20), put = total + sip * 12 * 20;
+    out.projection.composition = {years: 20, value: riaR(at20), invested: riaR(put), gained: riaR(at20 - put)};
+    out.charts.push({kind:'donut', module:'projection', fmt:'money', title:'At 20 years (moderate 12%): money put in vs wealth gained', centre: riaCompact2(at20), centreNote:'corpus',
+      items: [{label:'Money put in', value: riaR(put)}, {label:'Wealth gained', value: riaR(at20 - put)}]});
   }
   return out;
 }
@@ -61712,77 +61808,125 @@ function riaFmt(v, fmt){ return fmt==='money' ? money(v) : fmt==='pct' ? (Math.r
 function riaCompact2(v){ const a = Math.abs(v); return a >= 1e7 ? '₹' + (v/1e7).toFixed(2) + ' Cr' : a >= 1e5 ? '₹' + (v/1e5).toFixed(2) + ' L' : money(v); }
 /* ₹38.4L, ₹1.2Cr: an axis label that fits. */
 function riaCompact(v){ const a = Math.abs(v); return '₹' + (a >= 1e7 ? (v/1e7).toFixed(1).replace(/\.0$/, '') + 'Cr' : a >= 1e5 ? (v/1e5).toFixed(1).replace(/\.0$/, '') + 'L' : a >= 1e3 ? Math.round(v/1e3) + 'k' : Math.round(v)); }
-function analyticsDonutSvg(items, opts){
-  opts = opts || {};
-  const data = (items||[]).filter(i=>Number(i.value) > 0), tot = data.reduce((s,i)=>s + Number(i.value), 0) || 1;
-  const R = 70, r = 42, cx = 85, cy = 85;
+function riaDonutArcs(data, cx, cy, R, r){
+  const tot = data.reduce((s,i)=>s + Number(i.value), 0) || 1;
   let a = -Math.PI/2;
-  const arcs = data.map((d,i)=>{
+  return data.map((d,i)=>{
     const a1 = a + Number(d.value)/tot * Math.PI*2, large = a1 - a > Math.PI ? 1 : 0;
     const p = (rad, ang) => (cx + rad*Math.cos(ang)).toFixed(2) + ' ' + (cy + rad*Math.sin(ang)).toFixed(2);
     const path = data.length===1 ? `M ${cx-R} ${cy} A ${R} ${R} 0 1 1 ${cx+R} ${cy} A ${R} ${R} 0 1 1 ${cx-R} ${cy} M ${cx-r} ${cy} A ${r} ${r} 0 1 0 ${cx+r} ${cy} A ${r} ${r} 0 1 0 ${cx-r} ${cy} Z`
       : `M ${p(R,a)} A ${R} ${R} 0 ${large} 1 ${p(R,a1)} L ${p(r,a1)} A ${r} ${r} 0 ${large} 0 ${p(r,a)} Z`;
     a = a1;
-    return `<path d="${path}" fill="${RIA_COLORS[i % RIA_COLORS.length]}" fill-rule="evenodd"><title>${esc(d.label)}: ${esc(riaFmt(d.value, 'money'))}</title></path>`;
+    return `<path d="${path}" fill="${d.color || RIA_COLORS[i % RIA_COLORS.length]}" fill-rule="evenodd" stroke="var(--card)" stroke-width="1.5"><title>${esc(d.label)}: ${Math.round(Number(d.value)/tot*1000)/10}%</title></path>`;
   }).join('');
-  const legend = data.map((d,i)=>`<g transform="translate(190,${18 + i*20})"><rect width="11" height="11" rx="2" fill="${RIA_COLORS[i % RIA_COLORS.length]}"/>
-    <text x="17" y="10" font-size="11" style="fill:var(--text)">${esc(String(d.label).slice(0, 44))}</text>
-    <text x="330" y="10" font-size="11" text-anchor="end" style="fill:var(--muted)">${Math.round(Number(d.value)/tot*1000)/10}%</text></g>`).join('');
-  return `<svg class="ria-donut" viewBox="0 0 ${520} ${Math.max(175, 30 + data.length*20)}" role="img" aria-label="${esc(opts.title||'')}" style="width:100%;height:auto;display:block">
-    ${arcs}<text x="${cx}" y="${cy+4}" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--text)">${esc(opts.centre||'')}</text>${legend}</svg>`;
+}
+const riaCut = (s, n) => { s = String(s); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+function analyticsDonutSvg(items, opts){
+  opts = opts || {};
+  const data = (items||[]).filter(i=>Number(i.value) > 0), tot = data.reduce((s,i)=>s + Number(i.value), 0) || 1;
+  const fmt = opts.fmt || 'money', R = 72, r = 46, cx = 84, cy = 86;
+  const val = v => fmt==='count' ? riaN(v) : fmt==='pct' ? (Math.round(v*10)/10) + '%' : riaCompact2(v);
+  /* "Investing (has AUM) — KYC status not recorded": the group on one line, what it means under it. */
+  const parts = l => { const m = String(l).match(/^(.*?)\s+(?:—|·)\s+(.*)$/); return m ? [m[1], m[2]] : [String(l), '']; };
+  const two = data.some(d=>parts(d.label)[1]), rowH = two ? 30 : 22;
+  const legend = data.map((d,i)=>{ const [a, b] = parts(d.label);
+    return `<g transform="translate(178,${14 + i*rowH})"><title>${esc(d.label)}</title><rect width="11" height="11" rx="3" fill="${RIA_COLORS[i % RIA_COLORS.length]}"/>
+    <text x="17" y="10" font-size="11" font-weight="600" style="fill:var(--text)">${esc(riaCut(a, 34))}</text>
+    ${b ? `<text x="17" y="23" font-size="9.5" style="fill:var(--muted)">${esc(riaCut(b, 44))}</text>` : ''}
+    ${fmt==='pct' ? '' : `<text x="286" y="10" font-size="11" text-anchor="end" style="fill:var(--muted)">${esc(val(d.value))}</text>`}
+    <text x="340" y="10" font-size="11" font-weight="700" text-anchor="end" style="fill:var(--text)">${Math.round(Number(d.value)/tot*1000)/10}%</text></g>`; }).join('');
+  return `<svg class="ria-donut" viewBox="0 0 520 ${Math.max(178, 22 + data.length*rowH)}" role="img" aria-label="${esc(opts.title||'')}" style="width:100%;height:auto;display:block">
+    ${riaDonutArcs(data, cx, cy, R, r)}
+    <text x="${cx}" y="${cy + (opts.centreNote ? 0 : 4)}" text-anchor="middle" font-size="13" font-weight="700" style="fill:var(--text)">${esc(opts.centre||'')}</text>
+    ${opts.centreNote ? `<text x="${cx}" y="${cy+15}" text-anchor="middle" font-size="9.5" style="fill:var(--muted)">${esc(opts.centreNote)}</text>` : ''}${legend}</svg>`;
+}
+/* Two donuts side by side — current and suggested — with one legend. */
+function analyticsDonut2Svg(left, right, title){
+  const labels = [...new Set((left.items||[]).concat(right.items||[]).map(i=>i.label))];
+  const color = l => RIA_COLORS[labels.indexOf(l) % RIA_COLORS.length];
+  const tot = it => (it||[]).reduce((s,i)=>s + Number(i.value), 0) || 1;
+  const pct = (side, l) => { const it = (side.items||[]).find(i=>i.label===l); return it ? Math.round(Number(it.value) / tot(side.items) * 1000) / 10 : 0; };
+  const H = 226 + labels.length * 20;
+  const ring = (side, cx) => riaDonutArcs((side.items||[]).filter(i=>Number(i.value) > 0).map(i=>Object.assign({color: color(i.label)}, i)), cx, 100, 64, 40)
+    + `<text x="${cx}" y="22" text-anchor="middle" font-size="12" font-weight="700" style="fill:var(--text)">${esc(side.title)}</text>`;
+  return `<svg class="ria-donut2" viewBox="0 0 520 ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">
+    ${ring(left, 130)}${ring(right, 390)}<path d="M 240 100 L 280 100 M 272 93 L 280 100 L 272 107" stroke="var(--muted)" stroke-width="2" fill="none"/>
+    <text x="300" y="200" font-size="10" text-anchor="end" style="fill:var(--muted)">${esc(left.title)}</text><text x="380" y="200" font-size="10" text-anchor="end" style="fill:var(--muted)">${esc(right.title)}</text><text x="460" y="200" font-size="10" text-anchor="end" style="fill:var(--muted)">Change</text>
+    ${labels.map((l,i)=>{ const a = pct(left, l), b = pct(right, l), d = Math.round((b - a) * 10) / 10;
+      return `<g transform="translate(40,${212 + i*20})"><rect width="11" height="11" rx="3" fill="${color(l)}"/><text x="17" y="10" font-size="11" style="fill:var(--text)">${esc(riaCut(l, 30))}</text>
+        <text x="260" y="10" font-size="11" text-anchor="end" style="fill:var(--text)">${a}%</text><text x="340" y="10" font-size="11" font-weight="600" text-anchor="end" style="fill:var(--text)">${b}%</text>
+        <text x="420" y="10" font-size="10.5" text-anchor="end" style="fill:${d > 0 ? '#047857' : d < 0 ? '#B91C1C' : 'var(--muted)'}">${d > 0 ? '+' : ''}${d}%</text></g>`; }).join('')}</svg>`;
 }
 function analyticsCompareSvg(rows, series, fmt, title){
-  const data = (rows||[]).slice(0, 12), n = Math.max(1, (series||[]).length);
-  const W = 560, L = 250, R = 80, barH = 12, gap = 10, rowH = n*barH + gap, T = n > 1 ? 24 : 8, H = T + data.length*rowH + 6;
+  const data = (rows||[]).slice(0, 20), n = Math.max(1, (series||[]).length);
+  const W = 560, L = 250, R = 84, barH = n > 2 ? 9 : 12, gap = 10, rowH = n*barH + gap, T = n > 1 ? n*15 + 8 : 6, H = T + data.length*rowH + 6;
   const max = Math.max(1, ...data.map(d=>Math.max(...d.values.map(v=>Math.abs(Number(v)||0)))));
   const sx = v => (W - L - R) * Math.abs(Number(v)||0) / max;
-  const legend = n > 1 ? series.map((s,i)=>`<g transform="translate(${L + i*130},6)"><rect width="10" height="10" rx="2" fill="${RIA_COLORS[i]}"/><text x="15" y="9" font-size="10.5" style="fill:var(--muted)">${esc(s)}</text></g>`).join('') : '';
+  const legend = n > 1 ? series.map((s,i)=>`<g transform="translate(${L},${4 + i*15})"><rect width="10" height="10" rx="2" fill="${RIA_COLORS[i % RIA_COLORS.length]}"/><text x="15" y="9" font-size="10.5" style="fill:var(--muted)">${esc(riaCut(s, 48))}</text></g>`).join('') : '';
   return `<svg class="ria-bars" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">${legend}
     ${data.map((d,ri)=>{ const y0 = T + ri*rowH;
-      return `<text x="${L-8}" y="${y0 + n*barH/2 + 4}" text-anchor="end" font-size="10.5" style="fill:var(--text)">${esc(String(d.label).length > 44 ? String(d.label).slice(0, 43) + '…' : d.label)}<title>${esc(d.label)}</title></text>`
-        + d.values.map((v,i)=>`<rect x="${L}" y="${y0 + i*barH}" width="${Math.max(1, sx(v))}" height="${barH-2}" rx="2" fill="${RIA_COLORS[i % RIA_COLORS.length]}"><title>${esc(d.label)}: ${esc(riaFmt(v, fmt))}</title></rect>
-          <text x="${L + Math.max(1, sx(v)) + 4}" y="${y0 + i*barH + barH - 3}" font-size="10" style="fill:var(--muted)">${d.text!=null ? esc(d.text) : esc(riaFmt(v, fmt)) + (i===d.values.length-1 && d.note ? ' · ' + esc(d.note) : '')}</text>`).join(''); }).join('')}
+      return `<text x="${L-8}" y="${y0 + n*barH/2 + 4}" text-anchor="end" font-size="10.5" style="fill:var(--text)">${esc(riaCut(d.label, 44))}<title>${esc(d.label)}</title></text>`
+        + d.values.map((v,i)=>`<rect x="${L}" y="${y0 + i*barH}" width="${Math.max(1, sx(v))}" height="${barH-2}" rx="3" fill="${RIA_COLORS[i % RIA_COLORS.length]}"><title>${esc(d.label)}: ${esc(riaFmt(v, fmt))}</title></rect>
+          <text x="${L + Math.max(1, sx(v)) + 4}" y="${y0 + i*barH + barH - 2}" font-size="${n > 2 ? 9 : 10}" style="fill:var(--muted)">${d.text!=null ? esc(d.text) : esc(fmt==='count' ? riaN(v) : riaFmt(v, fmt)) + (i===d.values.length-1 && d.note ? ' · ' + esc(d.note) : '')}</text>`).join(''); }).join('')}
   </svg>`;
 }
-function analyticsLineSvg(xs, series, fmt, title){
-  const W = 520, H = 250, L = 70, R = 16, T = 30, B = 30;
-  const all = [].concat(...series.map(s=>s.points)), max = Math.max(1, ...all), min = 0;
+/* Lines (or a shaded area) over time, with a callout badge. */
+function analyticsLineSvg(xs, series, fmt, title, opts){
+  opts = opts || {};
+  const W = 520, H = 260, L = 64, R = 16, T = 18 + series.length * 0 + 22, B = 30;
+  const all = [].concat(...series.map(s=>s.points)), max = Math.max(1, ...all) * 1.04, min = opts.area ? Math.min(...all) * 0.9 : 0;
   const x = i => L + (W - L - R) * (xs[i] - xs[0]) / Math.max(1, xs[xs.length-1] - xs[0]);
-  const y = v => T + (H - T - B) * (1 - (v - min) / (max - min));
+  const y = v => T + (H - T - B) * (1 - (v - min) / (max - min || 1));
+  const xl = typeof opts.xLabel === 'function' ? opts.xLabel : (v => v ? v + 'Y' : 'Now');
   const grid = [0, 0.25, 0.5, 0.75, 1].map(f=>{ const v = min + (max - min) * f; return `<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-dasharray="3 3"/>
     <text x="${L-6}" y="${y(v)+4}" text-anchor="end" font-size="9.5" style="fill:var(--muted)">${esc(fmt==='money' ? riaCompact(v) : riaFmt(v, fmt))}</text>`; }).join('');
-  const fan = series.length >= 3 ? `<path d="M ${series[0].points.map((v,i)=>x(i) + ' ' + y(v)).join(' L ')} L ${series[2].points.map((v,i)=>x(i) + ' ' + y(v)).reverse().join(' L ')} Z" fill="${RIA_COLORS[1]}" opacity="0.12"/>` : '';
-  const lines = series.map((s,si)=>`<polyline points="${s.points.map((v,i)=>x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ')}" fill="none" stroke="${s.dashed ? 'var(--muted)' : RIA_COLORS[si % RIA_COLORS.length]}" stroke-width="2" ${s.dashed ? 'stroke-dasharray="5 4"' : ''}/>
-    ${s.points.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="${s.dashed ? 'var(--muted)' : RIA_COLORS[si % RIA_COLORS.length]}"><title>${esc(s.name)} · ${xs[i]}Y: ${esc(riaFmt(v, fmt))}</title></circle>`).join('')}`).join('');
-  const legend = series.map((s,i)=>`<g transform="translate(${L + i*112},8)"><rect width="10" height="10" rx="2" fill="${s.dashed ? 'var(--muted)' : RIA_COLORS[i % RIA_COLORS.length]}"/><text x="14" y="9" font-size="10" style="fill:var(--muted)">${esc(s.name)}</text></g>`).join('');
-  return `<svg class="ria-line" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">${legend}${grid}${fan}${lines}
-    ${xs.map((v,i)=>`<text x="${x(i)}" y="${H-10}" text-anchor="middle" font-size="10" style="fill:var(--muted)">${v ? v + 'Y' : 'Now'}</text>`).join('')}</svg>`;
+  const path = s => s.points.map((v,i)=>(i ? 'L ' : 'M ') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+  const fan = !opts.area && series.length >= 3 ? `<path d="${path(series[2])} L ${series[0].points.map((v,i)=>x(i).toFixed(1) + ' ' + y(v).toFixed(1)).reverse().join(' L ')} Z" fill="${RIA_COLORS[1]}" opacity="0.12"/>` : '';
+  const area = opts.area ? series.slice(0, 2).map((s,si)=>`<path d="${path(s)} L ${x(s.points.length-1).toFixed(1)} ${y(min).toFixed(1)} L ${x(0).toFixed(1)} ${y(min).toFixed(1)} Z" fill="${RIA_COLORS[si === 0 ? 1 : 0]}" opacity="${si === 0 ? 0.16 : 0.08}"/>`).join('') : '';
+  const colorOf = (s, si) => s.dashed ? 'var(--muted)' : opts.area ? RIA_COLORS[si === 0 ? 1 : 0] : RIA_COLORS[si % RIA_COLORS.length];
+  const lines = series.map((s,si)=>`<path d="${path(s)}" fill="none" stroke="${colorOf(s, si)}" stroke-width="2.4" stroke-linejoin="round" ${s.dashed ? 'stroke-dasharray="5 4"' : ''}/>
+    ${s.points.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="${colorOf(s, si)}"><title>${esc(s.name)} · ${esc(xl(xs[i]))}: ${esc(riaFmt(v, fmt))}</title></circle>`).join('')}`).join('');
+  const legend = series.map((s,i)=>`<g transform="translate(${L + i*150},6)"><rect width="10" height="10" rx="2" fill="${colorOf(s, i)}"/><text x="14" y="9" font-size="10" style="fill:var(--muted)">${esc(riaCut(s.name, 26))}</text></g>`).join('');
+  const badge = opts.badge ? `<g transform="translate(${L + 8},${T + 4})"><rect width="${Math.min(330, opts.badge.length * 6 + 18)}" height="22" rx="11" fill="${opts.badgeTone==='bad' ? '#B91C1C' : '#047857'}" opacity="0.92"/>
+    <text x="10" y="15" font-size="11" font-weight="600" fill="#ffffff">${esc(opts.badge)}</text></g>` : '';
+  return `<svg class="${opts.area ? 'ria-area' : 'ria-line'}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">${legend}${grid}${area}${fan}${lines}${badge}
+    ${xs.map((v,i)=>xs.length > 12 && i % 2 ? '' : `<text x="${x(i)}" y="${H-10}" text-anchor="middle" font-size="10" style="fill:var(--muted)">${esc(xl(v))}</text>`).join('')}</svg>`;
 }
+/* The risk card: the meter against the profile, and the bell curve of a
+   year's return with mu − sigma, mu and mu + sigma marked. */
 function analyticsRiskSvg(m, profileIdx, levelIdx){
-  const W = 520, H = 230, levels = ['Low','Mod. low','Moderate','Mod. high','High'], seg = (W - 40) / 5;
+  const W = 520, H = 250, levels = ['Low','Mod. low','Moderate','Mod. high','High'], seg = (W - 40) / 5;
   const tone = ['#3ecf7e','#8bd17c','#f5a623','#f28b4b','#e0607e'];
   const meter = levels.map((l,i)=>`<rect x="${20 + i*seg}" y="36" width="${seg-3}" height="18" rx="3" fill="${tone[i]}"/><text x="${20 + i*seg + seg/2}" y="49" text-anchor="middle" font-size="10" font-weight="600" fill="#10202c">${l}</text>`).join('');
   const mark = (idx, label, up) => idx==null || idx < 0 ? '' : `<g transform="translate(${20 + idx*seg + seg/2},${up ? 33 : 57})"><path d="${up ? 'M -6 -8 L 6 -8 L 0 0 Z' : 'M -6 8 L 6 8 L 0 0 Z'}" fill="var(--text)"/><text y="${up ? -11 : 20}" text-anchor="middle" font-size="10" font-weight="600" style="fill:var(--text)">${label}</text></g>`;
-  const badge = (x, label, val) => `<g transform="translate(${x},86)"><rect width="114" height="40" rx="8" fill="none" stroke="var(--line)"/><text x="57" y="15" text-anchor="middle" font-size="9.5" style="fill:var(--muted)">${label}</text><text x="57" y="32" text-anchor="middle" font-size="14" font-weight="700" style="fill:var(--text)">${val}</text></g>`;
-  const lo = Math.min(m.low, 0), hi = Math.max(m.high, m.expectedReturn + 1, 1), sx = v => 40 + (W - 80) * (v - lo) / (hi - lo);
-  const spread = `<line x1="${sx(lo)}" x2="${sx(hi)}" y1="190" y2="190" stroke="var(--line)"/>
-    <rect x="${sx(m.low)}" y="180" width="${Math.max(2, sx(m.high) - sx(m.low))}" height="20" rx="4" fill="${RIA_COLORS[3]}" opacity="0.25"/>
-    ${[[m.low,'μ − σ'], [m.expectedReturn,'μ'], [m.high,'μ + σ']].map(([v,l])=>`<line x1="${sx(v)}" x2="${sx(v)}" y1="174" y2="206" stroke="${l==='μ' ? RIA_COLORS[1] : RIA_COLORS[3]}" stroke-width="2"/>
-      <text x="${sx(v)}" y="170" text-anchor="middle" font-size="10.5" font-weight="600" style="fill:var(--text)">${l} ${v}%</text>`).join('')}
-    ${lo < 0 ? `<line x1="${sx(0)}" x2="${sx(0)}" y1="182" y2="198" stroke="var(--muted)" stroke-dasharray="2 2"/><text x="${sx(0)}" y="220" text-anchor="middle" font-size="9" style="fill:var(--muted)">0%</text>` : ''}
-    <text x="20" y="150" font-size="10.5" style="fill:var(--muted)">One-sigma range of the expected annual return (about two years in three)</text>`;
+  const mu = m.expectedReturn, sd = Math.max(0.3, m.sigma), lo = mu - 3*sd, hi = mu + 3*sd;
+  const sx = v => 30 + (W - 60) * (v - lo) / (hi - lo), base = 222, top = 110;
+  const pdf = v => Math.exp(-0.5 * Math.pow((v - mu) / sd, 2));
+  const pts = Array.from({length: 61}, (_, i)=>lo + (hi - lo) * i / 60);
+  const curve = pts.map((v,i)=>(i ? 'L ' : 'M ') + sx(v).toFixed(1) + ' ' + (base - (base - top) * pdf(v)).toFixed(1)).join(' ');
+  const band = pts.filter(v=>v >= mu - sd && v <= mu + sd);
+  const shade = `M ${sx(mu - sd).toFixed(1)} ${base} ` + band.map(v=>'L ' + sx(v).toFixed(1) + ' ' + (base - (base - top) * pdf(v)).toFixed(1)).join(' ') + ` L ${sx(mu + sd).toFixed(1)} ${base} Z`;
+  const tick = (v, l, c) => `<line x1="${sx(v)}" x2="${sx(v)}" y1="${base - (base - top) * pdf(v)}" y2="${base}" stroke="${c}" stroke-width="2"/>
+    <text x="${sx(v)}" y="${base - (base - top) * pdf(v) - 6}" text-anchor="middle" font-size="10.5" font-weight="600" style="fill:var(--text)">${l} ${Math.round(v*10)/10}%</text>`;
   return `<svg class="ria-risk" viewBox="0 0 ${W} ${H}" role="img" aria-label="Risk analytics" style="width:100%;height:auto;display:block">
     <text x="20" y="16" font-size="10.5" style="fill:var(--muted)">Risk meter: ▼ portfolio risk · ▲ client risk profile</text>${meter}${mark(levelIdx, 'Portfolio', true)}${mark(profileIdx, 'Profile', false)}
-    ${badge(20, 'Sharpe ratio', m.sharpe)}${badge(142, 'Beta (β) vs Nifty 50', m.beta)}${badge(264, 'Expected return (μ)', m.expectedReturn + '%')}${badge(386, 'Std deviation (σ)', m.sigma + '%')}
-    ${spread}</svg>`;
+    <text x="20" y="96" font-size="10.5" style="fill:var(--muted)">A year’s return: about two years in three fall between μ − σ and μ + σ</text>
+    <path d="${shade}" fill="${RIA_COLORS[3]}" opacity="0.22"/><path d="${curve}" fill="none" stroke="${RIA_COLORS[0]}" stroke-width="2"/>
+    <line x1="30" x2="${W-30}" y1="${base}" y2="${base}" stroke="var(--line)"/>
+    ${tick(mu - sd, 'μ − σ', RIA_COLORS[3])}${tick(mu, 'μ', RIA_COLORS[1])}${tick(mu + sd, 'μ + σ', RIA_COLORS[3])}
+    ${lo < 0 && hi > 0 ? `<line x1="${sx(0)}" x2="${sx(0)}" y1="${base - 6}" y2="${base + 6}" stroke="var(--muted)"/><text x="${sx(0)}" y="${base + 18}" text-anchor="middle" font-size="9" style="fill:var(--muted)">0%</text>` : ''}
+    <text x="${W-30}" y="${base + 18}" text-anchor="end" font-size="9.5" style="fill:var(--muted)">Sharpe ${m.sharpe} · β ${m.beta} · σ ${m.sigma}%</text></svg>`;
 }
 function riaChartHtml(ch){
-  const body = ch.kind==='donut' ? analyticsDonutSvg(ch.items, {title: ch.title, centre: ch.centre})
-    : ch.kind==='line' ? analyticsLineSvg(ch.xs, ch.series, ch.fmt, ch.title)
+  const g = riaGroupOf(ch);
+  if(ch.kind==='kpis') return `<div class="ria-chart ria-kpi-card" data-kind="kpis" data-group="kpis" data-module="${esc(ch.module||'')}">${riaKpisSvgHtml(ch)}</div>`;
+  const body = ch.kind==='donut' ? analyticsDonutSvg(ch.items, {title: ch.title, centre: ch.centre, centreNote: ch.centreNote, fmt: ch.fmt})
+    : ch.kind==='donut2' ? analyticsDonut2Svg(ch.left, ch.right, ch.title)
+    : ch.kind==='line' || ch.kind==='area' ? analyticsLineSvg(ch.xs, ch.series, ch.fmt, ch.title, {area: ch.kind==='area', badge: ch.badge, badgeTone: ch.badgeTone, xLabel: ch.xLabel})
     : ch.kind==='risk' ? analyticsRiskSvg(ch.metrics, ch.profileIdx, ch.levelIdx)
     : analyticsCompareSvg(ch.rows, ch.series, ch.fmt, ch.title);
-  return `<div class="boss-chart ria-chart" data-kind="${esc(ch.kind)}" data-module="${esc(ch.module||'')}" style="margin:8px 0 4px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card)">
-    <div style="font-weight:600;font-size:13px">${esc(ch.title)}</div>${ch.sub ? `<div class="small-note" style="margin:2px 0 6px">${esc(ch.sub)}</div>` : ''}${body}</div>`;
+  return `<div class="boss-chart ria-chart${ch.suggest ? ' ria-suggest' : ''}" data-kind="${esc(ch.kind)}" data-group="${g}" data-module="${esc(ch.module||'')}">
+    <div class="ria-chart-h"><span>${esc(ch.title)}</span>${ch.suggest ? '<span class="ria-tag">Suggestion</span>' : ''}</div>${ch.sub ? `<div class="small-note" style="margin:2px 0 6px">${esc(ch.sub)}</div>` : ''}${body}</div>`;
 }
 
 /* ---- the PDF report of a turn ---- */
@@ -61811,15 +61955,26 @@ function bossTurnPdfBlocks(i){
     else b.push({t:'p', text: l});
   });
   const tbl = (cols, rows) => ({t:'table', cols: cols.map((c,k)=>({label:c, w: k ? 1 : 2, bold: !k})), rows});
-  if(t.chart && t.chart.rows){
+  if(t.chart && t.chart.rows && !(t.charts && t.charts.length)){
     b.push({t:'band', text: t.chart.title});
     b.push({t:'bars', items: t.chart.rows.slice(0, 14).map(r=>({label:r.label, value:r.count, note:String(r.count)}))});
   }
   (t.charts||[]).forEach(ch=>{
     b.push({t:'band', text: riaPdfClean(ch.title), sub: ch.sub ? riaPdfClean(ch.sub) : undefined});
-    if(ch.kind==='donut'){
-      b.push({t:'donut', items: ch.items.map(it=>({label:it.label, value:it.value})), centre: riaCompact2(ch.items.reduce((s,z)=>s+z.value,0)), centreNote:'total'});
-      b.push(tbl(['Part', 'Amount', 'Share'], ch.items.map(it=>[it.label, money(it.value), riaPct(it.value, ch.items.reduce((s,z)=>s+z.value,0)) + '%'])));
+    if(ch.kind==='kpis'){
+      b.push({t:'cards', items: ch.items.map(it=>({label: riaPdfClean(it.label), value: riaPdfClean(String(it.value)), note: it.note ? riaPdfClean(it.note) : undefined}))});
+    } else if(ch.kind==='donut2'){
+      [ch.left, ch.right].forEach(side=>{ b.push({t:'h3', text: side.title}); b.push({t:'donut', items: side.items.map(it=>({label:it.label, value:it.value})), centre: side.title}); });
+      const labels = [...new Set(ch.left.items.concat(ch.right.items).map(i=>i.label))], tot = it => it.reduce((s2,i)=>s2 + i.value, 0) || 1;
+      const pc = (side, l) => { const it = side.items.find(i=>i.label===l); return it ? Math.round(it.value / tot(side.items) * 1000) / 10 + '%' : '0%'; };
+      b.push(tbl(['Asset class', ch.left.title, ch.right.title], labels.map(l=>[l, pc(ch.left, l), pc(ch.right, l)])));
+    } else if(ch.kind==='area'){
+      if(ch.badge) b.push({t:'note', title:'Benchmark', text: ch.badge});
+      const xl = typeof ch.xLabel==='function' ? ch.xLabel : (v=>v + 'Y');
+      b.push(tbl(['Year'].concat(ch.series.map(s2=>s2.name)), ch.xs.map((n,k)=>[xl(n)].concat(ch.series.map(s2=>money(s2.points[k]))))));
+    } else if(ch.kind==='donut'){
+      b.push({t:'donut', items: ch.items.map(it=>({label:it.label, value:it.value})), centre: ch.fmt==='count' ? riaN(ch.items.reduce((s,z)=>s+z.value,0)) : ch.fmt==='pct' ? riaPdfClean(String(ch.centre||'')) : riaCompact2(ch.items.reduce((s,z)=>s+z.value,0)), centreNote: ch.centreNote || 'total'});
+      b.push(tbl(['Part', ch.fmt==='count' ? 'Count' : ch.fmt==='pct' ? 'Share of risk' : 'Amount', 'Share'], ch.items.map(it=>[it.label, ch.fmt==='count' ? riaN(it.value) : ch.fmt==='pct' ? it.value + '%' : money(it.value), riaPct(it.value, ch.items.reduce((s,z)=>s+z.value,0)) + '%'])));
     } else if(ch.kind==='line'){
       b.push(tbl(['Horizon'].concat(ch.series.map(s=>s.name)), ch.xs.map((n,k)=>[n ? n + ' years' : 'Now'].concat(ch.series.map(s=>money(s.points[k]))))));
       const last = ch.xs.length - 1;
@@ -61870,6 +62025,226 @@ function bossDownloadTurnPdf(i){
   const name = bossTurnPdfName(i);
   downloadPdf(blocks, name, {title:'RIA AI Advisory Report', footer: RIA_PDF_FOOT});
   return {filename: name, blocks: blocks.length};
+}
+
+/* ---------------------------------------------------------------------
+   RIA AI — EVERY CHART IS A DASHBOARD
+
+   An analytics answer is never one plain bar chart. It is a small
+   dashboard of the records counted live: the figures at a glance, the
+   division as a donut (count and % of each group), the same division by
+   branch (or stage), and the next actions those records call for.
+
+   Most imported clients have a blank KYC or mandate status. A blank is
+   not a group anybody can act on, so where the status field is blank the
+   group says what the record itself does show — AUM, an IIN / UCC, a PAN,
+   a SIP, the equity share of the holdings — and says the status is not
+   recorded, rather than claiming one the record does not hold.
+   --------------------------------------------------------------------- */
+const riaHasAum = c => numVal(clientBookAum(c)) > 0;
+const riaHasSip = c => numVal(clientBookSip(c)) > 0;
+function riaEquityPct(c){
+  const ps = riaPositions(c).filter(p=>p.cat && p.cat.mix), t = ps.reduce((s,p)=>s + p.current, 0);
+  return t ? Math.round(ps.reduce((s,p)=>s + p.current * p.cat.mix[0], 0) / t * 100) : null;
+}
+const RIA_SEGMENTS = {
+  kyc: {
+    of(c){
+      const s = String(c.kycStatus||'').trim();
+      if(/^validated$/i.test(s)) return 'KYC validated';
+      if(/hold|reject/i.test(s)) return 'On hold / rejected — physical KYC needed';
+      if(/^registered$/i.test(s)) return 'KRA registered — validation pending';
+      if(/not registered/i.test(s)) return 'Not registered — fresh eKYC needed';
+      if(s) return s;
+      if(riaHasAum(c)) return 'Investing (has AUM) — KYC status not recorded';
+      if(String(c.canIinNo||c.uccNo||'').trim()) return 'IIN / UCC on file — KYC status not recorded';
+      if(String(c.pan||'').trim()) return 'PAN recorded — KRA validation pending';
+      return 'PAN & KYC missing — fresh eKYC needed';
+    },
+    done: /^KYC validated$/,
+    actions: {'On hold / rejected — physical KYC needed':'Do physical KYC', 'KRA registered — validation pending':'Complete KRA validation',
+      'Not registered — fresh eKYC needed':'Start fresh eKYC', 'PAN & KYC missing — fresh eKYC needed':'Start fresh eKYC',
+      'Investing (has AUM) — KYC status not recorded':'Record KYC status from the KRA', 'IIN / UCC on file — KYC status not recorded':'Record KYC status from the KRA',
+      'PAN recorded — KRA validation pending':'Run KRA validation'},
+  },
+  mandate: {
+    of(c){
+      const s = String(c.mandateStatus||'').trim();
+      if(/^approved$/i.test(s)) return 'Mandate approved';
+      if(/pending/i.test(s)) return 'Pending approval';
+      if(/reject/i.test(s)) return 'Rejected — re-register';
+      if(riaHasSip(c)) return 'Active SIP — mandate status not recorded';
+      if(riaHasAum(c)) return 'AUM client — mandate registration needed';
+      return 'Onboarding — mandate not started';
+    },
+    done: /^Mandate approved$/,
+    actions: {'Pending approval':'Follow up mandate approval', 'Rejected — re-register':'Re-register the mandate',
+      'Active SIP — mandate status not recorded':'Record the mandate status', 'AUM client — mandate registration needed':'Trigger e-Mandate',
+      'Onboarding — mandate not started':'Start the mandate with the first SIP'},
+  },
+  risk: {
+    of(c){
+      const p = String(c.riskProfile || c.iseqCategory || '').toLowerCase();
+      if(p){
+        if(/moderately aggress|mod\w* aggress|moderate.?high|growth/.test(p)) return 'Moderately aggressive';
+        if(/aggress|high/.test(p)) return 'Aggressive';
+        if(/moderately conserv|mod\w* conserv|moderate.?low/.test(p)) return 'Moderately conservative';
+        if(/conserv|low|safe/.test(p)) return 'Conservative';
+        if(/moder|balanc|medium/.test(p)) return 'Moderate';
+        return String(c.riskProfile || c.iseqCategory);
+      }
+      const e = riaEquityPct(c);
+      if(e !== null) return (e >= 75 ? 'Aggressive' : e >= 60 ? 'Moderately aggressive' : e >= 45 ? 'Moderate' : e >= 30 ? 'Moderately conservative' : 'Conservative') + ' (from holdings)';
+      return 'Not profiled — ISEQ needed';
+    },
+    actionFor: g => /Not profiled/.test(g) ? 'Run ISEQ risk profiling' : /from holdings/.test(g) ? 'Confirm the profile with ISEQ' : '',
+  },
+  sip: {
+    of(c){
+      const s = numVal(clientBookSip(c));
+      if(s >= 10000) return 'SIP ₹10k+ a month';
+      if(s > 0) return 'SIP under ₹10k a month';
+      return riaHasAum(c) ? 'AUM, no active SIP' : 'No AUM, no SIP';
+    },
+    actions: {'SIP under ₹10k a month':'SIP step-up', 'AUM, no active SIP':'Start a SIP', 'No AUM, no SIP':'First investment'},
+  },
+  iin: {done: /^IIN active$/i, actions: {'No IIN':'Register the IIN / UCC', 'IIN not active':'Complete IIN activation', 'IIN, activation not recorded':'Check IIN activation'}},
+  nominee: {done: /^Nominee registered$/, actions: {'No nominee':'Register a nominee'}},
+  goals: {done: /^Goals mapped$/, actions: {'No goals mapped':'Map goals (7 Events / GAB)'}},
+};
+const RIA_EXTRA_DIMS = [{id:'sip', label:'SIP status', words:['sip','sips'], value: c=>RIA_SEGMENTS.sip.of(c)}];
+const RIA_PENDING_RULE = {kyc:'is not KYC validated', mandate:'is not Mandate approved', iin:'is not IIN active', nominee:'has no nominee registered', goals:'has no goals mapped'};
+function riaDimValue(src, dim){
+  const seg = src==='clients' && dim ? RIA_SEGMENTS[dim.id] : null;
+  return seg && seg.of ? seg.of : dim.value;
+}
+/* The next actions a set of records calls for, counted. */
+function riaNextActions(src, rows){
+  const n = {}, add = k => { n[k] = (n[k]||0) + 1; };
+  if(src==='clients') rows.forEach(c=>{
+    const k = RIA_SEGMENTS.kyc.of(c); if(!RIA_SEGMENTS.kyc.done.test(k)) add(RIA_SEGMENTS.kyc.actions[k] || 'Complete KYC');
+    if(/needed|not started|re-register/.test(RIA_SEGMENTS.mandate.of(c))) add('Trigger e-Mandate');
+    if(!clientGoals(c).length) add('Map goals (7 Events / GAB)');
+    if(!String(c.firstNomineeName||'').trim()) add('Register a nominee');
+    const a = numVal(clientBookAum(c)), s = numVal(clientBookSip(c));
+    if(a > 0 && s < a * 0.01) add('SIP step-up / top-up');
+    if(!lexiProfileOf(c)) add('Run ISEQ risk profiling');
+  });
+  else if(src==='leads') rows.forEach(l=>{
+    if(!l.iseqCategory) add('Send the ISEQ form');
+    if(!l.mobile && !l.email) add('Complete the contact details');
+    if(!l.assignedTo) add('Assign an RM');
+    const age = (Date.now() - Date.parse(l.createdAt||'')) / 864e5;
+    if(age > 30 && /creat|new/i.test(String(stateOf('LMS', l)))) add('Follow up: 30+ days at the first stage');
+  });
+  else if(src==='tasks'){
+    const today = new Date().toISOString().slice(0,10);
+    rows.forEach(t=>{
+      if(/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||''))) return;
+      if(t.dueDate && t.dueDate < today) add('Clear the overdue tasks'); else if(t.dueDate === today) add('Finish today’s tasks');
+      if(!t.assignTo) add('Assign an owner');
+    });
+  }
+  return Object.keys(n).map(k=>({label:k, values:[n[k]]})).sort((a,b)=>b.values[0]-a.values[0]);
+}
+const riaN = v => Number(v||0).toLocaleString('en-IN');
+/* The dashboard for one grouping of one kind of record. */
+function riaDimDashboard(src, dim, rows, title){
+  const val = src==='tasks' ? dim.value : riaDimValue(src, dim);
+  const groups = analyticsGroup(rows, val), total = rows.length;
+  const seg = src==='clients' ? RIA_SEGMENTS[dim.id] : null;
+  const label = src==='tasks' ? 'tasks' : ((ANALYTICS_SOURCES[src]||{}).label || 'records').toLowerCase();
+  let actions = [];
+  if(seg && (seg.actions || seg.actionFor)){
+    const m = {};
+    groups.forEach(g=>{ const a = (seg.actions && seg.actions[g.label]) || (seg.actionFor ? seg.actionFor(g.label) : ''); if(a) m[a] = (m[a]||0) + g.count; });
+    actions = Object.keys(m).map(k=>({label:k, values:[m[k]]})).sort((a,b)=>b.values[0]-a.values[0]);
+  }
+  if(!actions.length) actions = riaNextActions(src, rows);
+  const needing = seg && seg.done ? groups.filter(g=>!seg.done.test(g.label)).reduce((s,g)=>s + g.count, 0) : null;
+  const top = groups[0];
+  const derived = seg && seg.of ? 'Where the status itself is blank, the group says what the record does show (AUM, IIN / UCC, PAN, SIP, holdings).' : '';
+  const kpis = {kind:'kpis', module:'analytics', title: title + ' — at a glance', items: [
+    {label:'Total ' + label, value: riaN(total)},
+    {label:'Largest group', value: top ? Math.round(top.count / Math.max(1, total) * 100) + '%' : '—', note: top ? top.label : ''},
+    needing !== null ? {label:'Need action', value: riaN(needing), note: Math.round(needing / Math.max(1, total) * 100) + '% of ' + label, tone:'warn'}
+      : {label:'Groups', value: String(groups.length), note: actions.length ? actions[0].label : ''}]};
+  /* The same division, branch by branch (or stage by stage). */
+  const by = dim.id==='branch' || src==='tasks' ? 'status' : 'branch';
+  const keyOf = by==='branch' ? (r=>r.branch||'') : src==='tasks' ? (t=>t.overallStatus||t.status||'') : (r=>stateLabel(src==='leads' ? 'LMS' : 'CMS', stateOf(src==='leads' ? 'LMS' : 'CMS', r)));
+  const segs = groups.slice(0, 3).map(g=>g.label), tbl = {};
+  rows.forEach(r=>{
+    let k = '', v = ''; try{ k = keyOf(r); }catch(e){} try{ v = val(r); }catch(e){}
+    k = String(k||'').trim() || 'Not recorded'; v = String(v==null ? '' : v).trim() || ANALYTICS_BLANK;
+    tbl[k] = tbl[k] || {_t:0}; tbl[k]._t++; const s = segs.includes(v) ? v : 'Other'; tbl[k][s] = (tbl[k][s]||0) + 1;
+  });
+  const series = segs.concat(Object.values(tbl).some(x=>x.Other) ? ['Other'] : []);
+  const brows = Object.keys(tbl).sort((a,b)=>tbl[b]._t - tbl[a]._t).slice(0, 6).map(k=>({label:k, values: series.map(s=>tbl[k][s]||0)}));
+  const charts = [kpis,
+    {kind:'donut', module:'analytics', fmt:'count', title, sub: riaN(total) + ' ' + label + ', counted live. ' + derived,
+      items: groups.map(g=>({label:g.label, value:g.count})), centre: riaN(total), centreNote: label}];
+  if(brows.length > 1 || series.length > 1) charts.push({kind:'hbar', module:'analytics', fmt:'count', title: title + ' by ' + by, series, rows: brows,
+    sub: 'The ' + Math.min(3, segs.length) + ' largest groups, for the top ' + brows.length + ' ' + (by==='branch' ? 'branches' : by==='status' ? 'statuses' : 'stages') + '.'});
+  if(actions.length) charts.push({kind:'hbar', module:'analytics', suggest:true, fmt:'count', title:'Suggested next actions', series:[label], rows: actions.slice(0, 8),
+    sub: 'What these ' + label + ' need next, counted from their records.'});
+  return {charts, groups, actions, needing};
+}
+/* A chart drawn from a planned read: a status column BOSS can say more
+   about is redrawn from the records; any other gets the same dashboard. */
+const RIA_READ_DIMS = {kyc:'kyc', mandate:'mandate', risk:'risk', iin:'iin'};
+function riaDashFromRead(reads, chart){
+  const g = (reads||[]).find(r=>r && r.groups && r.groups.length && r.groupBy && r.groupBy.length);
+  if(!g || !chart) return null;
+  const src = /^clients/i.test(g.source) ? 'clients' : /^leads/i.test(g.source) ? 'leads' : /task/i.test(g.source) ? 'tasks' : '';
+  const dimId = src==='clients' ? RIA_READ_DIMS[g.groupBy[0]] : '';
+  const recs = src && src!=='tasks' ? analyticsRecords(src) : null;
+  if(dimId && recs){
+    const dim = ANALYTICS_SOURCES.clients.dims.find(d=>d.id===dimId);
+    const d = riaDimDashboard('clients', dim, recs, dim.label + ' (Clients)');
+    chart.title = dim.label + ' (Clients)'; chart.total = recs.length; chart.rows = d.groups;
+    return d;
+  }
+  chart.rows = chart.rows.map(r=>({label: /^(—|-|)$/.test(String(r.label).trim()) || r.label==='undefined' ? ANALYTICS_BLANK : r.label, count: r.count}));
+  const total = chart.rows.reduce((s,r)=>s + r.count, 0), actions = recs ? riaNextActions(src, recs) : [];
+  const top = chart.rows.slice().sort((a,b)=>b.count-a.count)[0];
+  const charts = [{kind:'kpis', module:'analytics', title: chart.title + ' — at a glance', items:[{label:'Total', value: riaN(total)},
+      {label:'Largest group', value: top ? Math.round(top.count / Math.max(1, total) * 100) + '%' : '—', note: top ? top.label : ''}, {label:'Groups', value: String(chart.rows.length)}]},
+    {kind:'donut', module:'analytics', fmt:'count', title: chart.title, sub: riaN(total) + ' records, counted live.', items: chart.rows.map(r=>({label:r.label, value:r.count})), centre: riaN(total), centreNote:'records'},
+    {kind:'hbar', module:'analytics', fmt:'count', title: chart.title + ' — breakdown', series:['records'], rows: chart.rows.slice(0, 10).map(r=>({label:r.label, values:[r.count]}))}];
+  if(actions.length) charts.push({kind:'hbar', module:'analytics', suggest:true, fmt:'count', title:'Suggested next actions', series:[src], rows: actions.slice(0, 8), sub:'Across your visible ' + src + '.'});
+  return {charts, groups: chart.rows, actions};
+}
+/* The dashboard for a chart BOSS drew from a named grouping. */
+function riaDashForChart(intent, chart){
+  if(!intent || !chart) return null;
+  if(intent.src==='tasks'){
+    const d = analyticsDays(), sub = (intent.rows||[]).filter(t=>intent.dim.test(t, d));
+    const dim = {id:'assign', label:'Assign To', value: t=>t.assignTo ? teamName(t.assignTo) : 'Unassigned'};
+    return riaDimDashboard('tasks', dim, sub, chart.title);
+  }
+  return riaDimDashboard(intent.src, intent.dim, intent.rows, chart.title);
+}
+/* Which tab of the dashboard a chart sits under. */
+function riaGroupOf(ch){
+  if(ch.kind==='kpis') return 'kpis';
+  if(ch.kind==='donut' || ch.kind==='donut2') return 'pie';
+  if(ch.kind==='line' || ch.kind==='area' || ch.kind==='risk') return 'trend';
+  return ch.suggest ? 'actions' : 'bars';
+}
+function riaDashFilter(btn, g){
+  const box = btn.closest('.ria-dash'); if(!box) return;
+  box.querySelectorAll('.ria-dash-tab').forEach(b=>b.classList.toggle('on', b===btn));
+  box.querySelectorAll('.ria-chart').forEach(el=>{ el.style.display = g==='all' || el.dataset.group===g || el.dataset.group==='kpis' ? '' : 'none'; });
+}
+function riaDashHtml(charts){
+  const groups = [...new Set(charts.map(riaGroupOf))].filter(g=>g!=='kpis');
+  const names = {pie:'Pie', trend:'Trend', bars:'Breakdown', actions:'Suggestions'};
+  const tabs = groups.length > 1 ? `<div class="ria-dash-tabs" role="tablist"><button class="ria-dash-tab on" onclick="riaDashFilter(this,'all')">All</button>${groups.map(g=>`<button class="ria-dash-tab" onclick="riaDashFilter(this,'${g}')">${names[g]||g}</button>`).join('')}</div>` : '';
+  return `<div class="ria-dash">${tabs}${charts.map(riaChartHtml).join('')}</div>`;
+}
+function riaKpisSvgHtml(ch){
+  const tone = {warn:'#B45309', ok:'#047857', bad:'#B91C1C'};
+  return `<div class="ria-kpis">${ch.items.map(it=>`<div class="ria-kpi"><div class="ria-kpi-l">${esc(it.label)}</div><div class="ria-kpi-v" style="${it.tone && tone[it.tone] ? 'color:' + tone[it.tone] : ''}">${esc(String(it.value))}</div>${it.note ? `<div class="ria-kpi-n" title="${esc(it.note)}">${esc(it.note)}</div>` : ''}</div>`).join('')}</div>`;
 }
 
 /* ---------------------------------------------------------------------

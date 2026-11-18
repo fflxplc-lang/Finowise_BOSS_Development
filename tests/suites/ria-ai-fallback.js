@@ -388,8 +388,12 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       await step('in the page: "give me graphical representation of our clients" draws the chart in the chat panel', async () => {
         await pg.evaluate(() => navigate('dashboard'));
         const r = await ask('give me graphical representation of our clients');
-        if (r.error || !r.chart || !r.chartDom || NEVER.test(r.text) || BUSY.test(r.html)) throw new Error(JSON.stringify(r).slice(0, 400));
-        return 'boss-chart drawn: "' + r.chartTitle + '"; ' + r.text.split('\n')[0].slice(0, 80);
+        const d = await pg.evaluate(() => { const t = ai.turns[ai.turns.length - 1]; const box = document.getElementById('aiTurns');
+          return { kinds: (t.charts || []).map((c) => c.kind + (c.suggest ? ':suggest' : '')), labels: ((t.charts || []).find((c) => c.kind === 'donut') || { items: [] }).items.map((i) => i.label),
+            donut: !!(box && box.querySelector('.ria-dash .ria-donut')), pdf: !!(box && box.querySelector('.ria-pdf')) }; });
+        if (r.error || !r.chart || !r.chartDom || NEVER.test(r.text) || BUSY.test(r.html) || !d.donut || !d.pdf || !['kpis', 'donut', 'hbar:suggest'].every((k) => d.kinds.includes(k)) || d.labels.includes('—'))
+          throw new Error(JSON.stringify({ r: r.text.slice(0, 200), d }));
+        return '"' + r.chartTitle + '" as a dashboard: ' + d.kinds.join(' + ') + ' (' + d.labels.join(', ') + ')';
       });
 
       const SOP_NOISE = /\[iin-pending\]|Here is what to do|The process that applies|Related: \[/;
@@ -397,22 +401,31 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         gemini('503');
         const r = await ask('how many kycs are pending');
         const last = await pg.evaluate(() => { const t = ai.turns[ai.turns.length - 1]; return { sops: (t.sops || []).length }; });
-        const need = [/\*\*5 of 8 clients\*\* are pending: their KYC Status is not Validated\./, /- Validated: 3/, /- Registered: 2/, /- On Hold: 1/, /- Not Registered: 1/, /- Not recorded: 1/];
+        const need = [/\*\*5 of 8 clients\*\* are pending: their KYC Status is not Validated\./, /- KYC validated: 3/, /- KRA registered — validation pending: 2/,
+          /- On hold \/ rejected — physical KYC needed: 1/, /- Not registered — fresh eKYC needed: 1/, /- PAN & KYC missing — fresh eKYC needed: 1/];
         const missing = need.filter((re) => !re.test(r.text)).map(String);
+        const d = await pg.evaluate(() => { const t = ai.turns[ai.turns.length - 1]; const box = document.getElementById('aiTurns');
+          return { kinds: (t.charts || []).map((c) => c.kind + (c.suggest ? ':suggest' : '')), donutLabels: ((t.charts || []).find((c) => c.kind === 'donut') || { items: [] }).items.map((i) => i.label),
+            actions: ((t.charts || []).find((c) => c.suggest) || { rows: [] }).rows.map((x) => x.label + ' ' + x.values[0]), dom: box ? box.querySelectorAll('.ria-dash .ria-donut').length : 0,
+            plainBar: !!(box && [...box.querySelectorAll('.boss-chart')].some((el) => !el.classList.contains('ria-chart'))), pdf: !!(box && box.querySelector('.ria-pdf')) }; });
         if (r.error || missing.length || SOP_NOISE.test(r.text) || last.sops || NEVER.test(r.text)) throw new Error(JSON.stringify({ missing, sops: last.sops, text: r.text }).slice(0, 500));
-        return r.text.split('\n')[0] + ' (then every status; 0 SOPs attached)';
+        if (!['kpis', 'donut', 'hbar:suggest'].every((k) => d.kinds.includes(k)) || d.donutLabels.some((l) => /^(—|Not recorded)$/.test(l)) || !d.dom || d.plainBar || !d.pdf
+          || !d.actions.includes('Start fresh eKYC 2') || !d.actions.includes('Complete KRA validation 2') || !d.actions.includes('Do physical KYC 1'))
+          throw new Error(JSON.stringify(d));
+        return r.text.split('\n')[0] + ' — dashboard: ' + d.kinds.join(' + ') + '; actions ' + d.actions.join(', ') + '; no "—", no plain bar chart, PDF button';
       });
 
       await step('in the page: "kitne kyc pending hain" — the same count, in Hinglish', async () => {
         const r = await ask('kitne kyc pending hain');
-        if (r.error || !/\*\*8 mein se 5 clients\*\* ka KYC Status Validated nahi hai \(pending\)\./.test(r.text) || !/- On Hold: 1/.test(r.text) || SOP_NOISE.test(r.text))
+        if (r.error || !/\*\*8 mein se 5 clients\*\* ka KYC Status Validated nahi hai \(pending\)\./.test(r.text) || !/- On hold \/ rejected — physical KYC needed: 1/.test(r.text) || SOP_NOISE.test(r.text))
           throw new Error(r.text.slice(0, 400));
         return r.text.split('\n')[0];
       });
 
       await step('in the page: "how many mandates are pending" — 6 of 8 clients, Pending Approval 3', async () => {
         const r = await ask('how many mandates are pending');
-        if (r.error || !/\*\*6 of 8 clients\*\* are pending: their Mandate Status is not Approved\./.test(r.text) || !/- Pending Approval: 3/.test(r.text) || !/- Approved: 2/.test(r.text) || SOP_NOISE.test(r.text))
+        if (r.error || !/\*\*6 of 8 clients\*\* are pending: their Mandate Status is not Approved\./.test(r.text) || !/- Pending approval: 3/.test(r.text) || !/- Mandate approved: 2/.test(r.text)
+          || !/- Onboarding — mandate not started: 2/.test(r.text) || !/Follow up mandate approval: 3/.test(r.text) || SOP_NOISE.test(r.text))
           throw new Error(r.text.slice(0, 400));
         return r.text.split('\n')[0];
       });
@@ -454,6 +467,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const cards = box ? [...box.querySelectorAll('.ria-chart')].filter((el) => el.closest('#aiTurns')) : [];
         return { i, error: ai.error, text: String(last.content || ''), charts: (last.charts || []).map((c) => ({ kind: c.kind, module: c.module, title: c.title, sub: c.sub || '' })),
           intel: last.intel ? { total: last.intel.total, modules: last.intel.modules, scope: last.intel.scope } : null, pdf: last.pdf || null,
+          chartsFull: (last.charts || []).map((c) => ({ kind: c.kind, title: c.title, badge: c.badge })),
           dom: cards.slice(-(last.charts || []).length || 0).map((el) => ({ kind: el.dataset.kind, svg: el.querySelector('svg') ? el.querySelector('svg').getAttribute('class') : '', text: el.textContent })),
           pdfButton: !!(box && box.querySelector('.ria-pdf')), html: box ? box.innerText : '' };
       }, q);
@@ -463,7 +477,10 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         gemini('503');
         const r = await askI('portfolio analysis of ZZ Intel Client');
         clean(r);
+        r.charts.forEach((c, k) => { c.badge = r.chartsFull[k].badge; });
         const donut = r.dom.find((d) => d.kind === 'donut');
+        const area = r.charts.find((c) => c.kind === 'area');
+        if (!area || !/Beating the Nifty 50 reference by \+0\.5% a year/.test(area.badge || '') || !r.dom.some((d) => d.svg === 'ria-area')) throw new Error('area chart: ' + JSON.stringify(area && { badge: area.badge, sub: area.sub }));
         if (!r.intel || r.intel.total !== TOTAL || !donut || donut.svg !== 'ria-donut' || !/Equity 74\.8%, Liquid\/Cash 16\.4%, Debt 8\.8%/.test(r.text) || !r.pdfButton)
           throw new Error(JSON.stringify({ intel: r.intel, charts: r.charts.map((c) => c.kind), text: r.text.slice(0, 400) }));
         return 'total ' + inr(TOTAL) + '; Equity 74.8 / Liquid 16.4 / Debt 8.8; donut drawn; ' + r.charts.length + ' charts; PDF button shown';
@@ -475,6 +492,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const sw = r.charts.find((c) => /Risky-to-safe/.test(c.title));
         const share = 248750 / 720000, tax = Math.round((120000 * share * 12.5 + 150000 * share * 20) / 100);
         if (!sw || !/₹2,48,750/.test(sw.sub) || !/₹1,382/.test(sw.sub) || !sw.sub.includes(inr(tax)) || !r.charts.some((c) => /Buy \/ Sell \/ Hold \/ Switch/.test(c.title))
+          || !r.dom.some((d) => d.kind === 'donut2' && d.svg === 'ria-donut2' && /Suggested/.test(d.text))
           || !/human advisor & client approval is mandatory/.test(r.text) || !r.dom.some((d) => d.svg === 'ria-bars'))
           throw new Error(JSON.stringify({ charts: r.charts, text: r.text.slice(0, 500) }));
         return 'small + mid 38.2% vs 25% ceiling → switch ₹2,48,750; load ₹1,382; tax ' + inr(tax);
@@ -485,7 +503,9 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         clean(r);
         const c = r.charts.find((x) => x.module === 'tax');
         if (!c || !/Book ₹1,25,000 of long-term gain tax-free/.test(r.text) || !/about ₹15,625 saved; taxable gain remaining ₹1,95,000/.test(r.text) || !/Losses of ₹10,000/.test(r.text)
-          || !/Unrealised equity gain ₹4,70,000/.test(r.text)) throw new Error(JSON.stringify({ c, text: r.text.slice(0, 600) }));
+          || !/Unrealised equity gain ₹4,70,000/.test(r.text) || !r.charts.some((x) => x.kind === 'donut' && x.module === 'tax')) throw new Error(JSON.stringify({ c, text: r.text.slice(0, 600) }));
+        const liab = await pg2.evaluate(() => ai.turns[ai.turns.length - 1].intel.tax.liability);
+        if (liab.before !== 70000 || liab.after !== 54375) throw new Error('liability ' + JSON.stringify(liab));
         return 'gain ₹4,70,000 (LT ₹3,20,000, ST ₹1,50,000) → harvest ₹1,25,000, save ₹15,625';
       });
 
@@ -495,7 +515,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const need = [/SIP step-up \/ top-up: 1 \(₹14,000\)/, /idle cash → STP into Flexi Cap \/ Multi-Asset: 1 \(₹1,21,500\)/, /FSL \/ protection/, /GAB \(Golden Age Blueprint\)/, /7 Events blueprint/,
           /HUF folio/, /LA MF \(loan against mutual funds\): 1 \(₹6,34,500\)/, /Multi-Asset \/ Gold \/ Debt diversification/];
         const missing = need.filter((re) => !re.test(r.text)).map(String);
-        if (missing.length || !r.charts.some((c) => c.module === 'opportunities')) throw new Error(JSON.stringify({ missing, text: r.text.slice(0, 700) }));
+        if (missing.length || !r.charts.some((c) => c.module === 'opportunities' && c.kind === 'donut') || !r.charts.some((c) => c.module === 'opportunities' && c.kind === 'hbar')) throw new Error(JSON.stringify({ missing, text: r.text.slice(0, 700) }));
         return '8 opportunities, each with its amount where there is one';
       });
 
@@ -504,7 +524,9 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         clean(r);
         const card = r.dom.find((d) => d.kind === 'risk');
         const m = r.text.match(/Sharpe ratio (-?[\d.]+) · Beta \(β\) ([\d.]+) · Expected return \(μ\) ([\d.]+)% · Standard deviation \(σ\) ([\d.]+)%/);
-        if (!m || !card || card.svg !== 'ria-risk' || !/μ − σ/.test(card.text) || !/μ \+ σ/.test(card.text) || !/Sharpe ratio/.test(card.text) || !/not computed from NAV history/.test(r.text))
+        const kp = r.dom.find((d) => d.kind === 'kpis' && /Sharpe ratio/.test(d.text) && /Volatility \(σ\)/.test(d.text));
+        const contrib = r.charts.find((c) => c.kind === 'donut' && /Where the risk comes from/.test(c.title));
+        if (!m || !card || card.svg !== 'ria-risk' || !/μ − σ/.test(card.text) || !/μ \+ σ/.test(card.text) || !kp || !contrib || !/not computed from NAV history/.test(r.text))
           throw new Error(JSON.stringify({ card, text: r.text.slice(0, 500) }));
         const [mu, sigma, sharpe] = [Number(m[3]), Number(m[4]), Number(m[1])];
         if (Math.abs(sharpe - (mu - 6.5) / sigma) > 0.02) throw new Error('Sharpe ' + sharpe + ' is not (μ − 6.5) / σ');
@@ -514,11 +536,13 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       await step('GAB, bucket strategy, HUF ("huff suggestion"), trust & legacy: buckets on the real corpus, with a donut', async () => {
         const r = await askI('GAB bucket strategy huff suggestion and trust legacy planning for ZZ Intel Client');
         clean(r);
-        const need = [/Bucket 1 · 0–2Y Immediate cashflow & emergency: ₹1,88,500/, /Bucket 2 · 3–6Y Stability & income refill: ₹3,77,000/, /Bucket 3 · 7Y\+ Wealth growth: ₹13,19,500/,
-          /GAB SWP income: ₹6,283 to ₹7,854 a month/, /HUF \(Hindu Undivided Family\)/, /Private Family Trust/, /0 of 1 client have a nominee on file/];
+        const need = [/Bucket 1 · Immediate cash \(0–2Y\) \(15%\): ₹2,82,750/, /Bucket 2 · Medium-term stability \(3–6Y\) \(35%\): ₹6,59,750/, /Bucket 3 · Long-term growth \(7Y\+\) \(50%\): ₹9,42,500/,
+          /GAB SWP income: ₹6,283 to ₹7,854 a month/, /₹9,425 at 6%/, /HUF \(Hindu Undivided Family\)/, /Private Family Trust/, /0 of 1 client have a nominee on file/];
         const missing = need.filter((re) => !re.test(r.text)).map(String);
-        if (missing.length || !r.dom.some((d) => d.kind === 'donut' && /Bucket strategy/.test(d.text))) throw new Error(JSON.stringify({ missing, text: r.text.slice(0, 700) }));
-        return 'buckets ₹1,88,500 / ₹3,77,000 / ₹13,19,500; SWP ₹6,283–₹7,854 a month';
+        const titles = r.charts.map((c) => c.title).join(' | ');
+        if (missing.length || !r.dom.some((d) => d.kind === 'donut' && /Recommended 3-bucket split/.test(d.text)) || !/Recommended scheme allocation/.test(titles) || !/monthly SWP income/.test(titles)
+          || !/HUF: tax saving it adds/.test(titles) || !/Legacy readiness/.test(titles)) throw new Error(JSON.stringify({ missing, titles, text: r.text.slice(0, 700) }));
+        return 'split 15/35/50 → ₹2,82,750 / ₹6,59,750 / ₹9,42,500; charts: ' + r.charts.length + ' (split donut, scheme allocation, SWP, HUF, legacy)';
       });
 
       await step('future projection: 3 to 20 years at 9 / 12 / 15%, as a fan chart', async () => {
@@ -526,7 +550,8 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         clean(r);
         const ten = '10 years: ' + inr(fv(9, 10)) + ' / ' + inr(fv(12, 10)) + ' / ' + inr(fv(15, 10));
         const line = r.dom.find((d) => d.kind === 'line');
-        if (!r.text.includes(ten) || !line || line.svg !== 'ria-line' || !/20Y/.test(line.text)) throw new Error(JSON.stringify({ ten, text: r.text.slice(0, 600) }));
+        if (!r.text.includes(ten) || !line || line.svg !== 'ria-line' || !/20Y/.test(line.text) || !r.charts.some((c) => c.kind === 'donut' && /money put in vs wealth gained/.test(c.title)))
+          throw new Error(JSON.stringify({ ten, text: r.text.slice(0, 600) }));
         return ten;
       });
 
@@ -535,6 +560,41 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         clean(r);
         if (!r.intel || r.intel.scope.kind !== 'book' || r.intel.scope.clients !== 9 || !r.charts.some((c) => c.kind === 'risk')) throw new Error(JSON.stringify(r.intel));
         return r.intel.scope.label;
+      });
+
+      const sugg = async (q, want) => {
+        const r = await askI(q);
+        clean(r);
+        const kinds = r.charts.map((c) => c.kind), has = (k) => kinds.includes(k);
+        const bad = want.filter((k) => !has(k));
+        if (bad.length || !(has('donut') || has('donut2')) || !r.pdfButton || r.dom.length !== r.charts.length) throw new Error(JSON.stringify({ q, kinds, bad, scope: r.intel && r.intel.scope }));
+        return r;
+      };
+      await step('suggestion questions draw their suggestions: "give me suggestion of buckket strategy" (no client) — the 15/35/50 split on ₹1 crore', async () => {
+        const r = await sugg('give me suggestion of buckket strategy', ['kpis', 'donut', 'hbar']);
+        if (r.intel.scope.kind !== 'model' || !/₹15,00,000/.test(r.text) || !/₹35,00,000/.test(r.text) || !/₹50,00,000/.test(r.text) || !/ABSL Arbitrage/.test(r.text))
+          throw new Error(JSON.stringify({ scope: r.intel.scope, text: r.text.slice(0, 500) }));
+        return r.charts.map((c) => c.kind).join(' + ') + ' on ' + r.intel.scope.label;
+      });
+      await step('"suggestions of GAB, huff, trust, legacy" — split donut, scheme allocation, SWP and HUF charts', async () => {
+        const r = await sugg('suggestions of GAB, huff, trust, legacy', ['donut', 'hbar']);
+        const t = r.charts.map((c) => c.title).join(' | ');
+        if (r.intel.scope.kind !== 'model' || !/HUF: tax saving it adds/.test(t) || !/monthly SWP income/.test(t)) throw new Error(t);
+        return r.charts.length + ' charts';
+      });
+      await step('"risky to safe switch" across the book — current vs suggested donuts and the action charts', async () => {
+        const r = await sugg('risky to safe switch', ['donut2', 'hbar']);
+        if (r.intel.scope.kind !== 'book') throw new Error(JSON.stringify(r.intel.scope));
+        return r.charts.map((c) => c.kind).join(' + ');
+      });
+      await step('"tax harvesting" across the book — the gain pie and before / after', async () => {
+        const r = await sugg('tax harvesting', ['donut', 'hbar']);
+        return r.charts.map((c) => c.kind).join(' + ');
+      });
+      await step('"complete risk analysis" is the risk analysis: KPI cards, risk card, contribution donut', async () => {
+        const r = await sugg('complete risk analysis', ['kpis', 'risk', 'donut']);
+        if (r.intel.modules.join() !== 'risk') throw new Error(r.intel.modules.join());
+        return r.charts.map((c) => c.kind).join(' + ');
       });
 
       await step('one question, every chart, and the PDF report — on request and from the button — is a real PDF', async () => {
@@ -552,8 +612,8 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const f2 = fs.readFileSync(await d2.path());
         const info = await pg2.evaluate((i) => { const b = bossTurnPdfBlocks(i); const raw = pdfRender(b, { footer: RIA_PDF_FOOT });
           return { head: raw.slice(0, 5), blocks: b.length, kinds: [...new Set(b.map((x) => x.t))], text: b.map((x) => [x.text, x.label, x.value, x.title].concat((x.items || []).map((it) => it.label)).filter(Boolean).join(' ')).join(' | ') }; }, r.i);
-        const want = ['RIA AI Advisory Report', 'ZZ Intel Client', 'Executive summary', 'Asset allocation', 'Tax harvesting', 'Risk analytics', 'Bucket strategy', 'Future projection',
-          'Cross-sell', 'Std dev (sigma)', 'Mean return (mu)', 'Generated by RIA AI from live BOSS records. Human advisor approval required before execution.'];
+        const want = ['RIA AI Advisory Report', 'ZZ Intel Client', 'Executive summary', 'Asset allocation', 'Tax harvesting', 'Risk analytics', 'Future projection',
+          'Cross-sell', 'Std dev (sigma)', 'Mean return (mu)', 'Recommended 3-bucket split', 'Current vs suggested', 'Generated by RIA AI from live BOSS records. Human advisor approval required before execution.'];
         const missing = want.filter((w) => !info.text.includes(w));
         if (f1.slice(0, 5).toString() !== '%PDF-' || f2.slice(0, 5).toString() !== '%PDF-' || info.head !== '%PDF-' || missing.length || !['donut', 'bars', 'table', 'cards', 'meter'].every((k) => info.kinds.includes(k)))
           throw new Error(JSON.stringify({ h1: f1.slice(0, 8).toString(), h2: f2.slice(0, 8).toString(), missing, kinds: info.kinds }));
