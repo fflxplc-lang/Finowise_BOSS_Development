@@ -2850,6 +2850,7 @@ html,body{overflow-x:hidden;max-width:100%}
 .ria-tag{font-size:10px;font-weight:600;padding:2px 8px;border-radius:999px;background:rgba(242,92,42,.12);color:#C2410C;white-space:nowrap}
 .ria-suggest{border-color:rgba(242,92,42,.35)}
 .ria-kpi-card{padding:8px}
+.ria-sec{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#0F766E;margin:6px 2px -2px;border-top:1px solid var(--line);padding-top:8px}
 .ria-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
 .ria-kpi{border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
 .ria-kpi-l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
@@ -33038,6 +33039,14 @@ const PDF_C = {
   wash:  [0.996,0.984,0.969],   // #FFFBF7
   white: [1,1,1],
 };
+/* The advisory deck's own palette: navy and gold for the banner, and a
+   colour per series so no two bars or slices read the same. */
+const PDF_HEX = h => [parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255];
+const PDF_DECK = {navy: PDF_HEX('#123E4D'), gold: PDF_HEX('#F59E0B'), teal: PDF_HEX('#0F766E'), blue: PDF_HEX('#1D4ED8'), amber: PDF_HEX('#D97706'),
+  emerald: PDF_HEX('#059669'), violet: PDF_HEX('#7C3AED'), coral: PDF_HEX('#E11D48'), slate: PDF_HEX('#475569')};
+const PDF_PAL = ['teal', 'blue', 'amber', 'emerald', 'violet', 'coral', 'slate'].map(k=>PDF_DECK[k]);
+/* A colour washed toward white, for bands and panel headers. */
+function pdfTint(c, f){ return (c||PDF_C.ink).map(x=>x + (1 - x) * f); }
 /* The seven events, each with a colour and an emblem, so a family reading
    the report can tell one from another at a glance rather than by reading
    the heading. The emblem names are drawn by pdfEmblem below. */
@@ -33204,6 +33213,7 @@ function pdfRender(blocks, opts){
 
   (blocks||[]).forEach(b=>{
     if(!b) return;
+    if(b.keep) room(b.keep);                 // a heading that must not be stranded from what follows it
 
     /* ---- the cover ------------------------------------------------- */
     if(b.t==='cover'){
@@ -33252,6 +33262,171 @@ function pdfRender(blocks, opts){
         mid(String(line), PDF_W/2, fy2, 8, false, PDF_C.muted); fy2 += 12;
       });
       newPage();
+      return;
+    }
+    /* ---- the advisory deck: a banner across the top of page one ---- */
+    if(b.t==='banner'){
+      if(ops.length) newPage();
+      const h = 124, bg = b.bg || PDF_DECK.navy, gold = b.accent || PDF_DECK.gold;
+      box(0, PDF_H - h, PDF_W, h, bg, null, 0);
+      box(0, PDF_H - h - 4, PDF_W, 4, gold, null, 0);
+      if(b.kicker) at(fit(b.kicker, 8, true, usable), PDF_MARGIN, PDF_H - 32, 8, true, gold);
+      at(fit(b.title||'', 18.5, true, usable), PDF_MARGIN, PDF_H - 56, 18.5, true, PDF_C.white);
+      if(b.subtitle) at(fit(b.subtitle, 9.6, false, usable), PDF_MARGIN, PDF_H - 74, 9.6, false, [0.80,0.88,0.90]);
+      let cx = PDF_MARGIN; const cy = PDF_H - 104;
+      (b.chips||[]).forEach(c=>{
+        const w = pdfTextWidth(pdfText(c), 7.4, true) + 14;
+        if(cx + w > PDF_W - PDF_MARGIN) return;
+        box(cx, cy, w, 15, [0.141,0.349,0.420], null, 7.5); at(pdfText(c), cx + 7, cy + 4.6, 7.4, true, PDF_C.white); cx += w + 5;
+      });
+      y = PDF_H - h - 4 - 14;
+      return;
+    }
+    /* ---- a panel: a coloured section card with key rows and points ---- */
+    if(b.t==='panel'){
+      const tone = b.tone || PDF_DECK.teal, pad = 12, w = usable, kw = b.keyW || 150;
+      const rows = (b.rows||[]).map(([k,v])=>({k: String(k), v: pdfWrap(String(v), 8.6, false, w - kw - pad*2 - 6)}));
+      const pts = (b.lines||[]).map(t=>pdfWrap(String(t), 8.6, false, w - pad*2 - 12));
+      const h = 34 + rows.reduce((s,r)=>s + r.v.length*11 + 4, 0) + pts.reduce((s,l)=>s + l.length*11 + 3, 0) + 6;
+      room(h + 10); y -= h + 6;
+      box(PDF_MARGIN, y, w, h, PDF_C.white, PDF_C.line, 8);
+      box(PDF_MARGIN, y + h - 26, w, 26, pdfTint(tone, 0.86), null, 8);
+      box(PDF_MARGIN, y + h - 26, w, 12, pdfTint(tone, 0.86), null, 0);
+      box(PDF_MARGIN, y, 4, h, tone, null, 2);
+      at(fit(b.title||'', 10.5, true, w - 130), PDF_MARGIN + pad, y + h - 17, 10.5, true, tone);
+      if(b.badge){ const bw = pdfTextWidth(pdfText(b.badge), 7, true) + 12; box(PDF_MARGIN + w - bw - 10, y + h - 20, bw, 13, tone, null, 6.5); at(pdfText(b.badge), PDF_MARGIN + w - bw - 4, y + h - 16, 7, true, PDF_C.white); }
+      let yy = y + h - 40;
+      rows.forEach((r, i)=>{
+        if(i % 2) box(PDF_MARGIN + 6, yy - (r.v.length - 1)*11 - 4, w - 12, r.v.length*11 + 4, PDF_C.wash, null, 0);
+        at(fit(r.k, 8.6, true, kw - 4), PDF_MARGIN + pad, yy, 8.6, true, PDF_C.ink);
+        r.v.forEach((l, j)=>at(l, PDF_MARGIN + pad + kw, yy - j*11, 8.6, false, PDF_C.ink));
+        yy -= r.v.length*11 + 4;
+      });
+      pts.forEach(lines=>{ box(PDF_MARGIN + pad, yy + 2.2, 4, 4, tone, null, 2); lines.forEach((l, j)=>at(l, PDF_MARGIN + pad + 11, yy - j*11, 8.6, false, PDF_C.ink)); yy -= lines.length*11 + 3; });
+      y -= 4;
+      return;
+    }
+    /* ---- a donut on the left, its legend and share table on the right ---- */
+    if(b.t==='donutTable'){
+      const items = (b.items||[]).filter(it=>it && Number(it.value) > 0);
+      if(!items.length) return;
+      const total = items.reduce((s,it)=>s + Number(it.value), 0) || 1;
+      const R = 58, r = 35, rowH = 17, tblH = 18 + items.length*rowH, h = Math.max(R*2 + 14, tblH + 6);
+      room(h + 10); y -= h + 4;
+      const cx = PDF_MARGIN + R + 4, cy = y + h/2;
+      let a0 = Math.PI/2;
+      items.forEach((it, i)=>{ const a1 = a0 - Number(it.value)/total*Math.PI*2; put(['q', pdfCol(PDF_PAL[i % PDF_PAL.length])]); put(pdfArcOps(cx, cy, R, r, a1, a0)); put(['f', 'Q']); a0 = a1; });
+      if(b.centre!==undefined){ mid(fit(String(b.centre), 10.5, true, r*2 - 6), cx, cy + 1, 10.5, true, PDF_C.navy); if(b.centreNote) mid(String(b.centreNote), cx, cy - 10, 6.8, false, PDF_C.muted); }
+      const tx = PDF_MARGIN + R*2 + 22, tw = PDF_W - PDF_MARGIN - tx;
+      let ty = y + h - (h - tblH)/2;
+      box(tx, ty - 18, tw, 18, PDF_DECK.navy, null, 3);
+      at('CATEGORY', tx + 20, ty - 12, 7, true, PDF_C.white);
+      right(String(b.valueLabel || 'AMOUNT').toUpperCase(), tx + tw - 58, ty - 12, 7, true, PDF_C.white);
+      right('SHARE', tx + tw - 8, ty - 12, 7, true, PDF_C.white);
+      ty -= 18;
+      items.forEach((it, i)=>{
+        if(i % 2) box(tx, ty - rowH, tw, rowH, PDF_C.wash, null, 0);
+        box(tx + 6, ty - rowH + 5, 8, 8, PDF_PAL[i % PDF_PAL.length], null, 2);
+        at(fit(it.label, 8.2, false, tw - 140), tx + 20, ty - rowH + 5.6, 8.2, false, PDF_C.ink);
+        right(fit(String(it.display!==undefined ? it.display : it.value), 8.2, false, 70), tx + tw - 58, ty - rowH + 5.6, 8.2, false, PDF_C.ink);
+        right((Math.round(Number(it.value)/total*1000)/10) + '%', tx + tw - 8, ty - rowH + 5.6, 8.2, true, PDF_C.navy);
+        ty -= rowH;
+      });
+      y -= 6;
+      return;
+    }
+    /* ---- two donuts side by side: before and after ---- */
+    if(b.t==='donutPair'){
+      const labels = [...new Set((b.left.items||[]).concat(b.right.items||[]).map(i=>i.label))];
+      const col = l => PDF_PAL[labels.indexOf(l) % PDF_PAL.length];
+      const R = 52, r = 31, h = R*2 + 34;
+      room(h + 10); y -= h + 4;
+      [[b.left, PDF_MARGIN + usable*0.25], [b.right, PDF_MARGIN + usable*0.75]].forEach(([side, cx])=>{
+        const its = (side.items||[]).filter(i=>Number(i.value) > 0), tot = its.reduce((s,i)=>s + Number(i.value), 0) || 1, cy = y + R + 6;
+        let a0 = Math.PI/2;
+        its.forEach(it=>{ const a1 = a0 - Number(it.value)/tot*Math.PI*2; put(['q', pdfCol(col(it.label))]); put(pdfArcOps(cx, cy, R, r, a1, a0)); put(['f', 'Q']); a0 = a1; });
+        mid(pdfText(side.title||''), cx, y + h - 12, 10, true, PDF_C.navy);
+      });
+      put(['q', pdfCol(PDF_C.muted, true), '1.4 w', pdfNum(PDF_MARGIN + usable/2 - 18) + ' ' + pdfNum(y + R + 6) + ' m', pdfNum(PDF_MARGIN + usable/2 + 18) + ' ' + pdfNum(y + R + 6) + ' l', 'S',
+        pdfNum(PDF_MARGIN + usable/2 + 12) + ' ' + pdfNum(y + R + 12) + ' m', pdfNum(PDF_MARGIN + usable/2 + 18) + ' ' + pdfNum(y + R + 6) + ' l', pdfNum(PDF_MARGIN + usable/2 + 12) + ' ' + pdfNum(y + R) + ' l', 'S', 'Q']);
+      y -= 4;
+      return;
+    }
+    /* ---- grouped bars: one row per item, a bar per series, each its colour ---- */
+    if(b.t==='gbars'){
+      const rows = (b.rows||[]).filter(Boolean), n = Math.max(1, (b.series||[]).length);
+      if(!rows.length) return;
+      const labW = b.labelW || 170, valW = 78, trackW = usable - labW - valW - 10, bh = n > 1 ? 7 : 9, gap = 9, rowH = n*bh + (n - 1)*2 + gap;
+      const max = Math.max(1, ...rows.map(r2=>Math.max(...r2.values.map(v=>Math.abs(Number(v)||0)))));
+      const legendH = n > 1 ? 16 : 0, h = legendH + rows.length*rowH + 6;
+      room(h + 8); y -= 6;
+      if(n > 1){ let lx = PDF_MARGIN + labW; b.series.forEach((s, i)=>{ box(lx, y - 9, 8, 8, PDF_PAL[i % PDF_PAL.length], null, 2); at(fit(s, 7.6, false, 160), lx + 11, y - 7.8, 7.6, false, PDF_C.ink); lx += pdfTextWidth(pdfText(s), 7.6, false) + 26; }); y -= legendH; }
+      rows.forEach((r2, ri)=>{
+        at(fit(r2.label, 8.4, false, labW - 8), PDF_MARGIN, y - (n*bh + (n - 1)*2)/2 - 3, 8.4, false, PDF_C.ink);
+        r2.values.forEach((v, i)=>{
+          const by = y - (i + 1)*bh - i*2, w = Math.max(1.5, Math.abs(Number(v)||0)/max*trackW);
+          const c = n > 1 ? PDF_PAL[i % PDF_PAL.length] : PDF_PAL[ri % PDF_PAL.length];
+          box(PDF_MARGIN + labW, by, trackW, bh, PDF_C.light, null, bh/2);
+          box(PDF_MARGIN + labW, by, w, bh, c, null, bh/2);
+          right(fit(b.fmt ? b.fmt(v, r2) : String(v), 7.8, true, valW), PDF_W - PDF_MARGIN, by + 1, 7.8, true, c);
+        });
+        y -= rowH;
+      });
+      y -= 4;
+      return;
+    }
+    /* ---- lines over time: gridlines, a shaded band, legend, callouts ---- */
+    if(b.t==='lines'){
+      const H = b.h || 190, L = 58, T = 26, B = 22;
+      room(H + 14); y -= H + 6;
+      const x0 = PDF_MARGIN + L, x1 = PDF_W - PDF_MARGIN - 44, yb = y + B, yt = y + H - T;
+      const all = [].concat(...b.series.map(s=>s.points));
+      let mx = Math.max(...all) * 1.04, mn = b.fromZero === false ? Math.min(...all) * 0.94 : 0; if(mx <= mn) mx = mn + 1;
+      const X = i => x0 + (x1 - x0) * i / Math.max(1, b.xs.length - 1), Y = v => yb + (yt - yb) * (v - mn) / (mx - mn);
+      const fy = b.fmtY || (v => String(Math.round(v)));
+      for(let k = 0; k <= 4; k++){ const v = mn + (mx - mn)*k/4, yy = Y(v);
+        put(['q', pdfCol(PDF_C.line, true), '0.5 w', '[2 2] 0 d', pdfNum(x0) + ' ' + pdfNum(yy) + ' m', pdfNum(x1) + ' ' + pdfNum(yy) + ' l', 'S', 'Q']);
+        right(fit(fy(v), 7, false, L - 6), x0 - 5, yy - 2.5, 7, false, PDF_C.muted); }
+      b.xs.forEach((xv, i)=>mid(pdfText(b.xLabels ? b.xLabels[i] : String(xv)), X(i), y + 8, 7, false, PDF_C.muted));
+      const poly = pts => pts.map((v, i)=>pdfNum(X(i)) + ' ' + pdfNum(Y(v)) + (i ? ' l' : ' m'));
+      if(b.band){ const s1 = b.series[b.band[0]].points, s2 = b.series[b.band[1]].points;
+        const o = ['q', pdfCol(b.bandColor || pdfTint(PDF_PAL[2], 0.8))].concat(poly(s2));
+        for(let i = s1.length - 1; i >= 0; i--) o.push(pdfNum(X(i)) + ' ' + pdfNum(Y(s1[i])) + ' l');
+        o.push('h', 'f', 'Q'); put(o); }
+      if(b.area){ const s0 = b.series[0].points; const o = ['q', pdfCol(pdfTint(b.series[0].color || PDF_PAL[0], 0.85))].concat(poly(s0));
+        o.push(pdfNum(X(s0.length - 1)) + ' ' + pdfNum(yb) + ' l', pdfNum(X(0)) + ' ' + pdfNum(yb) + ' l', 'h', 'f', 'Q'); put(o); }
+      b.series.forEach((s, si)=>{
+        const c = s.color || PDF_PAL[si % PDF_PAL.length];
+        const o = ['q', pdfCol(c, true), (s.dashed ? '1.2' : '2') + ' w', '1 J', '1 j'].concat(s.dashed ? ['[4 3] 0 d'] : [], poly(s.points), ['S', 'Q']); put(o);
+        if(!s.dashed) s.points.forEach((v, i)=>{ put(['q', pdfCol(c)]); put(pdfCircleOps(X(i), Y(v), 1.9)); put(['f', 'Q']); });
+        if(b.callouts && !s.dashed){ const i = s.points.length - 1; at(fit(fy(s.points[i]), 7.2, true, 44), X(i) + 4, Y(s.points[i]) - 2.5, 7.2, true, c); }
+      });
+      let lx = x0; b.series.forEach((s, si)=>{ const c = s.color || PDF_PAL[si % PDF_PAL.length]; box(lx, y + H - 12, 8, 8, c, null, 2); at(fit(s.name, 7.4, false, 150), lx + 11, y + H - 10.6, 7.4, false, PDF_C.ink); lx += Math.min(150, pdfTextWidth(pdfText(s.name), 7.4, false)) + 22; });
+      if(b.badge){ const w = pdfTextWidth(pdfText(b.badge), 8, true) + 16; box(x0 + 6, yt - 22, w, 15, b.badgeTone==='bad' ? PDF_C.bad : PDF_C.ok, null, 7.5); at(pdfText(b.badge), x0 + 14, yt - 17.5, 8, true, PDF_C.white); }
+      y -= 4;
+      return;
+    }
+    /* ---- the bell curve of a year's return: mu - sigma, mu, mu + sigma ---- */
+    if(b.t==='bell'){
+      const H = 156; room(H + 12); y -= H + 4;
+      const mu = Number(b.mu)||0, sd = Math.max(0.3, Number(b.sigma)||0), lo = mu - 3*sd, hi = mu + 3*sd;
+      const x0 = PDF_MARGIN + 18, x1 = PDF_W - PDF_MARGIN - 18, base = y + 24, top = y + H - 34;
+      const X = v => x0 + (x1 - x0) * (v - lo) / (hi - lo), dens = v => Math.exp(-0.5 * Math.pow((v - mu)/sd, 2)), Yv = v => base + (top - base) * dens(v);
+      const o = ['q', pdfCol(pdfTint(PDF_PAL[1], 0.8)), pdfNum(X(mu - sd)) + ' ' + pdfNum(base) + ' m'];
+      for(let k = 0; k <= 30; k++){ const v = mu - sd + 2*sd*k/30; o.push(pdfNum(X(v)) + ' ' + pdfNum(Yv(v)) + ' l'); }
+      o.push(pdfNum(X(mu + sd)) + ' ' + pdfNum(base) + ' l', 'h', 'f', 'Q'); put(o);
+      const c = ['q', pdfCol(PDF_PAL[0], true), '1.8 w', '1 j'];
+      for(let k = 0; k <= 60; k++){ const v = lo + (hi - lo)*k/60; c.push(pdfNum(X(v)) + ' ' + pdfNum(Yv(v)) + (k ? ' l' : ' m')); }
+      c.push('S', 'Q'); put(c);
+      put(['q', pdfCol(PDF_C.line, true), '0.7 w', pdfNum(x0) + ' ' + pdfNum(base) + ' m', pdfNum(x1) + ' ' + pdfNum(base) + ' l', 'S', 'Q']);
+      [[mu - sd, 'mu - sigma', PDF_PAL[1]], [mu, 'mu', PDF_PAL[2]], [mu + sd, 'mu + sigma', PDF_PAL[1]]].forEach(([v, l, cc])=>{
+        put(['q', pdfCol(cc, true), '1.4 w', pdfNum(X(v)) + ' ' + pdfNum(base) + ' m', pdfNum(X(v)) + ' ' + pdfNum(Yv(v)) + ' l', 'S', 'Q']);
+        const lab = l + '  ' + (Math.round(v*10)/10) + '%';
+        if(v < mu) right(lab, X(v) - 5, Yv(v) + 2, 8, true, PDF_C.ink); else if(v > mu) at(lab, X(v) + 5, Yv(v) + 2, 8, true, PDF_C.ink); else mid(lab, X(v), Yv(v) + 6, 8, true, PDF_C.ink);
+      });
+      if(lo < 0 && hi > 0) mid('0%', X(0), base - 11, 7, false, PDF_C.muted);
+      at('About two years in three, the year’s return falls inside the shaded band (mu - sigma to mu + sigma).', PDF_MARGIN, y + 4, 7.6, false, PDF_C.muted);
+      y -= 4;
       return;
     }
     if(b.t==='pagebreak'){ if(ops.length) newPage(); return; }
@@ -59846,6 +60021,7 @@ const BOSS_STATUS_DONE = {kyc:{re:/^validated$/i, rule:'is not Validated'}, mand
    BOSS counts (it then goes to the planned read). */
 function bossCountIntent(q){
   if(!bossCountQuestion(q)) return null;
+  if(typeof riaIntelModules==='function' && riaIntelModules(q).length) return null;
   const one = w => w.replace(/ies$/,'y').replace(/([^s])s$/,'$1');
   const t = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').map(one).join(' ') + ' ';
   const src = / lead /.test(t) && can('LMS','view') ? 'leads' : 'clients';
@@ -60113,8 +60289,8 @@ async function bossRunChat(q){
   /* "Kis client ka kya sell karna hai": the book's signals, as computed. */
   if(!mktNames && !people.length && !(intel && intel.actions) && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
     data.portfolioSignals = lexiBookSignals().filter(x=>x.need).slice(0, 15).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
-      rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold').map(r=>r.action+': '+r.scheme+' ('+r.why+')')}));
-    data.marketZone = lexiZoneLabel();
+      rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold' && r.scheme && r.scheme!=='—').map(r=>r.action+': '+r.scheme+' ('+r.why+')')}));
+    const z = lexiZoneLabel(); if(!/not set/i.test(z)) data.marketZone = z;
   }
   if(people.length > 3) data.note = (people.length-3)+' more clients matched the name; ask for a fuller name to see them.';
   if(dash && dash.actions && dash.actions.length) data.suggestedActions = dash.actions.slice(0, 8).map(a=>({action:a.label, records:a.values[0]}));
@@ -60138,7 +60314,7 @@ async function bossRunChat(q){
   if(!r.ok){ if(shown) ai.turns.splice(ai.turns.indexOf(turn), 1); return {error: r.message}; }
   if(!shown){ ai.turns.push(turn); aiDrawPanel(); await bossTypeOut(turn, r.text); }
   const m = String(r.text||'').match(BOSS_OPEN_RE);
-  turn.content = bossStripOpen(r.text); delete turn.live;
+  turn.content = riaCleanText(bossStripOpen(r.text)); delete turn.live;
   if(m){
     const opened = bossOpen(m[1]);
     if(opened){ turn.opened = opened; ai.context = aiContextOf(); }
@@ -60705,7 +60881,7 @@ function lexiSignalsForAi(c){
   const s = lexiClientSignals(c);
   return {profile: s.profile || 'not recorded', marketZone: lexiZoneLabel(s.zone), allocationPct: {equity:s.pct[0], debt:s.pct[1], gold:s.pct[2]},
     strategicPct: s.target ? {equity:s.target.mix[0], debt:s.target.mix[1], gold:s.target.mix[2]} : null, totalValue: Math.round(s.total),
-    navDate: s.navDate || 'statement values', holdings: s.rows.map(r=>({scheme:r.scheme, category:r.cat, value:Math.round(r.value), action:r.action, why:r.why})),
+    navDate: s.navDate || 'statement values', holdings: s.rows.filter(r=>r.scheme && r.scheme!=='—').map(r=>({scheme:r.scheme, category:r.cat, value:Math.round(r.value), action:r.action, why:r.why})),
     rebalance: s.moves, note: s.zoneNote};
 }
 function lexiSignalsCard(c){
@@ -61307,6 +61483,9 @@ function lexiChartDraw(){
 /* LEXI AI: a question asking for a chart, and which grouping it names.
    Returns null when the question does not ask for a chart. */
 function bossChartIntent(q){
+  /* "Tax harvesting", "HUF suggestion", "risky to safe", "Sharpe"…: one of
+     the portfolio & wealth analyses, never a count of clients by tax status. */
+  if(typeof riaIntelModules==='function' && riaIntelModules(q).length) return null;
   const t = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9]+/g,' ') + ' ';
   if(!/ (chart|charts|graph|graphs|graphical|graphically|bar|pie|plot|visual|visually|visualise|visualize|visualisation|visualization|representation|breakdown|distribution|graf|analytics|dashboard|insights) /.test(t)) return null;
   if(/ (task|tasks|kaam|work|dst) /.test(t) && can('DST','view')){
@@ -61591,7 +61770,7 @@ function riaIntel(q, people){
   if(need('actions') || need('portfolio')){
     const sig = scope.clients.map(c=>lexiClientSignals(c)).filter(s=>s.rows.length);
     const count = {}; const list = [];
-    sig.forEach(s=>{ s.rows.forEach(r=>{ count[r.action] = (count[r.action]||0) + 1; if(r.action!=='Hold') list.push({client: clientDisplayName(s.client), action:r.action, scheme:r.scheme, why:r.why, value: riaR(r.value)}); });
+    sig.forEach(s=>{ s.rows.filter(r=>r.scheme && r.scheme!=='—').forEach(r=>{ count[r.action] = (count[r.action]||0) + 1; if(r.action!=='Hold') list.push({client: clientDisplayName(s.client), action:r.action, scheme:r.scheme, why:r.why, value: riaR(r.value)}); });
       s.moves.forEach(m=>{ const k = m.action + ' (rebalance)'; count[k] = (count[k]||0) + 1; list.push({client: clientDisplayName(s.client), action: m.action, scheme: m.asset + ' rebalance', why: m.why, value: riaR(m.amount)}); }); });
     const risky = positions.filter(p=>p.cat && ['small cap','mid cap','thematic'].includes(p.cat.id));
     const riskyVal = risky.reduce((s,p)=>s + p.current, 0), riskyPct = riaPct(riskyVal, total);
@@ -61932,98 +62111,165 @@ function riaChartHtml(ch){
 /* ---- the PDF report of a turn ---- */
 function riaPdfClean(s){
   return String(s||'').replace(/```[\s\S]*?```/g, '').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/`([^`]+)`/g, '$1')
-    .replace(/^#{1,6}\s*/gm, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/μ/g, 'mu').replace(/σ/g, 'sigma').replace(/β/g, 'beta');
+    .replace(/^#{1,6}\s*/gm, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/μ/g, 'mu').replace(/σ/g, 'sigma').replace(/β/g, 'beta')
+    .replace(/\s*\(drawn below\)/g, '');
+}
+/* An answer without the lines no answer should carry. */
+function riaCleanText(s){
+  return String(s||'').split('\n').filter(l=>!RIA_NOISE.test(l.replace(/^[\s>*•-]+/, '').replace(/\*\*/g, ''))).join('\n').replace(/\s*\(drawn below\)/g, '');
+}
+/* Lines no report should print. */
+const RIA_NOISE = /Market zone: not set|The category could not be read from the scheme name|^Review: —/;
+const RIA_MODULE_TITLES = {summary:'At a glance', portfolio:'Portfolio analysis', actions:'Buy · Sell · Hold · Switch & risky-to-safe', tax:'Tax harvesting',
+  opportunities:'Cross-sell & up-sell', risk:'Risk analysis', plan:'GAB, 3-bucket strategy, HUF & legacy', projection:'Future projection', analytics:'Analytics'};
+const RIA_MODULE_TONES = {portfolio:'teal', actions:'blue', tax:'amber', opportunities:'violet', risk:'coral', plan:'emerald', projection:'blue', analytics:'teal', summary:'teal'};
+/* One sentence per module, for the executive summary. */
+function riaFindings(x){
+  const f = [];
+  if(!x) return f;
+  const p = x.portfolio, a = x.actions, t = x.tax, o = x.opportunities, r = x.risk, g = x.plan, j = x.projection;
+  if(p) f.push(['Portfolio', p.classes.map(c=>c.label + ' ' + c.pct + '%').join(', ') + (p.annualised != null ? '; annualised ' + p.annualised + '%' + (p.vsNifty != null ? ' (' + (p.vsNifty >= 0 ? '+' : '') + p.vsNifty + '% vs the Nifty 50 reference)' : '') : '') + (p.flags.length ? '. ' + p.flags[0] : '.')]);
+  if(a){ const rs = a.riskySafe; f.push(['Buy / sell / switch', (Object.keys(a.counts||{}).map(k=>k + ' ' + a.counts[k]).join(', ') || 'No scheme-level signals') + (rs && rs.switchAmount ? '. Switch ' + money(rs.switchAmount) + ' from small / mid / thematic to safer funds (exit load ' + money(rs.exitLoad) + ', tax ' + money(rs.tax) + ').' : '.')]); }
+  if(t) f.push(['Tax harvesting', 'Unrealised equity gain ' + money(t.unrealisedEquityGain) + '; book ' + money(t.harvestTaxFree) + ' tax-free to save about ' + money(t.taxSaved) + ' this year.']);
+  if(o) f.push(['Opportunities', o.byType.length ? o.byType.slice(0, 4).map(b=>b.type.replace(/^(Up|Cross)-sell: /, '') + (x.scope.kind==='book' ? ' (' + b.clients + ')' : '')).join(', ') + '.' : 'No gaps found in the records.']);
+  if(r) f.push(['Risk', 'Sharpe ' + r.sharpe + ', beta ' + r.beta + ', volatility ' + r.sigma + '%, expected ' + r.expectedReturn + '% (range ' + r.low + '% to ' + r.high + '%). ' + r.fit]);
+  if(g) f.push(['GAB & buckets', g.buckets.map(b=>b.pct + '% ' + money(b.amount)).join(' / ') + '; SWP ' + money(g.gab.swpMonthly5) + ' a month at 5%; an HUF adds about Rs 15,625 a year of tax saving.']);
+  if(j){ const last = j.table[j.table.length - 1]; f.push(['Projection', 'In ' + last.years + ' years: ' + money(last.conservative) + ' / ' + money(last.moderate) + ' / ' + money(last.optimistic) + ' at 9% / 12% / 15%.']); }
+  return f;
+}
+/* The figures on the four cards across the top of page one. */
+function riaPdfKpis(t){
+  const x = t.intel, C = PDF_DECK;
+  if(x){
+    const p = x.portfolio, cls = p ? p.classes : null, r = x.risk, tx = x.tax, o = x.opportunities;
+    const pick = k => { const c = (cls||[]).find(z=>z.label===k); return c ? Math.round(c.pct) : 0; };
+    return [
+      {label: x.scope.kind==='book' ? 'Corpus · clients' : x.scope.kind==='model' ? 'Illustrative corpus' : 'Total corpus', value: riaCompact2(x.scope.kind==='model' ? (x.plan ? x.plan.corpus : 0) : x.total),
+       note: x.scope.kind==='book' ? riaN(x.scope.clients) + ' clients' : x.scope.kind==='model' ? 'illustration' : 'invested ' + money(x.invested), accent: C.teal},
+      {label:'Eq : Debt : Hybrid', value: cls ? pick('Equity') + ' : ' + pick('Debt') + ' : ' + pick('Hybrid') : (x.plan ? '15 : 35 : 50' : '—'), note: cls ? 'Gold ' + pick('Gold/Commodities') + '%, cash ' + pick('Liquid/Cash') + '%' : x.plan ? 'bucket split' : '', accent: C.blue},
+      {label:'Sharpe · Beta', value: r ? r.sharpe + ' · ' + r.beta : '—', note: r ? 'volatility ' + r.sigma + '% · ' + r.level.toLowerCase() : 'ask for risk analysis', accent: C.amber},
+      {label: tx ? 'Tax saved this year' : 'Opportunities', value: tx ? money(tx.taxSaved) : o ? riaN(o.byType.reduce((n,b)=>n + b.clients, 0)) : x.plan ? 'Rs 15,625' : '—',
+       note: tx ? 'by harvesting ' + money(tx.harvestTaxFree) : o ? o.byType.length + ' kinds' : x.plan ? 'extra with an HUF' : '', accent: C.emerald}];
+  }
+  const k = (t.charts||[]).find(c=>c.kind==='kpis');
+  return k ? k.items.slice(0, 4).map((it, i)=>({label: it.label, value: String(it.value), note: it.note, accent: [C.teal, C.blue, C.amber, C.emerald][i]})) : [];
+}
+/* Each chart as the deck draws it, with its table beside or under it. */
+function riaPdfChart(ch, b){
+  const tbl = (cols, rows) => ({t:'table', cols: cols.map((c,k)=>({label:c, w: k ? 1 : 2, bold: !k})), rows});
+  const sumOf = it => it.reduce((s,z)=>s + Number(z.value), 0);
+  const val = (v, fmt) => fmt==='count' ? riaN(v) : fmt==='pct' ? (Math.round(v*10)/10) + '%' : money(v);
+  if(ch.kind==='kpis'){ b.push({t:'cards', items: ch.items.map((it, i)=>({label: riaPdfClean(it.label), value: riaPdfClean(String(it.value)), note: it.note ? riaPdfClean(it.note) : undefined, accent: PDF_PAL[i % PDF_PAL.length]}))}); return; }
+  const keep = ch.kind==='donut' ? 210 : ch.kind==='donut2' ? 240 : ch.kind==='line' || ch.kind==='area' ? 290 : ch.kind==='risk' ? 270
+    : Math.min(300, 80 + (ch.rows||[]).length * (ch.series && ch.series.length > 1 ? 26 : 20));
+  b.push({t:'h3', text: riaPdfClean(ch.title), keep});
+  if(ch.sub) b.push({t:'p', text: riaPdfClean(ch.sub), size: 8.4, gray: 0.38});
+  if(ch.kind==='donut'){
+    const tot = sumOf(ch.items);
+    b.push({t:'donutTable', valueLabel: ch.fmt==='count' ? 'Count' : ch.fmt==='pct' ? 'Share of risk' : 'Amount',
+      centre: ch.fmt==='count' ? riaN(tot) : ch.fmt==='pct' ? riaPdfClean(String(ch.centre||'')) : riaCompact2(tot), centreNote: ch.centreNote || 'total',
+      items: ch.items.map(it=>({label: riaPdfClean(it.label), value: Number(it.value), display: ch.fmt==='pct' ? it.value + '%' : val(it.value, ch.fmt)}))});
+  } else if(ch.kind==='donut2'){
+    b.push({t:'donutPair', left: ch.left, right: ch.right});
+    const labels = [...new Set(ch.left.items.concat(ch.right.items).map(i=>i.label))];
+    const pc = (side, l) => { const it = side.items.find(i=>i.label===l); return it ? Math.round(it.value / (sumOf(side.items)||1) * 1000) / 10 : 0; };
+    b.push(tbl(['Asset class', ch.left.title, ch.right.title, 'Change'], labels.map(l=>{ const d = Math.round((pc(ch.right, l) - pc(ch.left, l)) * 10) / 10; return [l, pc(ch.left, l) + '%', pc(ch.right, l) + '%', (d > 0 ? '+' : '') + d + '%']; })));
+  } else if(ch.kind==='line' || ch.kind==='area'){
+    const xl = typeof ch.xLabel==='function' ? ch.xLabel : (v=>v ? v + 'Y' : 'Now');
+    const fan = ch.kind==='line' && ch.series.length >= 3;
+    b.push({t:'lines', xs: ch.xs, xLabels: ch.xs.map(xl), fmtY: v=>riaCompact(v), callouts: true, badge: ch.badge, badgeTone: ch.badgeTone,
+      fromZero: ch.kind!=='area', area: ch.kind==='area', band: fan ? [0, 2] : null,
+      series: ch.series.map((s, si)=>({name: riaPdfClean(s.name), points: s.points, dashed: !!s.dashed, color: s.dashed ? PDF_DECK.slate : ch.kind==='area' ? [PDF_DECK.amber, PDF_DECK.navy][si] : PDF_PAL[si % PDF_PAL.length]}))});
+    const idx = ch.xs.length > 8 ? ch.xs.map((_, k)=>k).filter(k=>k % Math.ceil(ch.xs.length / 6)===0 || k===ch.xs.length - 1) : ch.xs.map((_, k)=>k);
+    b.push(tbl(['Milestone'].concat(ch.series.map(s=>riaPdfClean(s.name))), idx.map(k=>[xl(ch.xs[k])].concat(ch.series.map(s=>money(s.points[k]))))));
+  } else if(ch.kind==='risk'){
+    const m = ch.metrics;
+    b.push({t:'bell', mu: m.expectedReturn, sigma: m.sigma});
+    b.push({t:'meter', label:'Portfolio risk level: ' + m.level, pct: (ch.levelIdx + 1) / 5, note: m.level, tone: [PDF_C.ok, PDF_C.ok, PDF_C.warn, PDF_C.bad, PDF_C.bad][ch.levelIdx] || PDF_C.warn});
+    b.push(tbl(['Measure', 'Value'], [['Expected return (mu)', m.expectedReturn + '%'], ['Volatility (sigma)', m.sigma + '%'], ['Sharpe ratio', String(m.sharpe)], ['Beta vs Nifty 50', String(m.beta)],
+      ['One-sigma range', m.low + '% to ' + m.high + '%'], ['Client risk profile', m.profile], ['Fit', m.fit], ['Diversification score', m.diversificationScore + ' / 100']]));
+  } else {
+    const txt = ch.rows.some(r=>r.text!=null);
+    if(txt) b.push(tbl(['Item', 'Detail'], ch.rows.map(r=>[riaPdfClean(r.label), riaPdfClean(r.text)])));
+    else {
+      b.push({t:'gbars', series: ch.series, rows: ch.rows.slice(0, 16).map(r=>({label: riaPdfClean(r.label), values: r.values})), fmt: v=>val(v, ch.fmt), labelW: ch.rows.some(r=>String(r.label).length > 30) ? 200 : 160});
+      if(ch.series.length > 1) b.push(tbl(['Item'].concat(ch.series), ch.rows.map(r=>[riaPdfClean(r.label)].concat(r.values.map(v=>val(v, ch.fmt))))));
+    }
+  }
 }
 function bossTurnPdfBlocks(i){
   const t = ai.turns[i];
   if(!t || t.role!=='assistant') return null;
   const x = t.intel || null;
-  const q = (ai.turns.slice(0, i).reverse().find(u=>u.role==='user') || {}).content || '';
+  const charts = t.charts || [];
+  const scope = x ? x.scope.label : (t.chart ? t.chart.title : 'RIA AI answer');
+  const mods = [...new Set(charts.map(c=>c.module).filter(m=>m && m!=='summary'))];
+  const short = {portfolio:'Portfolio', actions:'Buy / Sell / Switch', tax:'Tax harvesting', opportunities:'Cross-sell', risk:'Risk', plan:'GAB & buckets', projection:'Projection', analytics:'Analytics'};
+  const chips = mods.map(m=>short[m] || RIA_MODULE_TITLES[m] || m).slice(0, 8);
+  const who = typeof teamName==='function' ? teamName(currentUser) : '';
   const b = [];
-  b.push({t:'title', text:'RIA AI Advisory Report'});
-  b.push({t:'kv', label:'Scope', value: x ? x.scope.label : (t.chart ? t.chart.title : 'RIA AI answer')});
-  b.push({t:'kv', label:'Date', value: fmtDate(new Date().toISOString().slice(0,10))});
-  b.push({t:'kv', label:'Prepared by', value: (typeof teamName==='function' ? teamName(currentUser) : '') + ' with RIA AI (BOSS)'});
-  if(q) b.push({t:'kv', label:'Question', value: q});
-  const short = v => money(v).length > 9 ? riaCompact2(v) : money(v);
-  if(x) b.push({t:'cards', items:[{label:'Portfolio value', value: short(x.total), note: money(x.total)}, {label:'Invested', value: short(x.invested), note: money(x.invested)}, {label:'Monthly SIP', value: short(x.monthlySip)},
-    {label:'Risk profile', value: x.profile || (x.scope.kind==='book' ? 'Book' : 'Not recorded')}]});
-  b.push({t:'band', text:'Executive summary & AI advisory notes'});
-  riaPdfClean(t.content).split('\n').map(l=>l.trim()).filter(Boolean).forEach(l=>{
-    if(/^[-*•]\s+/.test(l)) b.push({t:'bullet', text: l.replace(/^[-*•]\s+/, '')});
-    else if(/^\d+\.\s+/.test(l)) b.push({t:'bullet', text: l});
-    else b.push({t:'p', text: l});
-  });
-  const tbl = (cols, rows) => ({t:'table', cols: cols.map((c,k)=>({label:c, w: k ? 1 : 2, bold: !k})), rows});
-  if(t.chart && t.chart.rows && !(t.charts && t.charts.length)){
-    b.push({t:'band', text: t.chart.title});
-    b.push({t:'bars', items: t.chart.rows.slice(0, 14).map(r=>({label:r.label, value:r.count, note:String(r.count)}))});
+  b.push({t:'banner', kicker:'RIA AI  ·  PRIVATE WEALTH ADVISORY', title:'Finowise · Freedom LifeX Wealth Advisory Report',
+    subtitle: 'Scope: ' + scope + '  ·  ' + fmtDate(new Date().toISOString().slice(0,10)) + (who && who!=='—' ? '  ·  Prepared by ' + who : ''), chips: chips.length ? chips : ['Analytics']});
+  const k = riaPdfKpis(t);
+  if(k.length) b.push({t:'cards', items: k, per: 4});
+  const found = riaFindings(x);
+  if(found.length) b.push({t:'panel', title:'Executive summary', badge: found.length + ' areas', tone: PDF_DECK.teal, rows: found, keyW: 118});
+  else if(t.chart || charts.length){
+    const d = charts.find(c=>c.kind==='donut'), acts = charts.find(c=>c.suggest);
+    const rows = [];
+    if(d){ const tot = d.items.reduce((s,z)=>s + z.value, 0) || 1; d.items.slice(0, 4).forEach(it=>rows.push([riaPdfClean(it.label), riaN(it.value) + ' (' + Math.round(it.value / tot * 1000) / 10 + '%)'])); }
+    if(acts) acts.rows.slice(0, 3).forEach(r=>rows.push(['Next: ' + r.label, riaN(r.values[0])]));
+    if(rows.length) b.push({t:'panel', title:'Executive summary', tone: PDF_DECK.teal, rows, keyW: 220});
   }
-  (t.charts||[]).forEach(ch=>{
-    b.push({t:'band', text: riaPdfClean(ch.title), sub: ch.sub ? riaPdfClean(ch.sub) : undefined});
-    if(ch.kind==='kpis'){
-      b.push({t:'cards', items: ch.items.map(it=>({label: riaPdfClean(it.label), value: riaPdfClean(String(it.value)), note: it.note ? riaPdfClean(it.note) : undefined}))});
-    } else if(ch.kind==='donut2'){
-      [ch.left, ch.right].forEach(side=>{ b.push({t:'h3', text: side.title}); b.push({t:'donut', items: side.items.map(it=>({label:it.label, value:it.value})), centre: side.title}); });
-      const labels = [...new Set(ch.left.items.concat(ch.right.items).map(i=>i.label))], tot = it => it.reduce((s2,i)=>s2 + i.value, 0) || 1;
-      const pc = (side, l) => { const it = side.items.find(i=>i.label===l); return it ? Math.round(it.value / tot(side.items) * 1000) / 10 + '%' : '0%'; };
-      b.push(tbl(['Asset class', ch.left.title, ch.right.title], labels.map(l=>[l, pc(ch.left, l), pc(ch.right, l)])));
-    } else if(ch.kind==='area'){
-      if(ch.badge) b.push({t:'note', title:'Benchmark', text: ch.badge});
-      const xl = typeof ch.xLabel==='function' ? ch.xLabel : (v=>v + 'Y');
-      b.push(tbl(['Year'].concat(ch.series.map(s2=>s2.name)), ch.xs.map((n,k)=>[xl(n)].concat(ch.series.map(s2=>money(s2.points[k]))))));
-    } else if(ch.kind==='donut'){
-      b.push({t:'donut', items: ch.items.map(it=>({label:it.label, value:it.value})), centre: ch.fmt==='count' ? riaN(ch.items.reduce((s,z)=>s+z.value,0)) : ch.fmt==='pct' ? riaPdfClean(String(ch.centre||'')) : riaCompact2(ch.items.reduce((s,z)=>s+z.value,0)), centreNote: ch.centreNote || 'total'});
-      b.push(tbl(['Part', ch.fmt==='count' ? 'Count' : ch.fmt==='pct' ? 'Share of risk' : 'Amount', 'Share'], ch.items.map(it=>[it.label, ch.fmt==='count' ? riaN(it.value) : ch.fmt==='pct' ? it.value + '%' : money(it.value), riaPct(it.value, ch.items.reduce((s,z)=>s+z.value,0)) + '%'])));
-    } else if(ch.kind==='line'){
-      b.push(tbl(['Horizon'].concat(ch.series.map(s=>s.name)), ch.xs.map((n,k)=>[n ? n + ' years' : 'Now'].concat(ch.series.map(s=>money(s.points[k]))))));
-      const last = ch.xs.length - 1;
-      b.push({t:'bars', items: ch.series.map(s=>({label: s.name + ' at ' + ch.xs[last] + 'Y', value: s.points[last], note: money(s.points[last])}))});
-    } else if(ch.kind==='risk'){
-      const m = ch.metrics;
-      b.push({t:'cards', items:[{label:'Sharpe ratio', value: String(m.sharpe)}, {label:'Beta vs Nifty', value: String(m.beta)},
-        {label:'Mean return (mu)', value: m.expectedReturn + '%'}, {label:'Std dev (sigma)', value: m.sigma + '%'}]});
-      b.push({t:'bars', items:[{label:'mu - sigma', value: Math.max(0.1, m.low), note: m.low + '%'}, {label:'mu (expected)', value: m.expectedReturn, note: m.expectedReturn + '%'},
-        {label:'mu + sigma', value: m.high, note: m.high + '%'}]});
-      b.push({t:'meter', label:'Portfolio risk level: ' + m.level, pct: (ch.levelIdx + 1) / 5, note: m.level, tone: [PDF_C.ok, PDF_C.ok, PDF_C.warn, PDF_C.bad, PDF_C.bad][ch.levelIdx] || PDF_C.warn});
-      b.push(tbl(['Measure', 'Value'], [['Client risk profile', m.profile], ['Fit', m.fit], ['Diversification score', m.diversificationScore + ' / 100'], ['Risk-free rate', m.riskFree + '%']]));
-    } else {
-      const txt = ch.rows.some(r=>r.text!=null);
-      if(!txt) b.push({t:'bars', items: ch.rows.map(r=>({label: r.label + (ch.series.length > 1 ? ' (' + ch.series[ch.series.length-1] + ')' : ''), value: r.values[r.values.length-1],
-        note: riaFmt(r.values[r.values.length-1], ch.fmt)}))});
-      b.push(txt ? tbl(['Item', 'Detail'], ch.rows.map(r=>[r.label, r.text])) : tbl(['Item'].concat(ch.series), ch.rows.map(r=>[r.label].concat(r.values.map(v=>riaFmt(v, ch.fmt)).concat(r.note ? [] : [])))));
+  /* A section per module, each chart beside its table. */
+  const order = ['summary', 'analytics', 'portfolio', 'actions', 'tax', 'opportunities', 'risk', 'plan', 'projection'];
+  const byMod = {}; charts.forEach(c=>{ const m = c.module || 'analytics'; (byMod[m] = byMod[m] || []).push(c); });
+  order.concat(Object.keys(byMod).filter(m=>!order.includes(m))).forEach(m=>{
+    const list = byMod[m]; if(!list || !list.length) return;
+    if(m==='summary') return;                                        // already the cards above
+    b.push({t:'band', text: RIA_MODULE_TITLES[m] || m});
+    if(x){
+      const tone = PDF_DECK[RIA_MODULE_TONES[m]] || PDF_DECK.teal;
+      if(m==='actions' && x.actions && x.actions.riskySafe.switchAmount){ const r = x.actions.riskySafe;
+        b.push({t:'panel', title:'Risky-to-safe switch', badge:'Suggestion', tone, rows: [['Small / mid / thematic', r.riskyPct + '% of the portfolio (ceiling ' + r.capPct + '%)'], ['Switch', money(r.switchAmount) + ' into ' + r.to.map(z=>z.category + ' ' + money(z.amount)).join(', ')],
+          ['Exit load', money(r.exitLoad) + ' (1% on units held under 12 months)'], ['Capital gains tax', money(r.tax)]], lines: [RIA_GOVERNANCE]}); }
+      if(m==='tax' && x.tax) b.push({t:'panel', title:'Harvesting plan', badge:'Rs 1.25 lakh a year', tone, rows: [['Long-term gain', money(x.tax.longTermGain)], ['Short-term gain', money(x.tax.shortTermGain)],
+        ['Book tax-free now', money(x.tax.harvestTaxFree) + ' — saves about ' + money(x.tax.taxSaved)], ['Losses to set off', money(x.tax.losses)]], lines: [riaPdfClean(x.tax.rules)]});
+      if(m==='plan' && x.plan) b.push({t:'panel', title:'3-bucket plan, GAB, HUF & legacy', badge: x.plan.illustrative ? 'Illustration' : 'On the corpus', tone,
+        rows: x.plan.buckets.map(z=>[z.name.replace(/^Bucket (\d) · /, 'Bucket $1: '), z.pct + '% · ' + money(z.amount) + ' · ' + z.categories])
+          .concat([['GAB SWP income', money(x.plan.gab.swpMonthly4) + ' to ' + money(x.plan.gab.swpMonthly6) + ' a month (4% to 6% a year)'], ['HUF', 'Its own Rs 1.25 lakh LTCG allowance: about Rs 15,625 more saved a year']]),
+        lines: x.plan.legacy.checks.map(riaPdfClean), keyW: 130});
+      if(m==='risk' && x.risk) b.push({t:'cards', items:[{label:'Sharpe ratio', value: String(x.risk.sharpe), accent: PDF_DECK.teal}, {label:'Beta vs Nifty', value: String(x.risk.beta), accent: PDF_DECK.blue},
+        {label:'Mean return (mu)', value: x.risk.expectedReturn + '%', accent: PDF_DECK.amber}, {label:'Std dev (sigma)', value: x.risk.sigma + '%', accent: PDF_DECK.emerald}], per: 4});
     }
+    list.forEach(ch=>{ if(ch.kind==='kpis' && (m==='risk' || m==='plan')) return; riaPdfChart(ch, b); });
+    if(x && m==='portfolio' && x.portfolio && x.portfolio.topSchemes.length){ b.push({t:'h3', text:'Top schemes'});
+      b.push({t:'table', cols:[{label:'Scheme', w:2, bold:true}, {label:'Value', w:1}, {label:'Weight', w:1}], rows: x.portfolio.topSchemes.map(s=>[s.label, money(s.value), s.pct + '%'])}); }
+    if(x && m==='actions' && x.actions && x.actions.list.length){ b.push({t:'h3', text:'Actions by holding'});
+      b.push({t:'table', cols:[{label:'Client · scheme', w:2, bold:true}, {label:'Action', w:1}, {label:'Value', w:1}], rows: x.actions.list.filter(a2=>!RIA_NOISE.test(a2.why)).slice(0, 15).map(a2=>[a2.client + ' · ' + a2.scheme, a2.action, money(a2.value)])}); }
+    if(x && m==='opportunities' && x.opportunities && x.opportunities.examples.length){ b.push({t:'h3', text:'Where the openings are'});
+      b.push({t:'table', cols:[{label:'Client · opportunity', w:2, bold:true}, {label:'Amount', w:1}, {label:'Why', w:2}], rows: x.opportunities.examples.slice(0, 15).map(e=>[e.client + ' · ' + e.opportunity.replace(/^(Up|Cross)-sell: /, ''), e.amount ? money(e.amount) : '—', e.why])}); }
   });
-  if(x){
-    if(x.portfolio && x.portfolio.topSchemes.length) { b.push({t:'h3', text:'Top schemes'}); b.push(tbl(['Scheme', 'Value', 'Weight'], x.portfolio.topSchemes.map(s=>[s.label, money(s.value), s.pct + '%']))); }
-    if(x.portfolio && x.portfolio.flags.length) x.portfolio.flags.forEach(f=>b.push({t:'note', title:'Concentration', text:f}));
-    if(x.actions && x.actions.list.length){ b.push({t:'h3', text:'Buy / Sell / Hold / Switch actions'}); b.push(tbl(['Client · scheme', 'Action', 'Value'], x.actions.list.slice(0, 20).map(a=>[a.client + ' · ' + a.scheme, a.action, money(a.value)]))); }
-    if(x.actions && x.actions.riskySafe.switchAmount){ const r = x.actions.riskySafe; b.push({t:'h3', text:'Risky-to-safe switch'});
-      b.push(tbl(['Into', 'Amount'], r.to.map(z=>[z.category, money(z.amount)]).concat([['Exit load (1% if held under 12 months)', money(r.exitLoad)], ['Estimated capital gains tax', money(r.tax)]]))); }
-    if(x.tax){ b.push({t:'h3', text:'Tax harvesting'}); b.push({t:'p', text: riaPdfClean(x.tax.rules)}); if(x.tax.rows.length) b.push(tbl(['Scheme', 'Gain', 'Term'], x.tax.rows.map(r=>[r.scheme, money(r.gain), r.term]))); }
-    if(x.opportunities && x.opportunities.examples.length){ b.push({t:'h3', text:'Cross-sell & up-sell'}); b.push(tbl(['Client · opportunity', 'Amount', 'Why'], x.opportunities.examples.slice(0, 20).map(e=>[e.client + ' · ' + e.opportunity, e.amount ? money(e.amount) : '—', e.why]))); }
-    if(x.risk) b.push({t:'p', text: riaPdfClean(x.risk.method)});
-    if(x.plan){ b.push({t:'h3', text:'GAB, bucket strategy, HUF, trust & legacy'});
-      b.push(tbl(['Bucket', 'Amount', 'Categories'], x.plan.buckets.map(z=>[z.name, money(z.amount), z.categories])));
-      b.push({t:'kv', label:'GAB SWP income', value: money(x.plan.gab.swpMonthly4) + ' to ' + money(x.plan.gab.swpMonthly5) + ' a month (4–5% a year)'});
-      b.push({t:'p', text: riaPdfClean(x.plan.gab.note)}); b.push({t:'p', text: riaPdfClean(x.plan.huf.note)});
-      x.plan.legacy.checks.forEach(c=>b.push({t:'bullet', text: riaPdfClean(c)})); }
-    if(x.projection){ b.push({t:'h3', text:'Projection milestones'}); b.push(tbl(['Horizon', 'Conservative 9%', 'Moderate 12%', 'Optimistic 15%'], x.projection.table.map(r=>[r.years + ' years', money(r.conservative), money(r.moderate), money(r.optimistic)])));
-      if(x.projection.goals.length) b.push(tbl(['Goal', 'Target', 'Achieved at 12%'], x.projection.goals.map(g=>[g.goal + ' (' + g.year + ')', money(g.target), g.achievementPct + '%']))); }
+  if(t.chart && t.chart.rows && !charts.length){
+    b.push({t:'band', text: riaPdfClean(t.chart.title)});
+    b.push({t:'donutTable', valueLabel:'Count', centre: riaN(t.chart.rows.reduce((s,r)=>s + r.count, 0)), items: t.chart.rows.slice(0, 10).map(r=>({label: r.label, value: r.count, display: riaN(r.count)}))});
   }
+  /* The advisor's notes, short, at the end — not a wall of bullets up front. */
+  const notes = riaPdfClean(t.content).split('\n').map(l=>l.replace(/^[-*•]\s+|^\d+\.\s+/, '').trim()).filter(l=>l && !RIA_NOISE.test(l) && l.length > 3);
+  if(notes.length) b.push({t:'panel', title:'RIA AI advisory notes', tone: PDF_DECK.slate, lines: notes.slice(0, 12).concat(notes.length > 12 ? ['…and more in the chat answer.'] : [])});
   b.push({t:'note', title:'Compliance', text: RIA_PDF_FOOT + ' ' + RIA_GOVERNANCE});
   return b;
 }
 function bossTurnPdfName(i){
   const t = ai.turns[i] || {}, x = t.intel;
-  const who = x ? x.scope.label : 'RIA-AI';
+  const who = x ? x.scope.label : (t.chart ? t.chart.title : 'RIA-AI');
   return ('RIA-AI-Report-' + who + '-' + new Date().toISOString().slice(0,10)).replace(/[^A-Za-z0-9-]+/g, '-').replace(/-+/g, '-') + '.pdf';
 }
 function bossDownloadTurnPdf(i){
   const blocks = bossTurnPdfBlocks(i);
   if(!blocks) return null;
   const name = bossTurnPdfName(i);
-  downloadPdf(blocks, name, {title:'RIA AI Advisory Report', footer: RIA_PDF_FOOT});
+  downloadPdf(blocks, name, {title:'Finowise · Freedom LifeX Wealth Advisory Report', footer: RIA_PDF_FOOT});
   return {filename: name, blocks: blocks.length};
 }
 
@@ -62108,10 +62354,23 @@ const RIA_SEGMENTS = {
     },
     actions: {'SIP under ₹10k a month':'SIP step-up', 'AUM, no active SIP':'Start a SIP', 'No AUM, no SIP':'First investment'},
   },
+  tax: {
+    of(c){
+      const s = String(bossTaxStatus(c) || '').trim();
+      if(s) return s;
+      const pan = String(c.pan || '').trim().toUpperCase();
+      if(/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) return RIA_PAN_HOLDER[pan[3]] || 'Other (from PAN)';
+      return pan ? 'PAN on file — tax status not recorded' : 'PAN missing — tax status not known';
+    },
+    actions: {'PAN missing — tax status not known':'Collect the PAN', 'PAN on file — tax status not recorded':'Record the tax status'},
+  },
   iin: {done: /^IIN active$/i, actions: {'No IIN':'Register the IIN / UCC', 'IIN not active':'Complete IIN activation', 'IIN, activation not recorded':'Check IIN activation'}},
   nominee: {done: /^Nominee registered$/, actions: {'No nominee':'Register a nominee'}},
   goals: {done: /^Goals mapped$/, actions: {'No goals mapped':'Map goals (7 Events / GAB)'}},
 };
+/* The fourth letter of a PAN says who holds it. */
+const RIA_PAN_HOLDER = {P:'Individual (from PAN)', H:'HUF (from PAN)', C:'Company (from PAN)', F:'Firm / LLP (from PAN)', T:'Trust (from PAN)',
+  A:'AOP (from PAN)', B:'BOI (from PAN)', G:'Government (from PAN)', J:'Artificial juridical person (from PAN)', L:'Local authority (from PAN)'};
 const RIA_EXTRA_DIMS = [{id:'sip', label:'SIP status', words:['sip','sips'], value: c=>RIA_SEGMENTS.sip.of(c)}];
 const RIA_PENDING_RULE = {kyc:'is not KYC validated', mandate:'is not Mandate approved', iin:'is not IIN active', nominee:'has no nominee registered', goals:'has no goals mapped'};
 function riaDimValue(src, dim){
@@ -62240,7 +62499,10 @@ function riaDashHtml(charts){
   const groups = [...new Set(charts.map(riaGroupOf))].filter(g=>g!=='kpis');
   const names = {pie:'Pie', trend:'Trend', bars:'Breakdown', actions:'Suggestions'};
   const tabs = groups.length > 1 ? `<div class="ria-dash-tabs" role="tablist"><button class="ria-dash-tab on" onclick="riaDashFilter(this,'all')">All</button>${groups.map(g=>`<button class="ria-dash-tab" onclick="riaDashFilter(this,'${g}')">${names[g]||g}</button>`).join('')}</div>` : '';
-  return `<div class="ria-dash">${tabs}${charts.map(riaChartHtml).join('')}</div>`;
+  const many = new Set(charts.map(c=>c.module).filter(m=>m && m!=='summary')).size > 1;
+  let last = '';
+  const body = charts.map(c=>{ const m = c.module || ''; const head = many && m && m!=='summary' && m!==last ? `<div class="ria-sec" data-group="kpis">${esc(RIA_MODULE_TITLES[m] || m)}</div>` : ''; if(m && m!=='summary') last = m; return head + riaChartHtml(c); }).join('');
+  return `<div class="ria-dash">${tabs}${body}</div>`;
 }
 function riaKpisSvgHtml(ch){
   const tone = {warn:'#B45309', ok:'#047857', bad:'#B91C1C'};
