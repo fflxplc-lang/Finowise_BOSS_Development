@@ -28,8 +28,14 @@ suite(async t => {
     // "Your details" carried into the sheet's own copies, as the website does on submit
     if(type === 'GAB') { sheet.s1.name = 'ZZ Web ' + a.goal; sheet.s1.dobSelf = '1984-03-15'; sheet.s1.retYear = new Date().getFullYear() + 10; sheet.s2[0].monthly = 50000; sheet.s4.rows[0].existing = 900000; }
     if(type === 'SEVENEVENTS') { sheet.fiYears = 15; sheet.family[0].name = 'ZZ Seven'; }
+    // The ISEQ for their age (born 1984: under 50), scored by BOSS's own scorer, as the website does.
+    const iseqType = ageSplitFormFor('ISEQ', 42);
+    const answers = {};
+    iseqFieldsFor(iseqType).filter(f => (f.opts || []).length).forEach(f => { answers[f.k] = f.opts[1]; });
+    const sc = computeISEQScore(answers, iseqType);
+    const iseq = {type: iseqType, answers, raw: sc.raw, score: sc.score, max: sc.max, category: sc.category};
     const res = await fetch('/api/public/website-blueprint', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(Object.assign({goal: a.goal, consent: true, sheet,
+      body: JSON.stringify(Object.assign({goal: a.goal, consent: true, sheet, iseq,
         touched: type === 'MULTIGOAL' ? undefined : Object.keys(sheet).filter(k => k !== 'client'),
         basics: {me_name: 'ZZ Web ' + a.goal, me_mobile: a.mobile, me_email: 'zz.' + a.mobile + '@example.com',
                  me_dob: '1984-03-15', me_city: 'Varanasi', me_pan: 'ABCDE1234F'}}, a.extra || {}))});
@@ -37,7 +43,8 @@ suite(async t => {
     DB.leads = await sget('leads', []); DB.docLinks = await sget('docLinks', []); DB.docSubmissions = await sget('docSubmissions', []);
     const l = DB.leads.find(x => x.id === d.leadId) || {};
     const link = DB.docLinks.find(x => x.leadId === l.id && x.type === type && x.createdBy === 'Website') || {};
-    return {status: res.status, d, type, goal: (l.websiteBlueprint || {}).goal, form: l.transformationForm, inputIn: planInputIsIn(l),
+    return {status: res.status, d, type, iseqWant: sc, iseqGot: {score: l.iseqScore, max: l.iseqMaxScore, category: l.iseqCategory, type: l.iseqFormType},
+      iseqIn: iseqIsIn(l), goal: (l.websiteBlueprint || {}).goal, form: l.transformationForm, inputIn: planInputIsIn(l),
       dob: l.dob, pan: l.pan, fd: (l.formData || {})[type], link: link.status, subs: DB.docSubmissions.filter(s => s.token === link.token).length,
       leads: DB.leads.length};
   }, {goal, mobile, extra});
@@ -86,6 +93,35 @@ suite(async t => {
     const r = {status: res.status, d: await res.json()};
     if(r.status !== 400 || !/goal/.test(r.d.message) || !/mobile/.test(r.d.message) || !/empty/.test(r.d.message)) throw new Error(JSON.stringify(r));
     return r.d.message;
+  });
+
+  await t.step('the ISEQ rides with the form: scored, on the lead, with its own link and submission', async () => {
+    const r = await send('single', '9876500420');
+    const w = r.iseqWant, g = r.iseqGot;
+    if(!r.iseqIn || g.score !== w.score || g.max !== w.max || g.category !== w.category || g.type !== 'ISEQ_UNDER50') throw new Error(JSON.stringify(r).slice(0, 400));
+    const trail = await t.eval(async id => {
+      DB.auditLog = await sget('auditLog', []);
+      const l = DB.leads.find(x => x.id === id);
+      const link = DB.docLinks.find(x => x.token === l.iseqDocToken) || {};
+      return {link: link.type + ':' + link.status, subs: DB.docSubmissions.filter(s => s.token === l.iseqDocToken && s.score !== undefined).length,
+        card: DB.auditLog.some(a => a.recordId === id && /^ISEQ Score Card/.test(a.action))};
+    }, r.d.leadId);
+    if(trail.link !== 'ISEQ_UNDER50:Submitted' || trail.subs !== 1 || !trail.card) throw new Error(JSON.stringify(trail));
+    return g.type + ' ' + g.score + '/' + g.max + ' ' + g.category + ' · its link Submitted · the score card attempted and logged';
+  });
+
+  await t.step('an ISEQ for the wrong age, or none, is refused', async () => {
+    // Sent from here rather than the page, so the 400s are not page errors.
+    const post = async (mobile, iseq) => {
+      const res = await fetch(t.url('/api/public/website-blueprint'), {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({goal: 'single', consent: true, sheet: {mg_goals: [{goal: 'X', years: 5, currentValue: 1}]}, iseq,
+          basics: {me_name: 'ZZ Wrong Age', me_mobile: mobile, me_email: 'zz.' + mobile + '@example.com', me_dob: '1984-03-15'}})});
+      return {status: res.status, d: await res.json()};
+    };
+    const wrong = await post('9876500421', {type: 'ISEQ_OVER50', answers: {iseq_q1: 'x'}, score: 10, max: 100, category: 'Moderate'});
+    const none = await post('9876500422', null);
+    if(wrong.status !== 400 || !/age/.test(wrong.d.message) || none.status !== 400 || !/ISEQ/.test(none.d.message)) throw new Error(JSON.stringify([wrong.d, none.d]));
+    return wrong.d.message + ' · ' + none.d.message;
   });
 
   t.section('the skip options, on these leads only');

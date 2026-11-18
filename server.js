@@ -4430,8 +4430,60 @@ const WEBSITE_BASICS_TO_LEAD = { me_mobile: 'mobile', me_email: 'email', me_occu
 const WEBSITE_MG_FROM_BASICS = { date: 'me_date', name: 'me_name', mobile: 'me_mobile', email: 'me_email',
   occupation: 'me_occupation', dob: 'me_dob', city: 'me_city', country: 'me_country' };
 const WEBSITE_SHEET_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
+/* The ISEQ rides with the form, as on BOSS's unified client page: the age
+   version follows the date of birth in "Your details" (under 50 / 50 and
+   over), the website scores it from BOSS's own scoring (points × the
+   version's multiplier, banded), and it is stored as BOSS stores one. */
+const WEBSITE_ISEQ_TYPES = { ISEQ_UNDER50: 'ISEQ \u2014 Investor Suitability (under 50)', ISEQ_OVER50: 'ISEQ \u2014 Investor Suitability (50 and over)' };
+const WEBSITE_ISEQ_AGE_SPLIT = 50;
+// BOSS's own default score-card letter, for a server whose Setup has never saved its templates.
+const WEBSITE_ISEQ_MAIL = {"subject": "Your ISEQ result — {Category}", "body": "Dear {Name},\n\nThank you for completing your ISEQ (Investor Suitability and Evaluation Questionnaire) assessment.\n\nUnderstanding your risk profile helps us assess your risk preferences, investment approach, and comfort with market fluctuations. Based on your ISEQ result, we can provide incidental advice to help guide portfolio creation in alignment with your risk profile and financial goals.\n\nYour ISEQ Result\nISEQ Score: {Score}\nISEQ Category: {Category}\n\nWhat this means:\n{CategoryNote}\n\nIf you have any questions regarding your ISEQ result, or would like to understand how it relates to your investment portfolio, please feel free to connect with us.\n\n{Signature}"};
+function websiteAgeOn(dob) {
+  const d = new Date(String(dob) + 'T00:00:00');
+  if (isNaN(d)) return null;
+  const n = new Date();
+  let a = n.getFullYear() - d.getFullYear();
+  if (n.getMonth() < d.getMonth() || (n.getMonth() === d.getMonth() && n.getDate() < d.getDate())) a--;
+  return a >= 0 && a <= 120 ? a : null;
+}
 function websiteDocToken() {
   return 'DOC-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4);
+}
+
+/* The ISEQ score card, as BOSS's own client page sends it: the firm's
+   template from Setup (or BOSS's default), filled with the result, to the
+   client; and a line on the record saying whether it went — the same line
+   deliverMail writes. */
+function websiteSendIseqCard(lead, iseq, name) {
+  const cfg = storeValue('config', {}) || {};
+  const tpl = (cfg.mailTemplates && cfg.mailTemplates.iseqScoreCard) || WEBSITE_ISEQ_MAIL;
+  const team = storeList('team');
+  const rm = (team.find((t) => t && t.id === lead.assignedTo) || {}).name || '';
+  const firm = ((cfg.company || {}).name) || '';
+  const txt = (v) => { const n = Number(v); return isFinite(n) ? String(Math.round(n * 100) / 100) : ''; };
+  const vars = { Name: name, Score: txt(iseq.score), MaxScore: txt(iseq.max), Category: iseq.category, CategoryNote: iseq.note,
+    Equity: iseq.equity, Debt: iseq.debt, Gold: iseq.gold, Horizons: iseq.horizons,
+    Date: new Date().toLocaleDateString('en-IN', { timeZone: BUSINESS_TZ, day: '2-digit', month: 'short', year: 'numeric' }),
+    RMName: rm, FirmName: firm, Signature: 'Warm regards,\n' + [rm, firm].filter(Boolean).join('\n') };
+  const fill = (str) => String(str || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? vars[k] : m));
+  const subject = fill(tpl.subject), body = fill(tpl.body);
+  const log = (status, note) => {
+    const audit = storeList('auditLog');
+    audit.push({ id: 'AUD-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+      at: new Date().toISOString(), by: 'Website', module: 'LMS', recordId: lead.id, action: 'ISEQ Score Card \u2014 ' + status,
+      details: [{ field: 'To', oldValue: '', newValue: lead.email || 'no address on file' }, { field: 'Subject', oldValue: '', newValue: subject },
+        { field: 'Result', oldValue: '', newValue: note },
+        { field: 'Risk profile', oldValue: '', newValue: iseq.category + ' \u2014 ' + txt(iseq.score) + '/' + txt(iseq.max) }]
+        .concat(iseq.equity || iseq.debt || iseq.gold ? [{ field: 'Recommended allocation', oldValue: '', newValue: 'Equity ' + iseq.equity + ' · Debt ' + iseq.debt + ' · Gold ' + iseq.gold }] : []) });
+    putList('auditLog', audit);
+    writeToDisk();
+  };
+  if (!lead.email) return log('Not Sent', 'No email address on the lead.');
+  try {
+    sendMail({ to: lead.email, subject, body }, null, (status, json) => {
+      log(json && json.ok ? 'Sent' : 'Not Sent', (json && json.message) || (json && json.ok ? 'Sent.' : 'The mail server did not take it.'));
+    });
+  } catch (e) { log('Not Sent', String(e && e.message || e)); }
 }
 
 /* The website's blueprint form fills City and State from a PIN, as BOSS's
@@ -4477,6 +4529,23 @@ app.post('/api/public/website-blueprint', (req, res) => {
   if (pick && pick.type === 'SEVENEVENTS' && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(basics.me_pan || '').toUpperCase()))
     wrong.push('Please enter a valid PAN.');
   if (!sheet) wrong.push('The form is empty.');
+  const iq = b.iseq && typeof b.iseq === 'object' ? b.iseq : null;
+  if (!iq) wrong.push('Please answer the risk questionnaire (ISEQ).');
+  let iseq = null;
+  if (iq) {
+    const age = websiteAgeOn(basics.me_dob);
+    const want = age === null ? '' : (age < WEBSITE_ISEQ_AGE_SPLIT ? 'ISEQ_UNDER50' : 'ISEQ_OVER50');
+    const answers = {};
+    Object.keys(iq.answers && typeof iq.answers === 'object' ? iq.answers : {}).slice(0, 40)
+      .forEach((k) => { if (/^[A-Za-z0-9_]{1,40}$/.test(k)) answers[k] = wlText(iq.answers[k], 200); });
+    const score = Number(iq.score), max = Number(iq.max);
+    if (!WEBSITE_ISEQ_TYPES[iq.type] || (want && iq.type !== want)) wrong.push('The risk questionnaire does not match your age.');
+    else if (!Object.keys(answers).length || !Number.isFinite(score) || !Number.isFinite(max) || max <= 0 || score < 0 || score > max || !wlText(iq.category, 60))
+      wrong.push('Please answer every question of the risk questionnaire.');
+    else iseq = { type: iq.type, answers, score, max, raw: Number(iq.raw) || null, category: wlText(iq.category, 60),
+      note: wlText(iq.note, 600), equity: wlText(iq.equity, 30), debt: wlText(iq.debt, 30), gold: wlText(iq.gold, 30),
+      horizons: String(iq.horizons || '').slice(0, 1200) };
+  }
   if (b.consent !== true) wrong.push('Please agree to be contacted by our team.');
   if (wrong.length) return res.status(400).json({ ok: false, message: wrong.join(' ') });
   if (basics.me_pan) basics.me_pan = basics.me_pan.toUpperCase();
@@ -4563,6 +4632,28 @@ app.post('/api/public/website-blueprint', (req, res) => {
   subs.push({ id: 'DOCSUB-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
     token: link.token, leadId: lead.id, type, answers: type === 'MULTIGOAL' ? lead.formData.MULTIGOAL : { sheet: true },
     basics, submittedAt: now, submittedBy: 'Client', submittedVia: 'Website', websiteGoal: pick.goal });
+  // The ISEQ: a link and a submission of its own, its score on the lead.
+  let iseqLink = lead.iseqDocToken ? links.find((l) => l && l.token === lead.iseqDocToken) : null;
+  if (!iseqLink || iseqLink.leadId !== lead.id) {
+    iseqLink = { token: websiteDocToken(), leadId: lead.id, createdAt: now, createdBy: 'Website', sharedBy: 'Website', sharedAt: now,
+      source: 'Website', stage: 'Lead Created', history: [{ at: now, by: 'Website', what: 'Created', note: 'Answered on the website with the input form' }] };
+    links.push(iseqLink);
+  }
+  iseqLink.type = iseq.type;
+  iseqLink.formName = WEBSITE_ISEQ_TYPES[iseq.type];
+  iseqLink.status = 'Submitted'; iseqLink.submittedAt = now; iseqLink.submittedBy = 'Client';
+  iseqLink.history = (iseqLink.history || []).concat([{ at: now, by: 'Website', what: 'Submitted', note: 'Website — ' + iseq.category }]);
+  link.iseqToken = iseqLink.token; link.iseqType = iseq.type;
+  putList('docLinks', links);
+  const iseqAttempt = subs.filter((x) => x && x.token === iseqLink.token).length + 1;
+  subs.push({ id: 'DOCSUB-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+    token: iseqLink.token, leadId: lead.id, type: iseq.type, answers: iseq.answers, submittedAt: now, submittedBy: 'Client',
+    submittedVia: 'Website', attempt: iseqAttempt, score: iseq.score, maxScore: iseq.max, category: iseq.category });
+  lead.iseqDocToken = iseqLink.token;
+  lead.iseqScore = iseq.score; lead.iseqMaxScore = iseq.max; lead.iseqCategory = iseq.category;
+  lead.iseqFormType = iseq.type; lead.iseqVariant = WEBSITE_ISEQ_TYPES[iseq.type];
+  lead.iseqProfileDate = now.slice(0, 10); lead.iseqAnsweredAt = now;
+  lead.leadAge = websiteAgeOn(basics.me_dob);
   putList('docSubmissions', subs);
   putList('leads', leads);
 
@@ -4578,14 +4669,17 @@ app.post('/api/public/website-blueprint', (req, res) => {
     list.push({ id: 'NTF-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
       at: now, userId: lead.assignedTo,
       title: (created ? 'New website lead: ' : 'Website blueprint ' + (again ? 're-submitted' : 'submitted') + ': ') + name,
-      body: pick.goal + ' — the ' + (WEBSITE_FORM_NAMES[type] || type) + ' input form came back from the website and is on the lead. '
+      body: pick.goal + ' — the ' + (WEBSITE_FORM_NAMES[type] || type) + ' input form came back from the website and is on the lead, '
+        + 'and the ISEQ came with it: ' + iseq.category + '. '
         + (lead.city || '') + (lead.branch ? ' · ' + lead.branch + ' branch' : '') + '.',
       view: 'lms', arg: lead.id, kind: 'submission', by: 'Website' });
     putList('notifications', list);
   }
   writeToDisk();
   res.json({ ok: true, created, leadId: lead.id, goal: pick.goal, form: WEBSITE_FORM_NAMES[type] || type,
-    message: 'Thank you! Your ' + (WEBSITE_FORM_NAMES[type] || type) + ' details have reached our team. Your relationship manager will be in touch.' });
+    iseq: { score: iseq.score, max: iseq.max, category: iseq.category },
+    message: 'Thank you! Your ' + (WEBSITE_FORM_NAMES[type] || type) + ' details and your risk questionnaire have reached our team. Your relationship manager will be in touch.' });
+  websiteSendIseqCard(lead, iseq, name);
 });
 
 app.get('/config.js', (req, res) => {
