@@ -7703,7 +7703,7 @@ const SHEET_FORMS = {
     redraw:         fn => { window._gabRedraw = fn; },
     afterClientDraw:() => alignTableHeads(),
     clientFormHtml: () => gabFormHtml('client', false, {ownedOnly:true}),
-    clientMissing:  () => gabMissing('client'),
+    clientMissing:  () => gabMissing('client', null, {skipBasics:true}),
     missingOn:      (r, who) => gabMissingOn(r, who),
     clientSections: () => gabSectionsFor('client').length,
     rmSections:     () => gabSectionsFor('rm').length,
@@ -10504,7 +10504,23 @@ BLUEPRINT_LMS.transitions.push(
   // now comes from. Their answer takes this step, not the adviser's, so the
   // stage does not offer it.
   {id:'clientChangesFromMom', from:'secondMeetingMomSent', to:'fbpPreparation', label:'Client asked for changes — back to the Input Form', kind:'back', notOffered:1},
-  {id:'clientChangesFromSent', from:'blueprintSentToLead', to:'fbpPreparation', label:'Client asked for changes — back to the Input Form', kind:'back', notOffered:1}
+  {id:'clientChangesFromSent', from:'blueprintSentToLead', to:'fbpPreparation', label:'Client asked for changes — back to the Input Form', kind:'back', notOffered:1},
+  /* A lead that came in from a goal card on the website chose its blueprint
+     and filled its input form there (POST /api/public/website-blueprint).
+     These are the firm's "skip" options for such a lead, offered beside the
+     normal steps, never instead of them: the lead was created by the
+     website, so LMS Create, the Warm Up Call and the Warm Up Meeting may be
+     skipped; the blueprint is already chosen, so Plan Choose may be; and the
+     input form came back from the website, so it need not be sent again.
+     FQ and Qualify, the Intro Meeting, the ISEQ, approvals and consent are
+     untouched — skipping the Warm Up Meeting is exactly what makes the Intro
+     Meeting required (warmMeetingHeld). */
+  {id:'websiteSkipToQualifyT', from:'created', to:'readyToQualify',
+   label:'Website lead — Skip to Qualification', kind:'forward', showIfRule:'websiteBlueprintLead'},
+  {id:'websitePlanChosenT', from:'investmentApproach', to:'fbpPreparation',
+   label:'Blueprint chosen on the website — Skip Plan Choose', kind:'forward', showIfRule:'websiteBlueprintLead'},
+  {id:'websiteInputInT', from:'fbpPreparation', to:'planInputSubmitted',
+   label:'Input Form received from the website — Continue', kind:'forward', showIfRule:'websiteInputIn'}
 );
 /* Back from a prepared plan is the Input Form, not the meeting before it: a
    plan is redone by changing the answers it was built from, and the second
@@ -11050,6 +11066,9 @@ const TRANSITION_RULES = {
      the step regardless, which is what the workbenches move the lead
      with. */
   noOwnWorkbench: (record)=> !sheetAdapterFor(record),
+  // The website's goal-card leads, and those whose input form has come back.
+  websiteBlueprintLead: (record)=> !!(record && record.websiteBlueprint && record.websiteBlueprint.type),
+  websiteInputIn: (record)=> !!(record && record.websiteBlueprint && record.websiteBlueprint.type) && planInputIsIn(record),
 };
 function transitionVisible(t, record){
   // Some steps are taken by something that happened rather than by somebody
@@ -24127,8 +24146,9 @@ function gabFormHtml(who, lock, opts){
 
 /* ---------------------------------------------------------- validation -- */
 /* The workbook's own two checklists, one for each side. */
-function gabMissing(who, ctx){
+function gabMissing(who, ctx, opts){
   ctx = ctx || _gab;
+  opts = opts || {};
   if(!ctx || !ctx.s) return [];
   const s = ctx.s, out = [];
   const near1 = a => Math.abs((a||[]).reduce((t,x)=>t+(Number(x)||0), 0) - 1) < 1e-6;
@@ -24144,8 +24164,13 @@ function gabMissing(who, ctx){
     out.push({section: sec.label, label, side: r.side});
   };
   // the client's side
-  if(!filled(s.s1.name)) want('personal', 'The client’s name');
-  if(!filled(s.s1.dobSelf)) want('personal', 'Date of birth (self)');
+  /* On the client's unified page the name and date of birth are asked in
+     "Your details" (fromBasics) and copied into the sheet on submit by
+     applyClientSubmission — as 7 Events and FSL already do with skipBasics.
+     Checking the sheet's hidden copies before that refused every client
+     whose lead had no date of birth on file yet, a website lead above all. */
+  if(!opts.skipBasics && !filled(s.s1.name)) want('personal', 'The client’s name');
+  if(!opts.skipBasics && !filled(s.s1.dobSelf)) want('personal', 'Date of birth (self)');
   if(!(Number(s.s1.retYear) >= thisYear && Number(s.s1.retYear) < thisYear + 60))
     want('personal', 'A planned retirement year, this year or later');
   if(!s.s2.some(r=>(Number(r.monthly)||0) > 0 || (Number(r.annual)||0) > 0))
@@ -30893,12 +30918,12 @@ async function handleBlueprintSideEffect(module, record, transition){
       // it goes with the data gathering sheet, once the blueprint is chosen.
     }
     // Stage 11 — the blueprint: plan preparation DST chain + approval task
-    if(id==='fwd_fbpPreparation'){
+    if(id==='fwd_fbpPreparation' || id==='websitePlanChosenT'){
       record.investmentApproach = 'Transformation';
       await save('leads');
       await createLeadDST(record, 'FBP Preparation', 3, `Need to Prepare the ${approachFormLabel(record.transformationForm)||'blueprint'} plan for ${leadName(record.id)}`);
     }
-    if(id==='fwd_planInputSubmitted'){
+    if(id==='fwd_planInputSubmitted' || id==='websiteInputInT'){
       await completeLeadDST(record.id, 'FBP Preparation');
       await createLeadDST(record, 'Prepare the Plan', 2, `Prepare the ${approachFormLabel(planTypeOf(record))} for ${leadName(record.id)}`);
     }
@@ -41598,6 +41623,12 @@ function viewLeadDetail(id){
           ['Horizon', esc(l.horizon)], ['Goal', esc(l.goal)],
           ['Total Expected', biz? money(biz) : ''],
         ])}
+        ${l.websiteBlueprint && l.websiteBlueprint.type ? profCard('From the Website', [
+          ['Goal Selected', esc(l.websiteBlueprint.goal||'')],
+          ['Blueprint Form', esc(approachFormLabel(l.websiteBlueprint.type)||l.websiteBlueprint.type)],
+          ['Started', l.websiteBlueprint.startedAt? fmtDateTime(l.websiteBlueprint.startedAt):''],
+          ['Input Form', planInputIsIn(l)? '<span class="badge ok">Submitted on the website</span>' : '<span class="badge warn">Not submitted yet</span>'],
+        ]) : ''}
         ${profCard('Assignment', [
           ['Branch', esc(l.branch)], ['Relationship Manager', esc(teamName(l.assignedTo))],
           ['Operations Assigned To', l.operationsMember? esc(teamName(l.operationsMember)) : ''],
@@ -60432,8 +60463,12 @@ function analyticsCharts(src, period){
   let rows = analyticsRecords(src);
   if(!rows) return null;
   if(period) rows = applyTimeline('AN', rows);
-  const dims = ANALYTICS_SOURCES[src].dims.concat(analyticsAutoDims(src, rows));
-  return {total: rows.length, charts: dims.map(d=>({id:d.id, label:d.label, auto:!!d.auto, rows: analyticsGroup(rows, d.value)}))};
+  /* The same groupings RIA AI uses: where a status is blank, the client is
+     grouped by what the record does show (AUM, IIN / UCC, PAN, SIP, the
+     holdings' equity share, the PAN's holder type), not as "Not recorded". */
+  const dims = ANALYTICS_SOURCES[src].dims.concat(src==='clients' && typeof RIA_EXTRA_DIMS!=='undefined' ? RIA_EXTRA_DIMS : [], analyticsAutoDims(src, rows));
+  const valueOf = d => typeof riaDimValue==='function' ? riaDimValue(src, d) : d.value;
+  return {total: rows.length, charts: dims.map(d=>({id:d.id, label:d.label, auto:!!d.auto, rows: analyticsGroup(rows, valueOf(d))}))};
 }
 /* A vertical bar chart, counts on top, names slanted underneath. Drawn as
    SVG so it needs nothing loaded and follows the theme's colours. */
@@ -60451,7 +60486,8 @@ function analyticsBarSvg(rows, color, title, all){
   const grid = [];
   for(let v = 0; v <= top; v += step) grid.push(`<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-dasharray="3 3"/>
     <text x="${L-6}" y="${y(v)+4}" text-anchor="end" font-size="10" style="fill:var(--muted)">${v}</text>`);
-  const cut = s => s.length > 22 ? s.slice(0, 21) + '…' : s;
+  /* "Investing (has AUM) — KYC status not recorded": the group under the bar, all of it on hover. */
+  const cut = s => { s = String(s).split(' — ')[0]; return s.length > 22 ? s.slice(0, 21) + '…' : s; };
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">
     ${grid.join('')}
     ${data.map((d,i)=>`<g><title>${esc(d.label)}: ${d.count}</title>
@@ -60542,6 +60578,7 @@ function viewAnalytics(){
     ${a.total ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px">
       ${shown.map(analyticsCard).join('')}</div>` : `<div class="empty">No ${esc(what.toLowerCase())} ${timelineWindow('AN') ? 'in this period' : 'yet'}. The charts appear as soon as there are records.</div>`}
     ${empty.length && a.total ? `<p class="small-note" style="margin-top:12px">No data recorded yet for: ${empty.map(c=>esc(c.label)).join(', ')}.</p>` : ''}
+    ${src==='clients' ? `<p class="small-note">Where a client's KYC, mandate, risk or tax status is blank, the chart groups them by what the record does show — AUM, IIN / UCC, PAN, SIP, the holdings' equity share, the PAN's holder type — and says the status is not recorded.</p>` : ''}
     <p class="small-note">Ask RIA AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>
     ${analyticsSignalsSection()}
     ${tasks ? analyticsTaskSection() : ''}`;

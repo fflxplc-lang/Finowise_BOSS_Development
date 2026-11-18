@@ -50,11 +50,24 @@ suite(async t => {
         heading: document.body.innerText.includes('KYC Status') && document.body.innerText.includes('Risk Profile')};
     });
     const k = Object.fromEntries(r.kyc.map(x=>[x.label, x.count]));
-    if(k.Validated < 2 || k['On Hold'] < 1 || !k['Not recorded']) throw new Error(JSON.stringify(r.kyc));
-    if(r.kyc[r.kyc.length-1].label !== 'Not recorded') throw new Error('blank is not last: ' + JSON.stringify(r.kyc));
+    /* A blank status is grouped by what the record shows, never "Not recorded". */
+    if(k['KYC validated'] < 2 || k['On hold / rejected — physical KYC needed'] < 1 || !k['PAN & KYC missing — fresh eKYC needed'] || k['Not recorded'])
+      throw new Error(JSON.stringify(r.kyc));
     if(!r.nom.find(x=>x.label==='Nominee registered')) throw new Error(JSON.stringify(r.nom));
     if(!r.heading || r.cards < 4) throw new Error('page: ' + r.cards + ' charts drawn');
     return r.total + ' clients, ' + r.cards + ' charts drawn';
+  });
+  await t.step('blank mandate, risk and tax statuses are grouped by what the record shows', async () => {
+    const r = await t.eval(() => {
+      const c = {id: uid('CMS'), cmsName:'An Huf', createdAt: new Date().toISOString(), assignedTo: me().id, branch:'Pune', pan:'ABCHF1234K'};
+      initState('CMS', c); DB.clients.push(c);
+      DB.platformHoldings.push({id: uid('PFH'), clientId: c.id, schemeName:'Parag Parikh Flexi Cap Reg Gr', invested: 100000, current: 150000});
+      const a = analyticsCharts('clients'), rows = id => Object.fromEntries((a.charts.find(x=>x.id===id) || {rows:[]}).rows.map(x=>[x.label, x.count]));
+      return {tax: rows('tax'), mandate: rows('mandate'), risk: rows('risk'), sip: rows('sip')};
+    });
+    if(!r.tax['HUF (from PAN)'] || !r.mandate['AUM client — mandate registration needed'] || !r.risk['Aggressive (from holdings)'] || !r.sip['AUM, no active SIP'])
+      throw new Error(JSON.stringify(r));
+    return 'tax: HUF (from PAN) · mandate: AUM client — registration needed · risk: Aggressive (from holdings) · SIP: AUM, no active SIP';
   });
   await t.step('the leads tab charts leads', async () => {
     const r = await t.eval(() => { setAnalyticsSource('leads'); return analyticsCharts('leads').charts.find(c=>c.id==='source').rows; });

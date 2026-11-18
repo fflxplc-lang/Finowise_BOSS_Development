@@ -1170,6 +1170,7 @@ const ROUTE_POLICY = {
   'GET /api/access/reconcile': 'admin', 'GET /api/audit': 'admin', 'POST /api/clients/pan-match': 'scoped',
   'GET /api/public/bundle': 'token', 'POST /api/public/patch': 'token', 'POST /api/approvals': 'signed-in',
   'POST /api/public/approval': 'token', 'POST /api/public/mail': 'token', 'POST /api/public/website-lead': 'public',
+  'POST /api/public/website-blueprint': 'public', 'GET /api/public/website-pincode/:pin': 'public',
   'GET /config.js': 'public', 'POST /api/reminders/run': 'test-only',
   'GET /api/push/key': 'public', 'POST /api/push/subscribe': 'signed-in', 'POST /api/push/unsubscribe': 'signed-in',
   'GET /api/reminders/log': 'scoped', 'GET /api/attendance/today': 'signed-in', 'GET /*splat': 'public',

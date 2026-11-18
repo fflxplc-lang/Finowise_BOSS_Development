@@ -5105,6 +5105,10 @@ function websiteLeadCors(req, res) {
 }
 function websiteLeadThrottled(req) {
   const ip = callerIp(req), now = Date.now();
+  // A call from this machine itself is not a stranger: nginx hands every
+  // visitor's own address on (trust proxy), so only the server, its health
+  // checks and the test suites ever arrive as loopback.
+  if (ip === '127.0.0.1' || ip === '::1') return false;
   const hits = (websiteLeadHits.get(ip) || []).filter((t) => now - t < 60 * 1000);
   hits.push(now);
   websiteLeadHits.set(ip, hits);
@@ -5312,6 +5316,303 @@ app.post('/api/public/website-lead', (req, res) => {
   }
   writeToDisk();
   res.json({ ok: true, created, message: 'Thank you! Our team will get in touch with you shortly.' });
+});
+
+/* =====================================================================
+   WEBSITE BLUEPRINT FORMS — the five goal cards on the Finowise website.
+
+   The website draws each blueprint's client input form itself, from BOSS's
+   own definitions (generated into the site's js/blueprint-forms.js from
+   gabSectionsFor / fslSectionsFor / seSectionsFor("client") and the Goal
+   Based Investment template), and posts the finished form here. It is
+   stored exactly where BOSS's own client page stores it:
+
+     · "Your details" go onto the lead (name, mobile, email, DOB, PAN …),
+       as unifiedApplyBasics does;
+     · the sheet goes into lead.formData[type] — a workbook's whole client
+       half by top-level key, so the RM's own inputs are never overwritten;
+       a template's answers merged over what is held;
+     · the plan round is told its input is in (inputSubmittedAt), which is
+       what Prepare Plan waits on;
+     · a link and a submission row are written, so the Forms registry shows
+       it came back, from the website.
+
+     Single Goal / Multiple Goal  -> MULTIGOAL (Goal Based Investment)
+     Inspiring Goal               -> FSL (Financial Success Ladder)
+     7 Events                     -> SEVENEVENTS
+     Golden Age                   -> GAB
+
+   One lead per mobile number; sending it again updates that lead.
+   ===================================================================== */
+const WEBSITE_GOALS = {
+  single:      { type: 'MULTIGOAL',   goal: 'Single Goal' },
+  multiple:    { type: 'MULTIGOAL',   goal: 'Multiple Goal' },
+  inspiring:   { type: 'FSL',         goal: 'Inspiring Goal' },
+  sevenevents: { type: 'SEVENEVENTS', goal: 'Comprehensive Freedom Blueprint (7 Events) Plan' },
+  goldenage:   { type: 'GAB',         goal: 'Golden Age Blueprint' },
+};
+const WEBSITE_FORM_NAMES = {
+  MULTIGOAL: 'Goal Based Investment', FSL: 'FSL — Financial Success Ladder',
+  SEVENEVENTS: 'Comprehensive Freedom Blueprint (7 Events)', GAB: 'GAB — Golden Age Blueprint',
+};
+// "Your details" -> the lead, the fields unifiedApplyBasics writes.
+const WEBSITE_BASICS_TO_LEAD = { me_mobile: 'mobile', me_email: 'email', me_occupation: 'occupation', me_dob: 'dob',
+  me_pin: 'pin', me_city: 'city', me_state: 'state', me_country: 'country', me_pan: 'pan' };
+// The Goal Based Investment template's own first section (clientSkip), read
+// back from "Your details" exactly as BOSS's unified page does.
+const WEBSITE_MG_FROM_BASICS = { date: 'me_date', name: 'me_name', mobile: 'me_mobile', email: 'me_email',
+  occupation: 'me_occupation', dob: 'me_dob', city: 'me_city', country: 'me_country' };
+const WEBSITE_SHEET_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
+/* The ISEQ rides with the form, as on BOSS's unified client page: the age
+   version follows the date of birth in "Your details" (under 50 / 50 and
+   over), the website scores it from BOSS's own scoring (points × the
+   version's multiplier, banded), and it is stored as BOSS stores one. */
+const WEBSITE_ISEQ_TYPES = { ISEQ_UNDER50: 'ISEQ \u2014 Investor Suitability (under 50)', ISEQ_OVER50: 'ISEQ \u2014 Investor Suitability (50 and over)' };
+const WEBSITE_ISEQ_AGE_SPLIT = 50;
+// BOSS's own default score-card letter, for a server whose Setup has never saved its templates.
+const WEBSITE_ISEQ_MAIL = {"subject": "Your ISEQ result — {Category}", "body": "Dear {Name},\n\nThank you for completing your ISEQ (Investor Suitability and Evaluation Questionnaire) assessment.\n\nUnderstanding your risk profile helps us assess your risk preferences, investment approach, and comfort with market fluctuations. Based on your ISEQ result, we can provide incidental advice to help guide portfolio creation in alignment with your risk profile and financial goals.\n\nYour ISEQ Result\nISEQ Score: {Score}\nISEQ Category: {Category}\n\nWhat this means:\n{CategoryNote}\n\nIf you have any questions regarding your ISEQ result, or would like to understand how it relates to your investment portfolio, please feel free to connect with us.\n\n{Signature}"};
+function websiteAgeOn(dob) {
+  const d = new Date(String(dob) + 'T00:00:00');
+  if (isNaN(d)) return null;
+  const n = new Date();
+  let a = n.getFullYear() - d.getFullYear();
+  if (n.getMonth() < d.getMonth() || (n.getMonth() === d.getMonth() && n.getDate() < d.getDate())) a--;
+  return a >= 0 && a <= 120 ? a : null;
+}
+function websiteDocToken() {
+  return 'DOC-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4);
+}
+
+/* The ISEQ score card, as BOSS's own client page sends it: the firm's
+   template from Setup (or BOSS's default), filled with the result, to the
+   client; and a line on the record saying whether it went — the same line
+   deliverMail writes. */
+function websiteSendIseqCard(lead, iseq, name) {
+  const cfg = storeValue('config', {}) || {};
+  const tpl = (cfg.mailTemplates && cfg.mailTemplates.iseqScoreCard) || WEBSITE_ISEQ_MAIL;
+  const team = storeList('team');
+  const rm = (team.find((t) => t && t.id === lead.assignedTo) || {}).name || '';
+  const firm = ((cfg.company || {}).name) || '';
+  const txt = (v) => { const n = Number(v); return isFinite(n) ? String(Math.round(n * 100) / 100) : ''; };
+  const vars = { Name: name, Score: txt(iseq.score), MaxScore: txt(iseq.max), Category: iseq.category, CategoryNote: iseq.note,
+    Equity: iseq.equity, Debt: iseq.debt, Gold: iseq.gold, Horizons: iseq.horizons,
+    Date: new Date().toLocaleDateString('en-IN', { timeZone: BUSINESS_TZ, day: '2-digit', month: 'short', year: 'numeric' }),
+    RMName: rm, FirmName: firm, Signature: 'Warm regards,\n' + [rm, firm].filter(Boolean).join('\n') };
+  const fill = (str) => String(str || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? vars[k] : m));
+  const subject = fill(tpl.subject), body = fill(tpl.body);
+  const log = (status, note) => {
+    const audit = storeList('auditLog');
+    audit.push({ id: 'AUD-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+      at: new Date().toISOString(), by: 'Website', module: 'LMS', recordId: lead.id, action: 'ISEQ Score Card \u2014 ' + status,
+      details: [{ field: 'To', oldValue: '', newValue: lead.email || 'no address on file' }, { field: 'Subject', oldValue: '', newValue: subject },
+        { field: 'Result', oldValue: '', newValue: note },
+        { field: 'Risk profile', oldValue: '', newValue: iseq.category + ' \u2014 ' + txt(iseq.score) + '/' + txt(iseq.max) }]
+        .concat(iseq.equity || iseq.debt || iseq.gold ? [{ field: 'Recommended allocation', oldValue: '', newValue: 'Equity ' + iseq.equity + ' · Debt ' + iseq.debt + ' · Gold ' + iseq.gold }] : []) });
+    putList('auditLog', audit);
+    writeToDisk();
+  };
+  if (!lead.email) return log('Not Sent', 'No email address on the lead.');
+  try {
+    sendMail({ to: lead.email, subject, body }, null, (status, json) => {
+      log(json && json.ok ? 'Sent' : 'Not Sent', (json && json.message) || (json && json.ok ? 'Sent.' : 'The mail server did not take it.'));
+    });
+  } catch (e) { log('Not Sent', String(e && e.message || e)); }
+}
+
+/* The website's blueprint form fills City and State from a PIN, as BOSS's
+   own client page does. Same lookup; the website's origin rule, and a limit
+   of its own so looking up PINs never eats into submitting the form. */
+const websitePinHits = new Map();
+app.options('/api/public/website-pincode/:pin', (req, res) => {
+  if (!websiteLeadCors(req, res)) return res.status(403).end();
+  res.status(204).end();
+});
+app.get('/api/public/website-pincode/:pin', (req, res) => {
+  if (!websiteLeadCors(req, res)) return res.status(403).json({ ok: false });
+  const ip = callerIp(req), now = Date.now();
+  const hits = (websitePinHits.get(ip) || []).filter((x) => now - x < 60 * 1000);
+  hits.push(now); websitePinHits.set(ip, hits);
+  if (websitePinHits.size > 5000) websitePinHits.clear();
+  if (hits.length > 30 && ip !== '127.0.0.1' && ip !== '::1') return res.status(429).json({ ok: false });
+  pinLookup(req, res);
+});
+app.options('/api/public/website-blueprint', (req, res) => {
+  if (!websiteLeadCors(req, res)) return res.status(403).end();
+  res.status(204).end();
+});
+app.post('/api/public/website-blueprint', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!websiteLeadCors(req, res)) return res.status(403).json({ ok: false, message: 'This website is not allowed to send leads.' });
+  if (websiteLeadThrottled(req)) return res.status(429).json({ ok: false, message: 'Too many requests. Please try again in a minute.' });
+  const b = req.body || {};
+  const pick = WEBSITE_GOALS[String(b.goal || '')];
+  const basicsIn = b.basics && typeof b.basics === 'object' ? b.basics : {};
+  const basics = {};
+  Object.keys(basicsIn).forEach((k) => { if (/^me_[a-z]+$/.test(k)) basics[k] = wlText(basicsIn[k], 120); });
+  const name = wlText(basics.me_name, 80);
+  const mobile = String(basics.me_mobile || '').replace(/\D/g, '').slice(-10);
+  const email = wlText(basics.me_email, 120);
+  const sheet = b.sheet && typeof b.sheet === 'object' && !Array.isArray(b.sheet) ? b.sheet : null;
+  const wrong = [];
+  if (!pick) wrong.push('Please choose a goal.');
+  if (name.length < 2) wrong.push('Please enter your full name.');
+  if (!/^[6-9]\d{9}$/.test(mobile)) wrong.push('Please enter a valid 10-digit mobile number.');
+  if (!ADDRESS_RE.test(email)) wrong.push('Please enter a valid email.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(basics.me_dob || ''))) wrong.push('Please enter your date of birth.');
+  if (pick && pick.type === 'SEVENEVENTS' && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(basics.me_pan || '').toUpperCase()))
+    wrong.push('Please enter a valid PAN.');
+  if (!sheet) wrong.push('The form is empty.');
+  const iq = b.iseq && typeof b.iseq === 'object' ? b.iseq : null;
+  if (!iq) wrong.push('Please answer the risk questionnaire (ISEQ).');
+  let iseq = null;
+  if (iq) {
+    const age = websiteAgeOn(basics.me_dob);
+    const want = age === null ? '' : (age < WEBSITE_ISEQ_AGE_SPLIT ? 'ISEQ_UNDER50' : 'ISEQ_OVER50');
+    const answers = {};
+    Object.keys(iq.answers && typeof iq.answers === 'object' ? iq.answers : {}).slice(0, 40)
+      .forEach((k) => { if (/^[A-Za-z0-9_]{1,40}$/.test(k)) answers[k] = wlText(iq.answers[k], 200); });
+    const score = Number(iq.score), max = Number(iq.max);
+    if (!WEBSITE_ISEQ_TYPES[iq.type] || (want && iq.type !== want)) wrong.push('The risk questionnaire does not match your age.');
+    else if (!Object.keys(answers).length || !Number.isFinite(score) || !Number.isFinite(max) || max <= 0 || score < 0 || score > max || !wlText(iq.category, 60))
+      wrong.push('Please answer every question of the risk questionnaire.');
+    else iseq = { type: iq.type, answers, score, max, raw: Number(iq.raw) || null, category: wlText(iq.category, 60),
+      note: wlText(iq.note, 600), equity: wlText(iq.equity, 30), debt: wlText(iq.debt, 30), gold: wlText(iq.gold, 30),
+      horizons: String(iq.horizons || '').slice(0, 1200) };
+  }
+  if (b.consent !== true) wrong.push('Please agree to be contacted by our team.');
+  if (wrong.length) return res.status(400).json({ ok: false, message: wrong.join(' ') });
+  if (basics.me_pan) basics.me_pan = basics.me_pan.toUpperCase();
+  basics.me_mobile = mobile;
+
+  const now = new Date().toISOString();
+  const type = pick.type;
+  const leads = storeList('leads');
+  let lead = leads.find((l) => l && !l.deletedAt && String(l.mobile || '').replace(/\D/g, '').slice(-10) === mobile);
+  let created = false;
+  if (!lead) {
+    created = true;
+    const city = basics.me_city || '';
+    const branch = websiteLeadBranch(city);
+    lead = {
+      id: websiteLeadId(), firstName: '', lastName: '', mobile, email, city, branch, source: 'Website', callType: 'Inbound',
+      assignedTo: websiteLeadRm(branch, leads), description: '', status: 'created',
+      blueprintHistory: [{ state: 'created', at: now, by: 'Website' }], createdAt: now, createdBy: 'Website',
+    };
+    leads.push(lead);
+  }
+  // Their own details, onto the record.
+  const parts = name.split(' ');
+  lead.firstName = parts[0];
+  lead.lastName = parts.slice(1).join(' ');
+  Object.keys(WEBSITE_BASICS_TO_LEAD).forEach((k) => { if (basics[k]) lead[WEBSITE_BASICS_TO_LEAD[k]] = basics[k]; });
+  if (!lead.branch) lead.branch = websiteLeadBranch(lead.city);
+  if (!lead.assignedTo) lead.assignedTo = websiteLeadRm(lead.branch, leads);
+
+  // The sheet, where BOSS keeps it.
+  lead.formData = lead.formData && typeof lead.formData === 'object' ? lead.formData : {};
+  if (type === 'MULTIGOAL') {
+    const answers = Object.assign({}, sheet);
+    Object.keys(WEBSITE_MG_FROM_BASICS).forEach((k) => { if (basics[WEBSITE_MG_FROM_BASICS[k]]) answers[k] = basics[WEBSITE_MG_FROM_BASICS[k]]; });
+    lead.formData.MULTIGOAL = Object.assign({}, lead.formData.MULTIGOAL, answers);
+  } else {
+    // A workbook: the client's half by top-level key, the RM's untouched.
+    const held = lead.formData[type] && typeof lead.formData[type] === 'object' ? lead.formData[type] : {};
+    const touched = (Array.isArray(b.touched) ? b.touched : Object.keys(sheet)).filter((k) => WEBSITE_SHEET_KEY_RE.test(String(k)));
+    const merged = Object.assign({}, held);
+    touched.forEach((k) => { if (sheet[k] !== undefined) merged[k] = sheet[k]; });
+    if (sheet.v !== undefined && merged.v === undefined) merged.v = sheet.v;
+    lead.formData[type] = merged;
+  }
+  const wb = lead.websiteBlueprint && typeof lead.websiteBlueprint === 'object' ? lead.websiteBlueprint : {};
+  wb.goal = pick.goal; wb.goalKey = String(b.goal); wb.type = type;
+  wb.startedAt = wb.startedAt || now; wb.submittedAt = now;
+  wb.history = (Array.isArray(wb.history) ? wb.history : []).concat([{ at: now, goal: pick.goal, type }]).slice(-20);
+  lead.websiteBlueprint = wb;
+  if (!lead.planRounds || !lead.planRounds.length || !lead.transformationForm) {
+    lead.transformationForm = type;
+    lead.investmentApproach = 'Transformation';
+  }
+  // The round the answers are for, told it has them.
+  const rounds = Array.isArray(lead.planRounds) ? lead.planRounds : [];
+  let round = rounds.length ? rounds[rounds.length - 1] : null;
+  if (!round || round.clientDecision || (round.type && round.type !== type)) {
+    round = { n: rounds.length + 1, type, createdAt: now };
+    rounds.push(round);
+  }
+  if (!round.type) round.type = type;
+  if (!round.inputSubmittedAt) { round.inputSubmittedAt = now; round.inputSubmittedBy = 'Client'; }
+  lead.planRounds = rounds;
+  lead.planFormReturnedAt = now;
+
+  // The form's trail: one website link per lead and blueprint, a submission each time.
+  const links = storeList('docLinks');
+  let link = links.find((l) => l && l.leadId === lead.id && l.type === type && l.createdBy === 'Website');
+  const again = !!link;
+  if (!link) {
+    link = { token: websiteDocToken(), leadId: lead.id, type, formName: WEBSITE_FORM_NAMES[type] || type, createdAt: now,
+      createdBy: 'Website', sharedBy: 'Website', sharedAt: now, source: 'Website', stage: 'Lead Created',
+      history: [{ at: now, by: 'Website', what: 'Created', note: 'Filled in on the website' }] };
+    links.push(link);
+  }
+  link.status = 'Submitted';
+  link.websiteGoal = pick.goal;
+  link.submittedAt = now;
+  link.submittedBy = 'Client';
+  link.history = (link.history || []).concat([{ at: now, by: 'Website', what: again ? 'Re-submitted' : 'Submitted', note: 'Website — ' + pick.goal }]);
+  lead.planFormToken = link.token;
+  putList('docLinks', links);
+  const subs = storeList('docSubmissions');
+  subs.push({ id: 'DOCSUB-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+    token: link.token, leadId: lead.id, type, answers: type === 'MULTIGOAL' ? lead.formData.MULTIGOAL : { sheet: true },
+    basics, submittedAt: now, submittedBy: 'Client', submittedVia: 'Website', websiteGoal: pick.goal });
+  // The ISEQ: a link and a submission of its own, its score on the lead.
+  let iseqLink = lead.iseqDocToken ? links.find((l) => l && l.token === lead.iseqDocToken) : null;
+  if (!iseqLink || iseqLink.leadId !== lead.id) {
+    iseqLink = { token: websiteDocToken(), leadId: lead.id, createdAt: now, createdBy: 'Website', sharedBy: 'Website', sharedAt: now,
+      source: 'Website', stage: 'Lead Created', history: [{ at: now, by: 'Website', what: 'Created', note: 'Answered on the website with the input form' }] };
+    links.push(iseqLink);
+  }
+  iseqLink.type = iseq.type;
+  iseqLink.formName = WEBSITE_ISEQ_TYPES[iseq.type];
+  iseqLink.status = 'Submitted'; iseqLink.submittedAt = now; iseqLink.submittedBy = 'Client';
+  iseqLink.history = (iseqLink.history || []).concat([{ at: now, by: 'Website', what: 'Submitted', note: 'Website — ' + iseq.category }]);
+  link.iseqToken = iseqLink.token; link.iseqType = iseq.type;
+  putList('docLinks', links);
+  const iseqAttempt = subs.filter((x) => x && x.token === iseqLink.token).length + 1;
+  subs.push({ id: 'DOCSUB-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+    token: iseqLink.token, leadId: lead.id, type: iseq.type, answers: iseq.answers, submittedAt: now, submittedBy: 'Client',
+    submittedVia: 'Website', attempt: iseqAttempt, score: iseq.score, maxScore: iseq.max, category: iseq.category });
+  lead.iseqDocToken = iseqLink.token;
+  lead.iseqScore = iseq.score; lead.iseqMaxScore = iseq.max; lead.iseqCategory = iseq.category;
+  lead.iseqFormType = iseq.type; lead.iseqVariant = WEBSITE_ISEQ_TYPES[iseq.type];
+  lead.iseqProfileDate = now.slice(0, 10); lead.iseqAnsweredAt = now;
+  lead.leadAge = websiteAgeOn(basics.me_dob);
+  putList('docSubmissions', subs);
+  putList('leads', leads);
+
+  const audit = storeList('auditLog');
+  audit.push({ id: 'AUD-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+    at: now, by: 'Website', module: 'LMS', recordId: lead.id, action: created ? 'Create' : 'Input Form Submitted',
+    details: [{ field: 'Website goal', oldValue: '', newValue: pick.goal },
+              { field: 'Blueprint', oldValue: '', newValue: WEBSITE_FORM_NAMES[type] || type },
+              { field: 'Submitted by', oldValue: '', newValue: 'Client (website)' }] });
+  putList('auditLog', audit);
+  if (lead.assignedTo) {
+    const list = storeList('notifications');
+    list.push({ id: 'NTF-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),
+      at: now, userId: lead.assignedTo,
+      title: (created ? 'New website lead: ' : 'Website blueprint ' + (again ? 're-submitted' : 'submitted') + ': ') + name,
+      body: pick.goal + ' — the ' + (WEBSITE_FORM_NAMES[type] || type) + ' input form came back from the website and is on the lead, '
+        + 'and the ISEQ came with it: ' + iseq.category + '. '
+        + (lead.city || '') + (lead.branch ? ' · ' + lead.branch + ' branch' : '') + '.',
+      view: 'lms', arg: lead.id, kind: 'submission', by: 'Website' });
+    putList('notifications', list);
+  }
+  writeToDisk();
+  res.json({ ok: true, created, leadId: lead.id, goal: pick.goal, form: WEBSITE_FORM_NAMES[type] || type,
+    iseq: { score: iseq.score, max: iseq.max, category: iseq.category },
+    message: 'Thank you! Your ' + (WEBSITE_FORM_NAMES[type] || type) + ' details and your risk questionnaire have reached our team. Your relationship manager will be in touch.' });
+  websiteSendIseqCard(lead, iseq, name);
 });
 
 app.get('/config.js', (req, res) => {
