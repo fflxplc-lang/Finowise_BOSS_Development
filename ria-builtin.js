@@ -392,7 +392,7 @@ function describeChart(ch) {
   const bars = Array.isArray(ch.rows) ? ch.rows : Array.isArray(ch.bars) ? ch.bars : Array.isArray(ch.data) ? ch.data : Array.isArray(ch.groups) ? ch.groups : [];
   if (!bars.length) return [];
   const sorted = bars.slice().sort((a, b) => (Number(b.value || b.count || 0) - Number(a.value || a.count || 0)));
-  return [(ch.title || 'The chart') + ' (drawn below) — largest groups: ' + sorted.slice(0, 3).map((b) => (b.label || b.key || b.name) + ' ' + (b.value !== undefined ? b.value : b.count)).join(', ') + '.'];
+  return [(ch.title || 'The chart') + ' — largest groups: ' + sorted.slice(0, 3).map((b) => (b.label || b.key || b.name) + ' ' + (b.value !== undefined ? b.value : b.count)).join(', ') + '.'];
 }
 function describeMarket(m) {
   const quotes = (m && (m.quotes || m.items)) || (Array.isArray(m) ? m : []);
@@ -432,7 +432,7 @@ function chat(messages, opts) {
     if (data.countSummary) out.push(...describeCount(data.countSummary, q));
     if (data.intel) out.push(...describeIntel(data.intel));
     if (Array.isArray(data.suggestedActions) && data.suggestedActions.length) {
-      out.push('', '**Suggested next actions** (drawn below):');
+      out.push('', '**Suggested next actions:**');
       data.suggestedActions.forEach((x) => out.push('- ' + x.action + ': ' + Number(x.records).toLocaleString('en-IN')));
     }
     (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c)); out.push(''); });
@@ -440,7 +440,7 @@ function chat(messages, opts) {
     if (data.chart) out.push(...describeChart(data.chart));
     if (data.reads) out.push(...describeReads(data.reads));
     if (data.liveMarket || data.marketNow) out.push(...describeMarket(data.liveMarket || data.marketNow));
-    if (data.marketZone && (data.liveMarket || data.marketNow || (Array.isArray(data.portfolioSignals) && data.portfolioSignals.length))) out.push('Market zone: ' + data.marketZone + '.');
+    if (data.marketZone && !/not set/i.test(String(data.marketZone)) && (data.liveMarket || data.marketNow || (Array.isArray(data.portfolioSignals) && data.portfolioSignals.length))) out.push('Market zone: ' + data.marketZone + '.');
     if (Array.isArray(data.portfolioSignals) && data.portfolioSignals.length) {
       out.push('Portfolio checks the CRM computed (for the advisor to review before anything is suggested):');
       data.portfolioSignals.slice(0, 5).forEach((s) => out.push('- ' + (s.client || '') + ': ' + [].concat(s.funds || [], s.rebalance || []).slice(0, 3).join('; ')));
@@ -495,7 +495,8 @@ function chat(messages, opts) {
   /* "Priya ka portfolio dikhao", "DWT dikhao aur batao…": the screen too. */
   const open = openLine(q, pages, data);
   if (open) out.push('OPEN: ' + open);
-  return out.join('\n');
+  /* Lines no answer should carry. */
+  return out.filter((l) => !/Market zone: not set|The category could not be read from the scheme name|\(drawn below\)/.test(l)).join('\n');
 }
 /* Where a question that also asks to see something should go, or ''. */
 function openLine(q, pages, data) {

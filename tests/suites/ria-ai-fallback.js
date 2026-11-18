@@ -37,7 +37,14 @@
        and up-sell, risk (Sharpe, beta, σ, μ ± σ), GAB / buckets / HUF /
        legacy, projections (fan chart), each with its exact figures from
        a synthetic client, several charts in one answer, and the PDF
-       report (a real %PDF- file, on request and from the button). */
+       report (a real %PDF- file, on request and from the button);
+     - the master prompt naming all seven analyses, "tax harvesting" and
+       "HUF suggestion" in it, is the seven analyses — never a count of
+       clients by tax status — and its PDF is the advisory deck (banner,
+       KPI cards, panels, donut + table, side-by-side donuts, multi-colour
+       bars, vector lines, the bell curve), with none of the noise lines;
+     - "clients by tax status" reads the PAN's fourth letter where the
+       tax status is blank. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -449,6 +456,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         ['HDFC Corporate Bond Reg Gr', 150000, 165000, daysAgo(1800)], ['DSP Value Reg Gr', 100000, 90000, daysAgo(600)]];
       const clients = KYC.map((k, i) => ({ id: 'CMS-K' + i, cmsName: 'ZZ Kyc ' + i, rmName: '', branch: i % 2 ? 'Varanasi' : 'Mumbai', kycStatus: k, mandateStatus: MANDATE[i] }));
       clients.push({ id: 'CMS-I1', cmsName: 'ZZ Intel Client', rmName: '', branch: 'Mumbai', riskProfile: 'Moderate', dob: '1975-05-01', taxStatus: 'Individual', kycStatus: 'Validated' });
+      clients.push({ id: 'CMS-H1', cmsName: 'ZZ Huf Family', rmName: '', branch: 'Varanasi', pan: 'ABCHF1234K' }, { id: 'CMS-P1', cmsName: 'ZZ Pan Person', rmName: '', branch: 'Delhi', pan: 'ABCPE4321L' });
       await admin.put('/api/storage/clients', { value: JSON.stringify(clients) });
       await admin.put('/api/storage/platformHoldings', { value: JSON.stringify(H.map((h, i) => ({ id: 'PFH-I' + i, clientId: 'CMS-I1', schemeName: h[0], invested: h[1], current: h[2], purchaseDate: h[3] }))) });
       await admin.put('/api/storage/platformSips', { value: JSON.stringify([{ id: 'PFS-I1', clientId: 'CMS-I1', schemeName: 'Parag Parikh Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000 }]) });
@@ -558,7 +566,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       await step('the book: "risk analysis of our book" covers every visible client', async () => {
         const r = await askI('risk analysis of our book');
         clean(r);
-        if (!r.intel || r.intel.scope.kind !== 'book' || r.intel.scope.clients !== 9 || !r.charts.some((c) => c.kind === 'risk')) throw new Error(JSON.stringify(r.intel));
+        if (!r.intel || r.intel.scope.kind !== 'book' || r.intel.scope.clients !== 11 || !r.charts.some((c) => c.kind === 'risk')) throw new Error(JSON.stringify(r.intel));
         return r.intel.scope.label;
       });
 
@@ -597,6 +605,33 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         return r.charts.map((c) => c.kind).join(' + ');
       });
 
+      const MASTER = 'Show complete portfolio analysis, asset allocation donut chart, buy sell hold switch, risky to safe switch, tax harvesting, cross selling and up selling, complete risk analysis (Sharpe ratio, Beta, Standard Deviation), GAB bucket strategy, HUF suggestion, trust and legacy planning, and future portfolio projection with graphical charts and PDF';
+      await step('the master prompt (with "tax harvesting" and "HUF suggestion" in it) is all seven analyses, never "Tax Status (Clients)", and its PDF is the advisory deck', async () => {
+        const dl = pg2.waitForEvent('download', { timeout: 20000 });
+        const r = await askI(MASTER);
+        clean(r);
+        const f = fs.readFileSync(await (await dl).path());
+        const info = await pg2.evaluate((i) => { const t = ai.turns[i]; const b = bossTurnPdfBlocks(i);
+          return { chart: t.chart ? t.chart.title : null, mods: t.intel ? t.intel.modules : [], kinds: [...new Set(b.map((x) => x.t))], first: b[0] && b[0].t,
+            text: b.map((x) => [x.text, x.title, x.subtitle, x.label, x.value].concat((x.rows || []).flat ? (x.rows || []).flat().map(String) : [], (x.lines || [])).filter(Boolean).join(' ')).join(' | '),
+            content: t.content, dom: document.getElementById('aiTurns').innerText, sections: document.querySelectorAll('#aiTurns .ria-dash .ria-sec').length }; }, r.i);
+        const kinds = new Set(r.charts.map((c) => c.module + ':' + c.kind));
+        const need = ['portfolio:donut', 'portfolio:area', 'actions:donut2', 'tax:hbar', 'tax:donut', 'risk:risk', 'plan:donut', 'plan:hbar', 'opportunities:hbar', 'projection:line'];
+        const missing = need.filter((k) => !kinds.has(k));
+        const NOISE = /Tax Status \(Clients\)|99\.9% Not recorded|Market zone: not set|\(drawn below\)|could not be read from the scheme name/;
+        if (info.chart || info.mods.length !== 7 || missing.length || NOISE.test(info.content + info.dom + info.text) || info.first !== 'banner' || info.sections < 7
+          || !['banner', 'cards', 'panel', 'donutTable', 'donutPair', 'gbars', 'lines', 'bell'].every((k) => info.kinds.includes(k)) || f.slice(0, 5).toString() !== '%PDF-')
+          throw new Error(JSON.stringify({ chart: info.chart, mods: info.mods, missing, kinds: info.kinds, first: info.first, sections: info.sections, noise: (info.content + info.dom + info.text).match(NOISE) }));
+        return info.mods.length + ' analyses, ' + r.charts.length + ' charts in ' + info.sections + ' sections; PDF ' + f.length + ' bytes opening on the banner; no tax-status chart, no noise';
+      });
+      await step('"tax status wise chart of clients": tax status read from the PAN where it is blank, never "Not recorded"', async () => {
+        const r = await askI('tax status wise chart of clients');
+        clean(r);
+        const d = await pg2.evaluate(() => { const t = ai.turns[ai.turns.length - 1]; return ((t.charts || []).find((c) => c.kind === 'donut') || { items: [] }).items.map((i) => i.label + ' ' + i.value); });
+        if (!d.includes('HUF (from PAN) 1') || !d.includes('Individual (from PAN) 1') || !d.includes('Individual 1') || d.some((l) => /Not recorded/.test(l))) throw new Error(JSON.stringify(d));
+        return d.join(', ');
+      });
+
       await step('one question, every chart, and the PDF report — on request and from the button — is a real PDF', async () => {
         const auto = pg2.waitForEvent('download', { timeout: 15000 });
         const r = await askI('complete portfolio analysis of ZZ Intel Client with pdf');
@@ -612,10 +647,11 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const f2 = fs.readFileSync(await d2.path());
         const info = await pg2.evaluate((i) => { const b = bossTurnPdfBlocks(i); const raw = pdfRender(b, { footer: RIA_PDF_FOOT });
           return { head: raw.slice(0, 5), blocks: b.length, kinds: [...new Set(b.map((x) => x.t))], text: b.map((x) => [x.text, x.label, x.value, x.title].concat((x.items || []).map((it) => it.label)).filter(Boolean).join(' ')).join(' | ') }; }, r.i);
-        const want = ['RIA AI Advisory Report', 'ZZ Intel Client', 'Executive summary', 'Asset allocation', 'Tax harvesting', 'Risk analytics', 'Future projection',
+        const want = ['Freedom LifeX Wealth Advisory Report', 'ZZ Intel Client', 'Executive summary', 'Asset allocation', 'Tax harvesting', 'Risk analytics', 'Future projection',
           'Cross-sell', 'Std dev (sigma)', 'Mean return (mu)', 'Recommended 3-bucket split', 'Current vs suggested', 'Generated by RIA AI from live BOSS records. Human advisor approval required before execution.'];
         const missing = want.filter((w) => !info.text.includes(w));
-        if (f1.slice(0, 5).toString() !== '%PDF-' || f2.slice(0, 5).toString() !== '%PDF-' || info.head !== '%PDF-' || missing.length || !['donut', 'bars', 'table', 'cards', 'meter'].every((k) => info.kinds.includes(k)))
+        if (f1.slice(0, 5).toString() !== '%PDF-' || f2.slice(0, 5).toString() !== '%PDF-' || info.head !== '%PDF-' || missing.length
+          || !['banner', 'cards', 'panel', 'donutTable', 'donutPair', 'gbars', 'lines', 'bell', 'table', 'meter'].every((k) => info.kinds.includes(k)))
           throw new Error(JSON.stringify({ h1: f1.slice(0, 8).toString(), h2: f2.slice(0, 8).toString(), missing, kinds: info.kinds }));
         return r.charts.length + ' charts across ' + mods.size + ' modules; PDF ' + d1.suggestedFilename() + ' (' + f1.length + ' bytes, ' + info.blocks + ' blocks) on request and ' + f2.length + ' bytes from the button';
       });
