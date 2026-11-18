@@ -60143,8 +60143,12 @@ function analyticsCharts(src, period){
   let rows = analyticsRecords(src);
   if(!rows) return null;
   if(period) rows = applyTimeline('AN', rows);
-  const dims = ANALYTICS_SOURCES[src].dims.concat(analyticsAutoDims(src, rows));
-  return {total: rows.length, charts: dims.map(d=>({id:d.id, label:d.label, auto:!!d.auto, rows: analyticsGroup(rows, d.value)}))};
+  /* The same groupings RIA AI uses: where a status is blank, the client is
+     grouped by what the record does show (AUM, IIN / UCC, PAN, SIP, the
+     holdings' equity share, the PAN's holder type), not as "Not recorded". */
+  const dims = ANALYTICS_SOURCES[src].dims.concat(src==='clients' && typeof RIA_EXTRA_DIMS!=='undefined' ? RIA_EXTRA_DIMS : [], analyticsAutoDims(src, rows));
+  const valueOf = d => typeof riaDimValue==='function' ? riaDimValue(src, d) : d.value;
+  return {total: rows.length, charts: dims.map(d=>({id:d.id, label:d.label, auto:!!d.auto, rows: analyticsGroup(rows, valueOf(d))}))};
 }
 /* A vertical bar chart, counts on top, names slanted underneath. Drawn as
    SVG so it needs nothing loaded and follows the theme's colours. */
@@ -60162,7 +60166,8 @@ function analyticsBarSvg(rows, color, title, all){
   const grid = [];
   for(let v = 0; v <= top; v += step) grid.push(`<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-dasharray="3 3"/>
     <text x="${L-6}" y="${y(v)+4}" text-anchor="end" font-size="10" style="fill:var(--muted)">${v}</text>`);
-  const cut = s => s.length > 22 ? s.slice(0, 21) + '…' : s;
+  /* "Investing (has AUM) — KYC status not recorded": the group under the bar, all of it on hover. */
+  const cut = s => { s = String(s).split(' — ')[0]; return s.length > 22 ? s.slice(0, 21) + '…' : s; };
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title||'')}" style="width:100%;height:auto;display:block">
     ${grid.join('')}
     ${data.map((d,i)=>`<g><title>${esc(d.label)}: ${d.count}</title>
@@ -60253,6 +60258,7 @@ function viewAnalytics(){
     ${a.total ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px">
       ${shown.map(analyticsCard).join('')}</div>` : `<div class="empty">No ${esc(what.toLowerCase())} ${timelineWindow('AN') ? 'in this period' : 'yet'}. The charts appear as soon as there are records.</div>`}
     ${empty.length && a.total ? `<p class="small-note" style="margin-top:12px">No data recorded yet for: ${empty.map(c=>esc(c.label)).join(', ')}.</p>` : ''}
+    ${src==='clients' ? `<p class="small-note">Where a client's KYC, mandate, risk or tax status is blank, the chart groups them by what the record does show — AUM, IIN / UCC, PAN, SIP, the holdings' equity share, the PAN's holder type — and says the status is not recorded.</p>` : ''}
     <p class="small-note">Ask RIA AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>
     ${analyticsSignalsSection()}
     ${tasks ? analyticsTaskSection() : ''}`;
