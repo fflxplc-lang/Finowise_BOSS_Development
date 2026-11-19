@@ -245,6 +245,18 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       return lines[0].replace(/\*\*/g, '') + '; 25 table rows; "Showing 25 of 27" with the export; no SOP, no PAN';
     });
 
+    await step('a client list read by the planner, answered by BOSS when the provider cannot: the list, and no SIP SOP under it', async () => {
+      gemini('503');
+      const sop = SOPS.find((x) => x.id === 'txn-sip') || SOPS.find((x) => /sip/i.test(x.id));
+      const r = await admin.post('/api/ai/chat', { connector: 'gemini', system: 'You are RIA AI.', maxTokens: 1200,
+        messages: [{ role: 'user', content: '<sops>\n' + sopText(sop) + '\n</sops>\n\n<data>\n' + JSON.stringify({ reads: [{ source: 'Clients', total: 2, rows: [{ name: 'ZZ List One', branch: 'Pune', sip: 0 }, { name: 'ZZ List Two', branch: 'Delhi', sip: 0 }] }] })
+          + '\n</data>\n\nQuestion: I want that clients who have not SIP?' }] });
+      const t = (r.json && r.json.text) || '';
+      gemini('ok');
+      if (r.status !== 200 || !/ZZ List One/.test(t) || new RegExp('\\[' + sop.id + '\\]').test(t) || /Investor Search|Here is what to do|The process that applies/.test(t)) throw new Error(t.slice(0, 600));
+      return 'the two clients; no [' + sop.id + '] steps';
+    });
+
     await step('Gemini overloaded on its model is tried next on gemini-2.5-flash, whose answer is used', async () => {
       gemini('ok'); mode['gemini-2.5-pro'] = '503';
       const n = seen.length;

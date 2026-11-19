@@ -24,6 +24,11 @@
         nahi mil raha" stays a question about that client
     10. the model path: a missing-field question hands over the book's
         filter (attributeFilter, PAN masked), never a client from before
+    11. "I want that clients who have not SIP?" and "give me all clients who
+        are invest more than equal to 20 Lakh": only the matching clients,
+        counted against the book with their total AUM, biggest first, no
+        model call, no SOP, no market text; PDF / Excel / CSV of every
+        matching client with full details
 
    Synthetic clients only. */
 const http = require('http');
@@ -79,7 +84,14 @@ suite(async t => {
       await fetch('/api/connections/bossai', {method:'PUT', headers:Object.assign({'Content-Type':'application/json'}, apiHeaders()),
         body: JSON.stringify({enabled:true, config:{baseUrl:'http://127.0.0.1:'+port+'/v1', model:'mock-model'}})});
       const test = await (await fetch('/api/connections/bossai/test', {method:'POST', headers: apiHeaders()})).json();
-      return {put: put.status, test};
+      /* AUM and SIP as BOSS counts them: platform holdings and SIPs. */
+    const H = [{id:'PFH-CC-A', clientId:'CMS-CC-A', schemeName:'ZZ Flexi Cap', invested:2000000, current:2500000},
+      {id:'PFH-CC-B', clientId:'CMS-CC-B', schemeName:'ZZ Large Cap', invested:1500000, current:2000000},
+      {id:'PFH-CC-N1', clientId:'CMS-CC-N1', schemeName:'ZZ Liquid', invested:500000, current:500000}];
+    const S = [{id:'PFS-CC-A', clientId:'CMS-CC-A', schemeName:'ZZ Flexi Cap', monthlyAmount:10000}, {id:'PFS-CC-N1', clientId:'CMS-CC-N1', schemeName:'ZZ Liquid', monthlyAmount:2000}];
+    const h = await fetch('/api/storage/platformHoldings', {method:'PUT', headers:Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({value: JSON.stringify(H)})});
+    const sp = await fetch('/api/storage/platformSips', {method:'PUT', headers:Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({value: JSON.stringify(S)})});
+    return {put: put.status === 200 && h.status === 200 && sp.status === 200 ? 200 : [put.status, h.status, sp.status], test};
     }, {port: MOCK_PORT, clients: CLIENTS});
     if(r.put !== 200 || (!r.test.ok && !/Connected/.test(JSON.stringify(r.test)))) throw new Error(JSON.stringify(r));
     await t.home();
@@ -273,6 +285,76 @@ suite(async t => {
     const u2 = seen.slice(n2).map(j => j.messages.slice(-1)[0].content).join('\n');
     if(/attributeFilter/.test(u2) || !/ZZ Alpha Clientone/.test(u2)) throw new Error(u2.slice(0, 500));
     return 'attributeFilter: Mobile Number, ' + f.matchingCount + ' of ' + f.totalBook + ', PAN masked; the one-client question carried ZZ Alpha’s dossier, no filter';
+  });
+
+  const listTurn = () => t.eval(() => { const x = ai.turns[ai.turns.length - 1] || {}; return {text: String(x.content || ''), cols: x.table ? x.table.cols : null, rows: x.table ? x.table.rows : [], show: x.table && x.table.show,
+    actions: (x.actions || []).map(a => a.label), ex: x.exportReport ? {total: x.exportReport.total, cols: x.exportReport.cols, rows: x.exportReport.rows} : null}; });
+  const NOISE = /\[txn-sip\]|\[policy-valuation-matrix\]|NIFTY|Investor Search|Market zone/;
+
+  await t.step('11a. "I want that clients who have not SIP?": only the clients without a SIP, counted against the book, no model call, no SOP or market text', async () => {
+    await fresh();
+    const n = seen.length;
+    await ask('I want that clients who have not SIP?');
+    const a = await listTurn();
+    const names = a.rows.map(r => r[1]);
+    const head = '📊 **Total Clients in Book:** 4 | **Matching Clients:** 2 | **Total AUM:** ₹20,00,000 | **Monthly SIP:** ₹0';
+    if(a.text.indexOf(head) !== 0 || names.join() !== 'ZZ Bravo Clienttwo,ZZ Nomobile Two' || !/no SIP/i.test(a.text) || NOISE.test(a.text) || seen.length !== n
+      || JSON.stringify(a.cols) !== JSON.stringify(['Client ID', 'Client Name', 'Branch', 'Mobile', 'AUM', 'Monthly SIP']) || a.rows.some(r => r[5] !== '₹0')
+      || !a.actions.includes('📄 Download PDF (2 clients)') || !a.actions.includes('📊 Download Excel (.xlsx)') || !a.actions.includes('📑 Download CSV'))
+      throw new Error(JSON.stringify({head, a, calls: seen.length - n}).slice(0, 900));
+    return head.replace(/\*\*/g, '') + '; ' + names.join(', ') + '; 0 model calls';
+  });
+
+  await t.step('11b. "give me all clients who are invest more than equal to 20 Lakh": the ₹25 lakh and the exactly-₹20 lakh client, biggest first, total AUM', async () => {
+    await fresh();
+    const n = seen.length;
+    await ask('give me all clients who are invest more than equal to 20 Lakh');
+    const a = await listTurn();
+    const head = '📊 **Total Clients in Book:** 4 | **Matching Clients:** 2 | **Total AUM:** ₹45,00,000 | **Monthly SIP:** ₹10,000';
+    if(a.text.indexOf(head) !== 0 || a.rows.map(r => r[1] + ' ' + r[4]).join() !== 'ZZ Alpha Clientone ₹25,00,000,ZZ Bravo Clienttwo ₹20,00,000' || !/AUM at least 20 lakh/.test(a.text)
+      || !/Highest AUM first/.test(a.text) || NOISE.test(a.text) || seen.length !== n || a.show !== 8) throw new Error(JSON.stringify({head, a, calls: seen.length - n}).slice(0, 900));
+    /* the other ways of saying it, and "above" is strictly above */
+    const more = [];
+    for(const [q, want] of [['clients with 20 lakh se jyada investment', 'ZZ Alpha Clientone'], ['portfolio >= 20L wale clients', 'ZZ Alpha Clientone,ZZ Bravo Clienttwo'],
+      ['clients with SIP at least 5000', 'ZZ Alpha Clientone'], ['clients jinka AUM 5 lakh or less hai', 'ZZ Nomobile One,ZZ Nomobile Two']]){
+      await ask(q); const b = await listTurn(); const got = b.rows.map(r => r[1]).sort().join();
+      if(got !== want) throw new Error(q + ' → ' + got + ' (want ' + want + ')'); more.push(q + ' → ' + b.rows.length);
+    }
+    return head.replace(/\*\*/g, '') + '; ' + more.join('; ');
+  });
+
+  await t.step('11c. the downloads: PDF, Excel and CSV of every matching client with mobile, email, branch, RM, AUM, SIP and stage', async () => {
+    await fresh();
+    await ask('give me all clients who are invest more than equal to 20 Lakh');
+    const a = await listTurn();
+    if(!a.ex || a.ex.total !== 2 || JSON.stringify(a.ex.cols) !== JSON.stringify(['Client ID', 'Client Name', 'Mobile', 'Email', 'Branch', 'RM', 'AUM (₹)', 'Monthly SIP (₹)', 'Stage'])
+      || a.ex.rows[0][3] !== 'alpha@example.test' || a.ex.rows[0][6] !== 2500000) throw new Error(JSON.stringify(a.ex));
+    const fs = require('fs'), got = {};
+    for(const [label, key] of [['📄 Download PDF', 'pdf'], ['📊 Download Excel', 'xlsx'], ['📑 Download CSV', 'csv']]){
+      const dl = t.page.waitForEvent('download', {timeout: 15000});
+      await t.eval((label) => { const b = [...document.querySelectorAll('#aiTurns .ria-act')].reverse().find(x => x.textContent.indexOf(label) === 0); if(!b) throw new Error('no ' + label); b.click(); }, label);
+      const d = await dl; got[key] = {name: d.suggestedFilename(), buf: fs.readFileSync(await d.path())};
+    }
+    const csv = got.csv.buf.toString('utf8');
+    if(got.pdf.buf.slice(0, 4).toString() !== '%PDF' || got.xlsx.buf.slice(0, 2).toString() !== 'PK' || !/\.pdf$/.test(got.pdf.name) || !/\.xlsx$/.test(got.xlsx.name)
+      || !/Client ID.*Client Name.*Mobile.*Email.*Branch.*RM.*AUM.*Monthly SIP.*Stage/.test(csv.split('\n')[0]) || !/ZZ Alpha Clientone/.test(csv) || !/ZZ Bravo Clienttwo/.test(csv) || /ZZ Nomobile/.test(csv))
+      throw new Error(JSON.stringify({pdf: got.pdf.name, xlsx: got.xlsx.name, csv: csv.slice(0, 300)}));
+    /* a big list still makes its PDF: 3,000 synthetic rows, in memory only */
+    const big = await t.eval(() => { const rows = Array.from({length: 3000}, (_, i) => ['CMS-ZZ' + i, 'ZZ Synthetic ' + i, '98000' + String(i).padStart(5, '0'), 'zz' + i + '@example.test', 'Pune', 'Unassigned', 100000 + i, 0, 'Active']);
+      ai.turns.push({role:'assistant', content:'synthetic', exportReport: {title:'ZZ big list', total: 3000, totalBook: 3000, totalAum: 1, totalSip: 0,
+        cols:['Client ID', 'Client Name', 'Mobile', 'Email', 'Branch', 'RM', 'AUM (₹)', 'Monthly SIP (₹)', 'Stage'], rows}});
+      const t0 = performance.now(); const r = bossDownloadTurnReport(ai.turns.length - 1, 'pdf'); return {ms: Math.round(performance.now() - t0), r}; });
+    if(!big.r || big.r.rows !== 3000 || big.ms > 20000) throw new Error(JSON.stringify(big));
+    return 'PDF ' + got.pdf.buf.length + ' B, Excel ' + got.xlsx.buf.length + ' B, CSV with the 9 columns and both clients; a 3,000-row PDF in ' + big.ms + ' ms';
+  });
+
+  await t.step('11d. the chat itself, given the same question, answers from the records too: no planner, no model call, no SOP', async () => {
+    await fresh();
+    const n = seen.length;
+    await t.eval(async () => { ai.turns.push({role:'user', content:'I want that clients who have not SIP?'}); await bossRunChat('I want that clients who have not SIP?'); });
+    const a = await listTurn();
+    if(seen.length !== n || a.rows.map(r => r[1]).join() !== 'ZZ Bravo Clienttwo,ZZ Nomobile Two' || NOISE.test(a.text)) throw new Error(JSON.stringify({calls: seen.length - n, a}).slice(0, 600));
+    return 'bossRunChat → the same list, ' + (seen.length - n) + ' model calls';
   });
 
   await t.step('CRM records untouched: the four clients are as they were saved', async () => {

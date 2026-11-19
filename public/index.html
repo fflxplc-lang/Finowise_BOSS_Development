@@ -60052,8 +60052,18 @@ function bossReopen(i){
   if(o.kind==='cms'){ window._clientTab = o.tab; navigate('cms', o.id); } else navigate(o.view);
   ai.context = aiContextOf(); aiDrawPanel();
 }
+/* The client-list filter for a question, if BOSS can apply it: "clients who have
+   not SIP", "clients who are invest more than equal to 20 Lakh". */
+function bossEvaluateClientListQuery(q){
+  if(!bossIsClientListQuery(q)) return null;
+  const f = riaQueryFilterEngine(q);
+  return f && f.source==='clients' ? f : null;
+}
 async function bossRunChat(q){
   const conv = ai.conv || 0;
+  const listF = !ai.forceClient ? bossEvaluateClientListQuery(q) : null;
+  if(listF){ riaAnswerFilter(listF); return {}; }
+  const clientList = bossIsClientListQuery(q);
   const ctx = aiConvContext(q);
   let sops = bossSopSearch(q, 4);
   const data = {};
@@ -60109,7 +60119,7 @@ async function bossRunChat(q){
      harvesting", "future projection"…: worked out here, with its charts. */
   const intel = !attr && !chart && !countQ ? riaIntel(q, people) : null;
   if(intel) data.intel = riaIntelForAi(intel);
-  const mktNames = !attr && !chart && !chartQ && !countQ && !intel ? lexiMarketAsk(q, people) : null;
+  const mktNames = !attr && !clientList && !chart && !chartQ && !countQ && !intel ? lexiMarketAsk(q, people) : null;
   let market = null;
   if(mktNames){
     ai.phase = 'RIA AI is reading live prices'; aiDrawPanel();
@@ -60123,7 +60133,7 @@ async function bossRunChat(q){
     data.liveMarket = lexiMarketForAi(market, lexiMoneyIn(q), shortlist);
     data.marketZone = lexiLiveZoneLabel(market.quotes);
     sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean))];
-  } else if(!attr && !chart && !chartQ && !countQ && !intel && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
+  } else if(!attr && !clientList && !chart && !chartQ && !countQ && !intel && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
     ai.phase = 'RIA AI is reading the live market'; aiDrawPanel();
     const now = await lexiMarketRead(['NIFTY 50']);
     aiStale(conv);
@@ -60141,6 +60151,7 @@ async function bossRunChat(q){
     if(plan.client) bossClientsNamedIn(plan.client).forEach(c=>{ if(!people.includes(c)) people.push(c); });
     const reads = bossDoReads(plan.reads);
     if(reads.length) data.reads = reads;
+    if(reads.length && clientList) sops = [];        // a list of clients is answered by the list, not an SOP
     if(chartQ && !chart){ chart = bossChartFromReads(reads); if(chart){ data.chart = chart; dash = riaDashFromRead(reads, chart); } }
   }
   if(people.length) data.clients = people.slice(0,3).map(bossClientDossier).filter(Boolean);
@@ -60228,7 +60239,12 @@ function bossTurnFoot(t){
   const pdf = ((t.charts && t.charts.length) || t.intel || t.chart) && !(t.actions && t.actions.length)
     ? `<button class="btn sm ghost ria-pdf" onclick="bossDownloadTurnPdf(${ai.turns.indexOf(t)})">⬇ Download PDF Report</button>` : '';
   const gov = t.intel ? `<div class="small-note" style="margin:4px 0">${esc(RIA_GOVERNANCE)}</div>` : '';
-  return (cl || sp || op || ch || mk || chs) ? `${mk}${ch}${chs}${gov}<div class="ai-acts" style="flex-wrap:wrap">${op}${pdf}${cl}</div>${sp}` : '';
+  const ti = ai.turns.indexOf(t);
+  const ex = t.exportReport && !(t.actions && t.actions.length) ? `<div class="ai-acts" style="margin-top:8px;gap:8px;flex-wrap:wrap">
+      <button class="btn sm primary" onclick="bossDownloadTurnReport(${ti}, 'pdf')">📄 Download PDF (${riaN(t.exportReport.total)} clients)</button>
+      <button class="btn sm ghost" onclick="bossDownloadTurnReport(${ti}, 'xlsx')">📊 Download Excel (.xlsx)</button>
+      <button class="btn sm ghost" onclick="bossDownloadTurnReport(${ti}, 'csv')">📑 Download CSV</button></div>` : '';
+  return (cl || sp || op || ch || mk || chs || ex) ? `${mk}${ch}${chs}${gov}${ex}<div class="ai-acts" style="flex-wrap:wrap">${op}${pdf}${cl}</div>${sp}` : '';
 }
 
 /* =====================================================================
@@ -62244,6 +62260,23 @@ function bossTurnPdfName(i){
   const who = x ? x.scope.label : (t.chart ? t.chart.title : 'RIA-AI');
   return ('RIA-AI-Report-' + who + '-' + new Date().toISOString().slice(0,10)).replace(/[^A-Za-z0-9-]+/g, '-').replace(/-+/g, '-') + '.pdf';
 }
+/* A client list's own report: title, the counts and totals, and every matching
+   client with mobile, email, branch, RM, AUM, SIP and stage — as PDF, Excel or CSV. */
+function bossDownloadTurnReport(ti, fmt){
+  const t = ai.turns[ti], r = t && t.exportReport; if(!r) return null;
+  const base = String(r.title || 'Client list').replace(/[^\w\d \-]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) + '_' + new Date().toISOString().slice(0, 10);
+  if(fmt==='csv'){ aiDownload(aiCsvOf(r.rows.map(x=>Object.fromEntries(r.cols.map((c, k)=>[c, x[k]]))), r.cols), base + '.csv', 'text/csv'); return {filename: base + '.csv', rows: r.rows.length}; }
+  if(fmt==='xlsx'){ aiDownload(xlsxBuild([{name: String(r.title || 'Clients').replace(/[\\\/?*\[\]:]/g, ' ').slice(0, 31), cols: r.cols, rows: r.rows}]), base + '.xlsx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); return {filename: base + '.xlsx', rows: r.rows.length}; }
+  const blocks = [{t:'band', text: riaPdfClean(r.title || 'Client list')},
+    {t:'panel', title:'Summary', tone: PDF_DECK.teal, keyW: 150, rows: [['Total clients in book', riaN(r.totalBook)], ['Matching clients', riaN(r.total)],
+      ['Total AUM', money(r.totalAum)], ['Total monthly SIP', money(r.totalSip)], ['Prepared', new Date().toLocaleString()]]},
+    {t:'table', cols: r.cols.map((c, k)=>({label: c, w: k===1 ? 2 : k===3 ? 2 : 1, bold: k===1})),
+      rows: r.rows.map(x=>x.map((v, k)=>v==null ? '' : (k===6 || k===7) ? money(Number(v) || 0) : String(v)))}];
+  const name = base + '.pdf';
+  downloadPdf(blocks, name, {title:'Finowise · Freedom LifeX — Client List', footer: RIA_PDF_FOOT});
+  return {filename: name, rows: r.rows.length};
+}
 function bossDownloadTurnPdf(i){
   const blocks = bossTurnPdfBlocks(i);
   if(!blocks) return null;
@@ -62641,7 +62674,7 @@ function riaFollow(ti, k){
   if(ai.busy) return;
   const t = ai.turns[ti]; const a = t && t.actions && t.actions[k];
   if(!a) return;
-  if(a.act.t==='pdf') return bossDownloadTurnPdf(ti);
+  if(a.act.t==='pdf') return t.exportReport ? bossDownloadTurnReport(ti, 'pdf') : bossDownloadTurnPdf(ti);
   if(a.act.t==='dl') return riaDownloadTable(ti, a.act.fmt);
   return riaRun(a.act, a.label).catch(aiIgnoreStale);
 }
@@ -63104,7 +63137,8 @@ function riaScreens(){
 }
 /* Excel / CSV of the table in a turn, every row. */
 function riaDownloadTable(ti, fmt){
-  const t = ai.turns[ti]; const tb = t && t.table; if(!tb) return null;
+  const t = ai.turns[ti]; if(t && t.exportReport) return bossDownloadTurnReport(ti, fmt);
+  const tb = t && t.table; if(!tb) return null;
   const base = String(tb.title || 'RIA AI report').replace(/[^\w\d \-]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) + '_' + new Date().toISOString().slice(0, 10);
   const rows = tb.rows.map(r=>r.map(v=>v==null ? '' : v));
   if(fmt==='csv'){ aiDownload(aiCsvOf(rows.map(r=>Object.fromEntries(tb.cols.map((c, k)=>[c, r[k]]))), tb.cols), base + '.csv', 'text/csv'); return base + '.csv'; }
@@ -63176,18 +63210,50 @@ function riaParseAge(q){
   return null;
 }
 /* "AUM above 10 lakh", "SIP > 5000", "zero SIP". */
+/* "AUM above 10 lakh", "clients who are invest more than equal to 20 Lakh",
+   "portfolio >= 50L", "20 lakh se jyada investment wale", "SIP at least 5000",
+   "clients who have not SIP", "bina SIP wale". AUM and SIP are what BOSS counts
+   for the client (riaAum / riaSip: platform holdings and SIPs, or the ledger),
+   not a field typed on the record. */
+const RIA_AMT_UNIT = '(lakhs?|lacs?|lac|crores?|cr|k|thousand|l)?';
+function riaAmtValue(num, unit){ unit = unit || ''; return Number(num) * (/^l/.test(unit) ? 1e5 : /^c/.test(unit) ? 1e7 : /^(k|thousand)/.test(unit) ? 1e3 : 1); }
+function riaAmtOp(w){
+  w = String(w || '');
+  if(/or equal|equal to|at ?least|minimum|min\b|not less|>=|=>|or more|and above|or above|\+|plus/.test(w)) return /below|under|less|at ?most|max|up ?to|not more|<|or less|and below/.test(w.replace(/not less/, '')) && !/more|greater|above|>/.test(w) ? 'lte' : 'gte';
+  if(/at ?most|maximum|max\b|up ?to|not more|<=|=<|or less|and below/.test(w)) return 'lte';
+  if(/below|under|less|<|se kam/.test(w)) return 'lt';
+  return 'gt';
+}
+const RIA_AMT_WORD = {gt:'above', gte:'at least', lt:'below', lte:'at most'};
 function riaParseAmounts(q){
-  const t = String(q||'').toLowerCase().replace(/,/g, ''), out = [];
-  const re = /\b(aum|sip|amount|value)\b[^0-9<>]{0,24}?(above|over|more than|greater than|>=?|se zyada|below|under|less than|<=?|se kam)\s*(?:rs\.?|₹|inr)?\s*([\d.]+)\s*(lakhs?|lacs?|l|crores?|cr|k|thousand)?/g;
+  const t = String(q||'').toLowerCase().replace(/,/g, ''), out = [], taken = [];
+  const fieldOf = k => /^sip/.test(k) ? 'sip' : /^amount/.test(k) ? 'amount' : 'aum';
+  const push = (field, op, num, unit, at) => {
+    if(taken.some(x=>Math.abs(x - at) < 3)) return; taken.push(at);
+    const n = riaAmtValue(num, unit);
+    const u = !unit ? '' : /^l/.test(unit) ? 'lakh' : /^c/.test(unit) ? 'crore' : 'thousand';
+    out.push({field, op, value: n, label: (field==='sip' ? 'SIP' : field==='amount' ? 'Amount' : 'AUM') + ' ' + RIA_AMT_WORD[op] + ' ' + (u ? num + ' ' + u : money(n))});
+  };
+  const KEY = '(aum|sips?|amount|value|invest\\w*|portfolio|holdings?|corpus|net ?worth|worth|wealth)';
+  const CMP = '(more than or equal to|more than equal to|greater than or equal to|greater than equal to|equal to or more than|less than or equal to|less than equal to|not less than|not more than|at ?least|minimum|min\\.?|at ?most|maximum|max\\.?|up ?to|above|over|more than|greater than|below|under|less than|>=|=>|<=|=<|>|<|se zyada|se jyada|se kam)';
+  /* keyword, then the comparison, then the figure: "invest more than equal to 20 lakh" */
+  const pre = new RegExp('\\b' + KEY + '\\b[^0-9<>]{0,30}?' + CMP + '\\s*(?:to\\s+)?(?:rs\\.?|₹|inr)?\\s*(\\d+(?:\\.\\d+)?)\\s*' + RIA_AMT_UNIT + '\\b', 'g');
   let m;
-  while((m = re.exec(t))){
-    const unit = m[4] || '', n = Number(m[3]) * (/^l/.test(unit) ? 1e5 : /^c/.test(unit) ? 1e7 : /^(k|thousand)/.test(unit) ? 1e3 : 1);
-    out.push({field: m[1]==='sip' ? 'sip' : m[1]==='aum' || m[1]==='value' ? 'aum' : 'amount', op: /above|over|more|greater|>|zyada/.test(m[2]) ? 'gt' : 'lt', value: n,
-      label: m[1].toUpperCase() + (/above|over|more|greater|>|zyada/.test(m[2]) ? ' above ' : ' below ') + (unit ? m[3] + ' ' + unit : money(n))});
-  }
-  if(/\b(zero|no|without|bina)\s+sips?\b|\bsip\s*(?:=\s*0|zero|nahi)\b/.test(t)) out.push({field:'sip', op:'zero', value:0, label:'no SIP'});
-  if(/\bactive\s+sips?\b|\bsip\s+(?:wale|running|chal)/.test(t)) out.push({field:'sip', op:'gt', value:0, label:'active SIP'});
+  while((m = pre.exec(t))) push(fieldOf(m[1]), riaAmtOp(m[2]), m[3], m[4], m.index + m[0].indexOf(m[3]));
+  /* the figure, then the comparison: "20 lakh se jyada", "50L+", "1 crore or more" — about the AUM unless SIP is named */
+  const post = new RegExp('(?:rs\\.?|₹|inr)?\\s*(\\d+(?:\\.\\d+)?)\\s*' + RIA_AMT_UNIT + '\\s*(\\+|plus|or more|and above|or above|or less|and below|se (?:jyada|zyada|upar|adhik|kam))', 'g');
+  while((m = post.exec(t))){ const near = t.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30);
+    push(/\bsips?\b/.test(near) && !/\b(aum|invest\w*|portfolio|holding)/.test(near) ? 'sip' : 'aum', riaAmtOp(m[3]), m[1], m[2], m.index + m[0].indexOf(m[1])); }
+  const noSip = /\b(zero|no|without|bina|koi)\s+(?:active\s+|running\s+)?sips?\b|\b(?:have|has|having|do|does|did)\s*(?:not|n't|nt)\s*(?:have\s+|got\s+)?(?:any\s+)?(?:active\s+|running\s+)?sips?\b|\bnot\s+(?:having|have|has)\s+(?:any\s+)?(?:active\s+)?sips?\b|\bsips?\s*(?:=\s*0|zero|nahi|nhi|nahin|na)\b|\bsips?\s+(?:not\s+(?:started|registered|running|active))/;
+  if(noSip.test(t)) out.push({field:'sip', op:'zero', value:0, label:'no SIP'});
+  else if(!out.some(a=>a.field==='sip') && /\b(?:active|running)\s+sips?\b|\bsips?\s+(?:wale|running|chal|active)\b|\b(?:with|having|have|has)\s+(?:an?\s+)?(?:active\s+)?sips?\b/.test(t)) out.push({field:'sip', op:'gt', value:0, label:'active SIP'});
   return out;
+}
+/* "Clients who…", "jin clients ka…", "investors with…": a question for a list of clients. */
+function bossIsClientListQuery(q){
+  const s = String(q || '').toLowerCase();
+  return /\b(clients|investors|customers|log|parties)\b/.test(s)
+    && /\b(who|whose|jinka|jinke|jiska|jinki|which|list|filter|all|give me|show me|bina|without|with|having|have not|has not|no sip|at least|minimum|invest\w*|aum|more than|greater|equal|less than|above|below|se jyada|se zyada|se kam|lakh|lac|cr|crore|wale|waale)\b/.test(s);
 }
 /* Status words, as tests on a client record. */
 function riaParseStatus(q){
@@ -63253,7 +63319,7 @@ function riaQueryFilterEngine(q){
   if(typeof riaIntelModules==='function' && riaIntelModules(q).length) return null;
   const source = /\btransactions?\b|\btxns?\b/.test(t) ? 'transactions' : /\bleads?\b/.test(t) ? 'leads' : /\bmeetings?\b/.test(t) ? 'meetings'
     : /\b(business entr\w*|dbt|business)\b/.test(t) ? 'business' : /\bcalls?\b|\bcall logs?\b/.test(t) ? 'calls'
-    : /\btasks?\b|\boverdue\b/.test(t) ? 'tasks' : /\bsips\b|\bsip (?:registrations?|book|list)\b/.test(t) && !/\b(active|zero|no|without)\s+sips?\b/.test(t) ? 'sips' : 'clients';
+    : /\btasks?\b|\boverdue\b/.test(t) ? 'tasks' : /\bsips\b|\bsip (?:registrations?|book|list)\b/.test(t) && !/\b(active|zero|no|without)\s+sips?\b/.test(t) && !riaParseAmounts(q).some(a=>a.field==='sip') ? 'sips' : 'clients';
   const src = RIA_FILTER_SOURCES[source], all = src.rows();
   /* Branch, city or RM, as the records spell it. */
   const n = ' ' + riaNorm(q) + ' ';
@@ -63268,7 +63334,8 @@ function riaQueryFilterEngine(q){
   const overdue = source==='tasks' && /\boverdue\b/.test(t);
   /* A slice needs a branch, a DOB filter, an amount, "date wise", or an explicit date range. */
   const dobFilter = dobMode && (period || age);
-  if(!(branchWord || cityWord || dobFilter || amounts.length || dateWise || (period && period.explicit) || overdue || status.some(x=>x.missing))) return null;
+  const amountSlice = amounts.some(a=>a.op!=='zero' && !(a.field==='sip' && a.value===0)) || (amounts.length && bossIsClientListQuery(q));
+  if(!(branchWord || cityWord || dobFilter || amountSlice || dateWise || (period && period.explicit) || overdue || status.some(x=>x.missing))) return null;
   return {source, branchWord, cityWord, dobMode, period, age, amounts, status, dateWise, overdue};
 }
 /* Run the filters; the rows in date order. */
@@ -63300,8 +63367,13 @@ function riaRunFilter(f){
   (f.status||[]).forEach(s=>{ rows = rows.filter(s.test); applied.push(s.label); });
   (f.amounts||[]).forEach(a=>{
     const get = f.source==='clients' ? (a.field==='sip' ? c=>numVal(riaSip(c)) : c=>numVal(riaAum(c))) : (r=>numVal(r.amount || r.monthlyAmount));
-    rows = rows.filter(r=>a.op==='gt' ? get(r) > a.value : a.op==='lt' ? get(r) < a.value : get(r)===0); applied.push(a.label);
+    rows = rows.filter(r=>{ const v = get(r); return a.op==='gt' ? v > a.value : a.op==='gte' ? v >= a.value : a.op==='lt' ? v < a.value : a.op==='lte' ? v <= a.value : !(v > 0); }); applied.push(a.label);
   });
+  /* "AUM at least 20 lakh", "no SIP": the biggest accounts first, not the oldest. */
+  if(f.source==='clients' && (f.amounts||[]).length && !f.dateWise && !f.period && !f.dobMode){
+    rows = rows.slice().sort((a,b)=>numVal(riaAum(b)) - numVal(riaAum(a)) || clientDisplayName(a).localeCompare(clientDisplayName(b)));
+    return {rows, applied, src, byAum: true};
+  }
   const key = f.dobMode && !(f.period && f.period.years) && !f.age
     ? (c=>{ const d = new Date(riaDob(c)); return isNaN(d.getTime()) ? '9999' : String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); })
     : f.dobMode ? (c=>riaDob(c) || '9999') : (r=>String(src.date(r)||'') || '9999');
@@ -63335,7 +63407,19 @@ function riaAnswerFilter(f){
   const what = (f.dobMode ? 'Clients by date of birth' : (f.dateWise || f.period ? 'Date-wise ' : '') + src.label).replace(/^Date-wise ([A-Z])/, (m, x)=>'Date-wise ' + x.toLowerCase());
   const title = (applied.length ? applied.map(a=>a.charAt(0).toUpperCase() + a.slice(1)).join(' · ') + ' — ' : '') + what;
   const missing = f.source==='clients' ? (f.status||[]).filter(x=>x.missing) : [];
-  let tb = riaFilterTable(f, rows), head = '';
+  let tb = riaFilterTable(f, rows), head = '', exportReport = null;
+  const byMoney = f.source==='clients' && (f.amounts||[]).length && !missing.length;
+  if(byMoney){
+    /* "Total Clients in Book: 3,029 | Matching Clients: 412 | Total AUM: ₹…", then who they are. */
+    const aum = rows.reduce((n, c)=>n + numVal(riaAum(c)), 0), sip = rows.reduce((n, c)=>n + numVal(riaSip(c)), 0);
+    head = '📊 **Total Clients in Book:** ' + riaN(src.rows().length) + ' | **Matching Clients:** ' + riaN(rows.length) + ' | **Total AUM:** ' + money(aum) + ' | **Monthly SIP:** ' + money(sip) + '\n\n';
+    tb = {cols:['Client ID', 'Client Name', 'Branch', 'Mobile', 'AUM', 'Monthly SIP'], show: 8,
+      rows: rows.map(c=>[c.id, clientDisplayName(c), c.branch || c.branchName || 'Not recorded', c.mobile || 'Not recorded', money(numVal(riaAum(c))), money(numVal(riaSip(c)))])};
+    exportReport = {title, total: rows.length, totalBook: src.rows().length, totalAum: aum, totalSip: sip,
+      cols:['Client ID', 'Client Name', 'Mobile', 'Email', 'Branch', 'RM', 'AUM (₹)', 'Monthly SIP (₹)', 'Stage'],
+      rows: rows.map(c=>[c.id, clientDisplayName(c), c.mobile || 'Not recorded', c.email || 'Not recorded', c.branch || c.branchName || 'Not recorded',
+        riaRmOf(c)[0] || 'Unassigned', Math.round(numVal(riaAum(c))), Math.round(numVal(riaSip(c))), stateLabel('CMS', stateOf('CMS', c))])};
+  }
   if(missing.length){
     /* "Total Clients: 5,348 | Clients without Mobile Number: 412", then who they are. */
     const fields = missing.map(x=>x.field).join(' / ');
@@ -63344,9 +63428,12 @@ function riaAnswerFilter(f){
       rows: rows.map(c=>[c.id, clientDisplayName(c), c.branch || c.branchName || 'Not recorded', missing.map(x=>x.field + ': Missing').join(' · ')])};
   }
   const turn = {content: head + '**' + title + ' (' + riaN(rows.length) + ' record' + (rows.length===1 ? '' : 's') + '):**\n'
-      + (rows.length ? (f.dobMode && !(f.period && f.period.years) && !f.age ? 'In birthday order (January to December).' : 'In date order, oldest first.') + ' The first ' + Math.min(25, rows.length) + ' are below; every row is in the downloads.'
+      + (rows.length ? (byMoney ? 'Highest AUM first.' : f.dobMode && !(f.period && f.period.years) && !f.age ? 'In birthday order (January to December).' : 'In date order, oldest first.') + ' The first ' + Math.min(tb.show || 25, rows.length) + ' are below; every row is in the downloads.'
         : 'Nothing in your visible records matches all of these filters.'),
-    table: Object.assign({title}, tb), actions:[{label:'⬇ Download Excel', act:{t:'dl', fmt:'xlsx'}}, {label:'⬇ Download CSV', act:{t:'dl', fmt:'csv'}}, {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'☰ Main Menu', act:{t:'menu'}}]};
+    table: Object.assign({title}, tb), actions: exportReport && rows.length
+      ? [{label:'📄 Download PDF (' + riaN(rows.length) + ' clients)', act:{t:'pdf'}}, {label:'📊 Download Excel (.xlsx)', act:{t:'dl', fmt:'xlsx'}}, {label:'📑 Download CSV', act:{t:'dl', fmt:'csv'}}, {label:'☰ Main Menu', act:{t:'menu'}}]
+      : [{label:'⬇ Download Excel', act:{t:'dl', fmt:'xlsx'}}, {label:'⬇ Download CSV', act:{t:'dl', fmt:'csv'}}, {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'☰ Main Menu', act:{t:'menu'}}]};
+  if(exportReport) turn.exportReport = exportReport;
   if(rows.length){
     const monthOf = r=>{ const d = new Date(f.dobMode ? riaDob(r) : String(src.date(r)||'').slice(0, 10)); return isNaN(d.getTime()) ? 'No date' : f.dobMode ? RIA_MONTHS[d.getMonth()] : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
     const bm = {}; rows.forEach(r=>{ const k = monthOf(r); bm[k] = (bm[k]||0) + 1; });

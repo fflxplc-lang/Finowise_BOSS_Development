@@ -499,8 +499,9 @@ function chat(messages, opts) {
 
   /* A count question is answered by its numbers; an SOP under it is noise. */
   const countQ = isCountQ(q) && !house && !(data && data.intel) && !(data && Array.isArray(data.clients) && data.clients.length);   // a client's own question keeps its SOPs
-  if (data && data.attributeFilter) {
-    /* A filter over the book is answered by its count and its list; no SOP under it. */
+  const listQ = /\b(clients|investors|customers)\b/i.test(q) && /\b(who|whose|which|list|all|give me|show me|without|having|have not|has not|jinka|jinke|jiska|more than|above|below|less than|lakh|crore|se (?:jyada|zyada|kam))\b/i.test(q);
+  if ((data && data.attributeFilter) || (listQ && data && data.reads)) {
+    /* A filter over the book, or a list of clients, is answered by its count and its list; no SOP under it. */
   } else if (countQ) {
     if (!data || !(data.reads || data.countSummary || data.clients)) out.push(isHinglish(q)
       ? 'Is ginti ke liye BOSS ne koi records nahi padhe. Status ka naam likhiye — jaise "kitne KYC pending hain" ya "how many mandates are pending".'
