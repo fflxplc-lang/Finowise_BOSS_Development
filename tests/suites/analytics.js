@@ -77,7 +77,8 @@ suite(async t => {
   });
   await t.step('a pick-list with data gets a chart of its own', async () => {
     const r = await t.eval(() => {
-      const f = CMS_FIELDS_FLAT.find(f=>f.t==='select' && !['kycStatus','riskProfile','mandateStatus','taxStatus','clientCategory','branch','accountActivated','salutation','gender'].includes(f.k));
+      /* The fields a named chart already covers (State, Occupation… have charts of their own). */
+      const f = CMS_FIELDS_FLAT.find(f=>f.t==='select' && !['kycStatus','riskProfile','mandateStatus','taxStatus','clientCategory','branch','accountActivated','salutation','gender','occupation','mailingState','mailingCity'].includes(f.k));
       DB.clients.filter(c=>/^An /.test(c.cmsName)).forEach((c,i)=>{ c[f.k] = f.opts ? f.opts[i % 2] : ('V'+(i%2)); });
       const a = analyticsCharts('clients');
       return {field: f.l, auto: a.charts.filter(c=>c.auto).map(c=>c.label)};
