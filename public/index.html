@@ -58994,10 +58994,10 @@ const AI_SOURCES = {
   clients: {label:'Clients', perm:'CMS', list:()=>DB.clients, owner:r=>r.rmName, branch:r=>r.branch,
     date:r=>r.createdAt,
     cols:{
-      id:r=>r.id, name:r=>r.cmsName||clientName(r.id), mobile:r=>r.mobile, email:r=>r.email,
+      id:r=>r.id, name:r=>cleanClientName(r.cmsName||clientName(r.id)), mobile:r=>r.mobile, email:r=>r.email,
       stage:r=>stateLabel('CMS', stateOf('CMS', r)), category:r=>r.clientCategory||'',
-      branch:r=>r.branch, rm:r=>teamName(r.rmName), created:r=>r.createdAt,
-      aum:r=>clientBookAum(r), sip:r=>numVal(r.monthlySip),
+      branch:r=>r.branch||r.branchName, rm:r=>riaRmOf(r)[0] || '', created:r=>r.createdAt,
+      aum:r=>riaAum(r), sip:r=>riaSip(r),
       /* The statuses a "how many KYCs are pending" question groups by. */
       kyc:r=>r.kycStatus||'', mandate:r=>r.mandateStatus||'', risk:r=>r.riskProfile||r.iseqCategory||'',
       /* Date of birth and the person: "Varanasi branch ke clients ka DOB wise data". */
@@ -59050,6 +59050,7 @@ function aiReadSource(name, opts){
   if(!src) return {error:'There is no source called "'+name+'" in BOSS.'};
   if(!can(src.perm,'view')) return {error:'You do not have permission to view '+src.label+', so the assistant cannot read them either.'};
   let rows = visibleRecords((src.list()||[]).slice(), src.owner, src.branch);
+  if(name==='clients' && typeof riaConsolidate==='function') rows = riaConsolidate(rows);   // one investor once
   const from = opts.from ? new Date(opts.from) : null;
   const to   = opts.to   ? new Date(opts.to)   : null;
   if(from || to) rows = rows.filter(r=>{
@@ -59977,30 +59978,30 @@ function bossClientDossier(c){
     if(BOSS_NEVER.includes(f.k)) return;
     const v = c[f.k];
     if(v===null || v===undefined || v==='' || typeof v==='object') return;
-    fields[f.l] = f.k==='pan' ? bossMask(v,4) : f.t==='team' ? teamName(v) : v;
+    fields[f.l] = f.k==='pan' ? bossMask(v,4) : f.t==='team' ? (riaRmName(v) || '—') : v;
   });
   const lim = (a, n) => a.slice(0, n);
-  const holdings = (DB.platformHoldings||[]).filter(h=>h.clientId===c.id && !h.deletedAt)
+  const holdings = (DB.platformHoldings||[]).filter(h=>riaIdsOf(c).includes(h.clientId) && !h.deletedAt)
     .map(h=>bossScalars(h, ['id','key','clientId','batchId','format','importedBy','firstSeenAt']));
-  const sips = (DB.platformSips||[]).filter(s=>s.clientId===c.id && !s.deletedAt)
+  const sips = (DB.platformSips||[]).filter(s=>riaIdsOf(c).includes(s.clientId) && !s.deletedAt)
     .map(s=>bossScalars(s, ['id','key','clientId','batchId','format','importedBy','firstSeenAt']));
-  const txns = (DB.transactions||[]).filter(t=>t.clientId===c.id && !t.deletedAt)
+  const txns = (DB.transactions||[]).filter(t=>riaIdsOf(c).includes(t.clientId) && !t.deletedAt)
     .sort((a,b)=>String(b.initiatedDate||b.createdAt||'').localeCompare(String(a.initiatedDate||a.createdAt||'')))
     .map(t=>({date:t.initiatedDate||t.createdAt||'', type:t.transactionType||'', scheme:t.schemeId? schemeName(t.schemeId) : '',
               amount:numVal(t.amount), status:t.status||'', folio:t.folioNumber||'', remarks:t.remarks||''}));
-  const tasks = (DB.tasks||[]).filter(t=>t.clientId===c.id && !t.deletedAt && !/done|closed|complete/i.test(t.status||''))
+  const tasks = (DB.tasks||[]).filter(t=>riaIdsOf(c).includes(t.clientId) && !t.deletedAt && !/done|closed|complete/i.test(t.status||''))
     .map(t=>({title:t.title, type:t.taskType||'', due:t.dueDate||'', status:t.status||'', owner:teamName(t.assignedTo)}));
-  const meetings = (DB.meetings||[]).filter(m=>m.clientId===c.id && !m.deletedAt)
+  const meetings = (DB.meetings||[]).filter(m=>riaIdsOf(c).includes(m.clientId) && !m.deletedAt)
     .sort((a,b)=>String(b.scheduledDate||'').localeCompare(String(a.scheduledDate||'')))
     .map(m=>({date:m.scheduledDate||'', subject:m.subject||'', type:m.meetingType||'', status:m.status||''}));
-  const reviews = (DB.reviews||[]).filter(r=>r.clientId===c.id && !r.deletedAt)
+  const reviews = (DB.reviews||[]).filter(r=>riaIdsOf(c).includes(r.clientId) && !r.deletedAt)
     .map(r=>({stage:stateLabel('RMS', stateOf('RMS', r)), due:r.dueDate||r.meetingDate||'', status:r.status||''}));
   const goals = (typeof clientGoals==='function' ? clientGoals(c) : []).map(g=>bossScalars(g, ['id','clientId']));
   return {
     id: c.id, client: clientDisplayName(c), code: clientCode(c), stage: stateLabel('CMS', stateOf('CMS', c)),
     dob: riaDob(c) || '', age: calcAge(riaDob(c)),
-    rm: teamName(c.assignedTo), branch: c.branch || '',
-    aum: clientBookAum(c), monthlySip: clientBookSip(c),
+    rm: riaRmOf(c)[0] || teamName(c.assignedTo), branch: c.branch || c.branchName || '',
+    aum: riaAum(c), monthlySip: riaSip(c),
     portfolioSignals: lexiSignalsForAi(c),
     fields, holdings: lim(holdings, 60), sips: lim(sips, 60),
     transactions: lim(txns, 40), openTasks: lim(tasks, 20), meetings: lim(meetings, 10),
@@ -60014,11 +60015,11 @@ function bossClientDossier(c){
    every Amit in the book — it pulls them only if nothing longer matches. */
 const RIA_HONORIFICS = new Set(['mr','mrs','ms','miss','dr','shri','shree','smt','km','kumari','m s','ms.','mr.','mrs.','dr.']);
 /* A client's name as words, without "Mr", "Dr", "Smt" and the like. */
-function riaNameWords(c){ return riaNorm(clientDisplayName(c)).replace(/^m s\s+/, '').split(' ').filter(w=>w && !RIA_HONORIFICS.has(w)); }
+function riaNameWords(c){ return riaNorm(cleanClientName(clientDisplayName(c))).replace(/^m s\s+/, '').split(' ').filter(w=>w && !RIA_HONORIFICS.has(w)); }
 function bossClientsNamedIn(q){
   if(!can('CMS','view')) return [];
   const text = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g,' ') + ' ';
-  const seen = visibleRecords((DB.clients||[]).slice(), r=>r.assignedTo, r=>r.branch);
+  const seen = riaConsolidate(visibleRecords((DB.clients||[]).slice(), r=>r.assignedTo, r=>r.branch));
   const hits = seen.map(c=>{
     const words = riaNameWords(c).filter(w=>w.length>1);
     if(!words.length) return null;
@@ -60507,7 +60508,9 @@ const ANALYTICS_SOURCES = {
 function analyticsRecords(src){
   const s = ANALYTICS_SOURCES[src];
   if(!s || !can(s.perm, 'view')) return null;
-  return visibleRecords(s.list().slice(), s.owner, s.branch);
+  const rows = visibleRecords(s.list().slice(), s.owner, s.branch);
+  /* One investor once, however many rows they are filed under. */
+  return src==='clients' && typeof riaConsolidate==='function' ? riaConsolidate(rows) : rows;
 }
 function analyticsGroup(rows, value){
   const map = {};
@@ -61661,6 +61664,103 @@ function bossChartFromReads(reads){
    are estimates from category assumptions (not NAV history), and every
    answer says so. Suggestions only: the advisor and the client decide.
    ===================================================================== */
+/* =====================================================================
+   ONE INVESTOR, HOWEVER MANY ROWS
+
+   An investor can sit in DB.clients more than once: a platform upload
+   created one row (holding the AUM), and later imports added more for the
+   same PAN — with the date of birth, address, UCC, nominee, KYC, mandate
+   and RM — and wrote the name as "Vishal Kumar Maurya - GIYPM3852A". RIA AI
+   reads them as one person: rows sharing a full PAN (or, with no PAN, the
+   same clean name and mobile) are merged, the newest row's value winning
+   and older rows filling its blanks; money, holdings, SIPs, transactions
+   and tasks are taken across every row. A masked PAN never joins rows:
+   two people can share its last four characters. Nothing is written back.
+   ===================================================================== */
+const RIA_PAN_FULL = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+/* "Vishal Kumar Maurya - GIYPM3852A" → "Vishal Kumar Maurya". */
+function cleanClientName(name){
+  return String(name==null ? '' : name).replace(/\s*[-–—]\s*(?:[A-Z]{5}[0-9]{4}[A-Z]|[*Xx•]{3,6}[0-9]{0,4}[A-Z]?)\s*$/i, '').trim();
+}
+function riaRmName(x){
+  const t = typeof teamName==='function' ? teamName(x) : '';
+  if(t && t!=='—') return t;
+  return /^(USR|TM|EMP)[-_][A-Z0-9]{4,}$/i.test(String(x)) ? '' : String(x).trim();
+}
+const riaIdsOf = c => (c && c._ids) || (c ? [c.id] : []);
+const riaAum = c => c && Array.isArray(c._rows) ? c._rows.reduce((n, r)=>n + numVal(clientBookAum(r)), 0) : numVal(clientBookAum(c));
+const riaSip = c => c && Array.isArray(c._rows) ? c._rows.reduce((n, r)=>n + numVal(clientBookSip(r)), 0) : numVal(clientBookSip(c));
+function riaBranchOfId(id){ const c = (DB.clients||[]).find(x=>x.id===id); return c ? (c.branch || c.branchName || '') : ''; }
+function riaClientNameOf(id){ return cleanClientName(clientName(id)); }
+const riaCleanNameKey = r => String(cleanClientName(r.cmsName || (typeof clientDisplayName==='function' ? clientDisplayName(r) : '')) || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/* The ways two rows can be told to be the same investor: the full PAN; the
+   same clean full name with the same mobile; or, where the PAN reaches this
+   page masked, the same clean full name with the same last four PAN
+   characters. Two rows with different full PANs are never joined, and nor
+   are rows whose names disagree ("Anil Deshpande" and "Ramesh Kumar" on one
+   placeholder PAN are two people, a typo or a dummy PAN between them). */
+const RIA_NAME_SKIP = new Set(['mr','mrs','ms','miss','dr','shri','shree','smt','km','kumari','m','s']);
+const riaNameSet = nm => String(nm||'').split(' ').filter(w=>w && !RIA_NAME_SKIP.has(w));
+function riaNamesAgree(a, b){
+  const wa = riaNameSet(a), wb = riaNameSet(b);
+  if(!wa.length || !wb.length || wa.join(' ')===wb.join(' ')) return true;
+  const [lo, hi] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+  if(lo.every(w=>hi.includes(w))) return true;                          // "Vishal Maurya" / "Vishal Kumar Maurya"
+  return wa[0]===wb[0] && wa[wa.length-1]===wb[wb.length-1];
+}
+function riaPersonKeys(r){
+  const out = [], pan = String(r.pan||'').trim().toUpperCase();
+  const full = RIA_PAN_FULL.test(pan) ? pan : '';
+  if(full) out.push('P:' + full);
+  const nm = riaCleanNameKey(r), mob = String(r.mobile||'').replace(/\D/g, '').slice(-10);
+  if(nm && mob.length===10 && !/^0+$/.test(mob)) out.push('N:' + nm + '|' + mob);
+  const tail = pan.replace(/[^A-Z0-9]/g, '').slice(-4);
+  if(nm.split(' ').length >= 2 && /^[0-9]{3}[A-Z]$|^[0-9]{4}$/.test(tail) && pan.length >= 4) out.push('M:' + nm + '|' + (full ? full.slice(-4) : tail));
+  return out;
+}
+const riaBlank = v => v===undefined || v===null || v==='' || (Array.isArray(v) && !v.length);
+function riaMergeRows(list){
+  const byNew = list.slice().sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  const filled = r => Object.keys(r).filter(k=>!riaBlank(r[k])).length;
+  const primary = list.length===1 ? list[0] : list.slice().sort((a,b)=>(numVal(clientBookAum(b)) - numVal(clientBookAum(a))) || (filled(b) - filled(a)))[0];
+  if(list.length===1){ const nm = cleanClientName(primary.cmsName); return nm && nm!==primary.cmsName ? Object.assign({}, primary, {cmsName: nm}) : primary; }
+  const m = {};
+  byNew.forEach(r=>{ for(const k in r){ if(riaBlank(m[k]) && !riaBlank(r[k])) m[k] = r[k]; } });
+  m.id = primary.id;
+  m.cmsName = cleanClientName(primary.cmsName || m.cmsName);
+  m.branch = byNew.map(r=>r.branch || r.branchName).find(Boolean) || '';
+  const first = list.map(r=>String(r.createdAt||'')).filter(Boolean).sort()[0];
+  if(first) m.createdAt = first;                                       // when the investor first came
+  m._ids = list.map(r=>r.id); m._rows = list;
+  m._rms = byNew.flatMap(r=>[r.rmName, r.assignedTo]).filter(Boolean);
+  return m;
+}
+/* Visible rows → one entry per investor. Cached for a moment: a single
+   answer reads the book many times. */
+let riaConsolidateCache = null;
+function riaConsolidate(rows){
+  if(!Array.isArray(rows)) return rows || [];
+  const now = Date.now(), c0 = riaConsolidateCache;
+  if(c0 && now - c0.at < 1500 && c0.n===rows.length && c0.first===rows[0] && c0.last===rows[rows.length-1] && c0.db===DB.clients) return c0.out;
+  const parent = rows.map((_, i)=>i), pans = rows.map(r=>{ const p = String((r && r.pan)||'').trim().toUpperCase(); return RIA_PAN_FULL.test(p) ? p : ''; });
+  const find = i => { while(parent[i]!==i){ parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const panOf = new Map(), namesOf = new Map();                       // root → its full PAN, its names
+  rows.forEach((r, i)=>{ if(pans[i]) panOf.set(i, pans[i]); namesOf.set(i, r ? [riaCleanNameKey(r)] : []); });
+  const union = (a, b) => { a = find(a); b = find(b); if(a===b) return;
+    const pa = panOf.get(a), pb = panOf.get(b); if(pa && pb && pa!==pb) return;   // two PANs: two people
+    const na = namesOf.get(a), nb = namesOf.get(b);
+    if(!na.every(x=>nb.every(y=>riaNamesAgree(x, y)))) return;          // two names: two people
+    parent[b] = a; if(!pa && pb) panOf.set(a, pb); namesOf.set(a, na.concat(nb)); };
+  const seenKey = new Map();
+  rows.forEach((r, i)=>{ if(!r) return; riaPersonKeys(r).forEach(k=>{ const j = seenKey.get(k); if(j===undefined) seenKey.set(k, i); else union(j, i); }); });
+  const groups = new Map();
+  rows.forEach((r, i)=>{ if(!r) return; const g = find(i); if(groups.has(g)) groups.get(g).push(r); else groups.set(g, [r]); });
+  const out = [...groups.values()].map(riaMergeRows);
+  riaConsolidateCache = {at: now, n: rows.length, first: rows[0], last: rows[rows.length-1], db: DB.clients, out};
+  return out;
+}
+/* A person by any of the ids they are filed under. */
+function riaPersonById(id){ return riaVisible().find(x=>riaIdsOf(x).includes(id)); }
 const RIA_RF = 6.5;                                   // risk-free rate, % a year
 const RIA_REF = [{label:'Nifty 50 (long-run reference)', r:12}, {label:'CRISIL Hybrid 35+65 (long-run reference)', r:10}];
 const RIA_GOVERNANCE = 'RIA AI provides analytical suggestions; human advisor & client approval is mandatory before executing any transaction.';
@@ -61720,7 +61820,9 @@ const RIA_SLEEVE_CLASS = {Equity:'Equity', Debt:'Debt', Structured:'Hybrid', Hyb
   Commodities:'Gold/Commodities', Liquid:'Liquid/Cash', Cash:'Liquid/Cash'};
 const riaYearsSince = d => { const t = Date.parse(String(d||'').slice(0,10)); return isFinite(t) ? (Date.now() - t) / (365.25*864e5) : null; };
 /* A client's positions, as finely as the records allow. */
-function riaPositions(c){
+/* A person's positions: every row they are filed under. */
+function riaPositions(c){ return c && Array.isArray(c._rows) && c._rows.length > 1 ? [].concat(...c._rows.map(riaPositionsOne)) : riaPositionsOne(c && c._rows ? c._rows[0] : c); }
+function riaPositionsOne(c){
   const out = [];
   const add = (p) => { if(numVal(p.current) > 0 || numVal(p.invested) > 0) out.push(Object.assign({clientId:c.id, amc:'', cat:null, start:'', xirr:null}, p)); };
   const asPos = (scheme, invested, current, start, xirr, src) => {
@@ -61807,7 +61909,7 @@ function riaIntel(q, people){
   const positions = [].concat(...scope.clients.map(riaPositions));
   const total = positions.reduce((s,p)=>s + p.current, 0);
   const invested = positions.reduce((s,p)=>s + p.invested, 0);
-  const sip = scope.clients.reduce((s,c)=>s + numVal(clientBookSip(c)), 0);
+  const sip = scope.clients.reduce((s,c)=>s + numVal(riaSip(c)), 0);
   const one = scope.kind==='client' ? scope.clients[0] : null;
   const profile = one ? (lexiProfileOf(one) || '') : '';
   const out = {scope: {kind: scope.kind, label: scope.label, clients: scope.clients.length, clientId: one ? one.id : ''},
@@ -61948,7 +62050,7 @@ function riaIntel(q, people){
     const opp = {}; const ex = [];
     const note = (k, c, amt, why) => { opp[k] = opp[k] || {count:0, amount:0}; opp[k].count++; opp[k].amount += amt || 0; if(ex.length < 30) ex.push({client: clientDisplayName(c), opportunity:k, amount: riaR(amt||0), why}); };
     scope.clients.forEach(c=>{
-      const ps = riaPositions(c), aum = ps.reduce((s,p)=>s + p.current, 0), csip = numVal(clientBookSip(c));
+      const ps = riaPositions(c), aum = ps.reduce((s,p)=>s + p.current, 0), csip = numVal(riaSip(c));
       if(aum <= 0 && !csip) return;
       const liq = ps.filter(p=>p.cls==='Liquid/Cash').reduce((s,p)=>s + p.current, 0);
       const cls = {}; ps.forEach(p=>cls[p.cls] = (cls[p.cls]||0) + p.current);
@@ -61972,7 +62074,7 @@ function riaIntel(q, people){
       const ltgC = ps.filter(p=>equityTaxed(p) && p.current > p.invested && p.invested).reduce((s,p)=>s + p.current - p.invested, 0);
       if(!/huf/.test(tax) && (aum >= 2500000 || ltgC > allowance)) note('Cross-sell: HUF folio (separate tax entity)', c, 0, 'Book ' + money(aum) + (ltgC > allowance ? ', equity gain ' + money(ltgC) + ' above one ₹1.25L allowance' : '') + '.');
       const eq = (cls.Equity||0) + (cls.Hybrid||0);
-      const redeemed = (DB.transactions||[]).some(t=>t.clientId===c.id && !t.deletedAt && /Redemption/i.test(t.transactionType||'') && (riaYearsSince(t.initiatedDate || t.createdAt) ?? 9) < 1);
+      const redeemed = (DB.transactions||[]).some(t=>riaIdsOf(c).includes(t.clientId) && !t.deletedAt && /Redemption/i.test(t.transactionType||'') && (riaYearsSince(t.initiatedDate || t.createdAt) ?? 9) < 1);
       if(eq >= 500000 && (redeemed || aum >= 1500000)) note('Cross-sell: LA MF (loan against mutual funds)', c, riaR(eq * 0.45), (redeemed ? 'Redeemed in the last year; ' : '') + 'a lien on equity units gives about ' + money(eq * 0.45) + ' of credit without selling.');
       if(aum > 0 && (!(cls['Gold/Commodities']) || (cls.Debt||0) + (cls['Liquid/Cash']||0) < aum * 0.1 || Math.max(...Object.values(cls)) > aum * 0.8))
         note('Cross-sell: Multi-Asset / Gold / Debt diversification', c, 0, (cls['Gold/Commodities'] ? '' : 'No gold. ') + (Math.max(...Object.values(cls)) > aum * 0.8 ? 'One asset class above 80%.' : ''));
@@ -62393,8 +62495,8 @@ function bossDownloadTurnPdf(i){
    a SIP, the equity share of the holdings — and says the status is not
    recorded, rather than claiming one the record does not hold.
    --------------------------------------------------------------------- */
-const riaHasAum = c => numVal(clientBookAum(c)) > 0;
-const riaHasSip = c => numVal(clientBookSip(c)) > 0;
+const riaHasAum = c => numVal(riaAum(c)) > 0;
+const riaHasSip = c => numVal(riaSip(c)) > 0;
 function riaEquityPct(c){
   const ps = riaPositions(c).filter(p=>p.cat && p.cat.mix), t = ps.reduce((s,p)=>s + p.current, 0);
   return t ? Math.round(ps.reduce((s,p)=>s + p.current * p.cat.mix[0], 0) / t * 100) : null;
@@ -62453,7 +62555,7 @@ const RIA_SEGMENTS = {
   },
   sip: {
     of(c){
-      const s = numVal(clientBookSip(c));
+      const s = numVal(riaSip(c));
       if(s >= 10000) return 'SIP ₹10k+ a month';
       if(s > 0) return 'SIP under ₹10k a month';
       return riaHasAum(c) ? 'AUM, no active SIP' : 'No AUM, no SIP';
@@ -62491,7 +62593,7 @@ function riaNextActions(src, rows){
     if(/needed|not started|re-register/.test(RIA_SEGMENTS.mandate.of(c))) add('Trigger e-Mandate');
     if(!clientGoals(c).length) add('Map goals (7 Events / GAB)');
     if(!String(c.firstNomineeName||'').trim()) add('Register a nominee');
-    const a = numVal(clientBookAum(c)), s = numVal(clientBookSip(c));
+    const a = numVal(riaAum(c)), s = numVal(riaSip(c));
     if(a > 0 && s < a * 0.01) add('SIP step-up / top-up');
     if(!lexiProfileOf(c)) add('Run ISEQ risk profiling');
   });
@@ -62791,14 +62893,14 @@ async function riaRun(act, label){
   if(act.t==='value'){ await riaResolve(act.value); return riaDone(); }
   if(act.t==='client'){
     ai.flow = null;
-    const c = riaVisible().find(x=>x.id===act.id);
+    const c = riaPersonById(act.id);
     if(!c) return riaDone();
     if(act.topic==='chat' && act.question) return riaResumeChat(act.question, c);
     riaAnswerClient(act.topic || 'personal', c, act.fields);
     return riaDone();
   }
   if(act.t==='topic'){
-    if(act.clientId){ const c = riaVisible().find(x=>x.id===act.clientId); if(c) riaAnswerClient(act.topic, c); }
+    if(act.clientId){ const c = riaPersonById(act.clientId); if(c) riaAnswerClient(act.topic, c); }
     else await riaAnswerGroup(act.topic, act.group);
     return riaDone();
   }
@@ -62816,7 +62918,7 @@ async function riaResumeChat(q, c){
 /* ---- finding investors in what this user may see ---- */
 const riaVisible = () => (typeof analyticsRecords==='function' ? analyticsRecords('clients') : null) || [];
 const riaNorm = s => String(s==null ? '' : s).toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g, ' ').replace(/\s+/g, ' ').trim();
-const riaRmOf = c => [c.rmName, c.assignedTo].filter(Boolean).map(x=>teamName(x)).filter(x=>x && x!=='—');
+const riaRmOf = c => [...new Set((c._rms || [c.rmName, c.assignedTo]).filter(Boolean).map(riaRmName).filter(Boolean))];
 /* "Varanasi" finds "Varanasi Branch"; "varanasi branch" finds "Varanasi". */
 function riaBranchHit(c, n){
   const b = riaNorm(c.branch); if(!b || !n) return false;
@@ -62840,14 +62942,14 @@ async function riaFind(by, value){
       try{
         const r = await fetch('/api/clients/pan-match', {method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({pans:[P]})});
         const d = await r.json(); const ids = d && d.ok && d.results && d.results[0] ? d.results[0].ids || [] : [];
-        hits = cs.filter(c=>ids.includes(c.id));
+        hits = cs.filter(c=>riaIdsOf(c).some(id=>ids.includes(id)));
       }catch(e){ /* no server match: fall through */ }
     }
     if(!hits.length && /^[A-Z0-9]{4}$/.test(P)) hits = cs.filter(c=>String(c.pan||'').toUpperCase().slice(-4)===P);
     return {hits};
   }
   if(by==='ucc'){
-    const keys = c => [c.canIinNo, c.uccNo, c.id, typeof clientCode==='function' ? clientCode(c) : ''].filter(Boolean).map(x=>String(x).toLowerCase());
+    const keys = c => [c.canIinNo, c.uccNo, ...riaIdsOf(c), typeof clientCode==='function' ? clientCode(c) : ''].filter(Boolean).map(x=>String(x).toLowerCase());
     let hits = cs.filter(c=>keys(c).includes(v.toLowerCase()));
     if(!hits.length && v.length >= 3) hits = cs.filter(c=>keys(c).some(k=>k.includes(v.toLowerCase())));
     return {hits};
@@ -62872,7 +62974,7 @@ function riaBareKind(q){
   if(/^[+]?(91[-\s]?)?[6-9][0-9]{9}$/.test(v.replace(/\s+/g, ''))) return 'mobile';
   if(/^[A-Za-z0-9-]{3,24}$/.test(v) && /[0-9]/.test(v)){
     const lv = v.toLowerCase();
-    if(riaVisible().some(c=>[c.canIinNo, c.uccNo, c.id].some(x=>x && String(x).toLowerCase()===lv))) return 'ucc';
+    if(riaVisible().some(c=>[c.canIinNo, c.uccNo, ...riaIdsOf(c)].some(x=>x && String(x).toLowerCase()===lv))) return 'ucc';
   }
   return '';
 }
@@ -62900,7 +63002,7 @@ function riaDobIntent(q){
 async function riaDeskHandle(q){
   if(/^\s*(☰|menu|main menu|start|help|hi|hello|namaste)\s*[.!]?\s*$/i.test(q)){ ai.flow = null; riaPushBot({ui:{kind:'menu', open:null}}); return {}; }
   if(ai.flow && ai.flow.step==='disambiguate_client'){
-    const f = ai.flow, cands = f.candidates.map(id=>riaVisible().find(x=>x.id===id)).filter(Boolean);
+    const f = ai.flow, cands = f.candidates.map(riaPersonById).filter(Boolean);
     const num = /^\s*(\d{1,3})\s*\.?\s*$/.exec(q), n = riaNorm(q);
     const c = num ? cands[Number(num[1]) - 1] : cands.find(x=>riaNameWords(x).join(' ')===n.split(' ').filter(w=>!RIA_HONORIFICS.has(w)).join(' '));
     if(c){ ai.flow = null;
@@ -63005,8 +63107,9 @@ function riaClientLine(c){
   const code = c.uccNo || c.canIinNo || (typeof clientCode==='function' ? clientCode(c) : '') || c.id;
   const pan = c.pan ? 'PAN: …' + String(c.pan).slice(-4) : '';
   const mob = c.mobile ? 'Mob: …' + String(c.mobile).replace(/\D/g, '').slice(-4) : '';
-  const aum = numVal(clientBookAum(c));
-  return [clientDisplayName(c), c.branch || '', code, pan, mob, aum ? 'AUM ' + riaCompact2(aum) : ''].filter(Boolean).join(' · ');
+  const aum = numVal(riaAum(c));
+  const dob = riaDob(c) ? 'DOB ' + riaDate(riaDob(c)) : '';
+  return [clientDisplayName(c), c.branch || '', code, pan, mob, dob, aum ? 'AUM ' + riaCompact2(aum) : ''].filter(Boolean).join(' · ');
 }
 
 /* ---- the answers ---- */
@@ -63023,7 +63126,7 @@ function riaClientActions(c){
     {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'↗ Open Account', act:{t:'open', id:c.id}}, {label:'☰ Main Menu', act:{t:'menu'}}];
 }
 function riaClientTxns(c, re){
-  return (DB.transactions||[]).filter(t=>t.clientId===c.id && !t.deletedAt && (!re || re.test(t.transactionType||'')))
+  return (DB.transactions||[]).filter(t=>riaIdsOf(c).includes(t.clientId) && !t.deletedAt && (!re || re.test(t.transactionType||'')))
     .sort((a,b)=>String(b.initiatedDate||b.createdAt||'').localeCompare(String(a.initiatedDate||a.createdAt||'')));
 }
 const riaTxnRow = t => [riaDate(t.initiatedDate || t.createdAt), t.transactionType || '', t.schemeId ? schemeName(t.schemeId) : (t.schemeName || ''), money(numVal(t.amount)), t.status || ''];
@@ -63037,13 +63140,17 @@ const RIA_PERSONAL_RE = /\b(personal|profile|details?|jankari|information|info|b
 function riaAskedFields(q){ return RIA_FIELD_WORDS.filter(([, re])=>re.test(q)).map(([k])=>k); }
 const riaNomineeOf = c => c.firstNomineeName || ((c.cif_nominees||[])[0]||{}).name || '';
 const riaNomineeRelOf = c => c.firstNomineeRelation || c.nomineeRelation || ((c.cif_nominees||[])[0]||{}).relation || '';
-function riaAddressOf(c){ return [c.mailingStreet || c.street || c.address, recCity(c), c.mailingState || c.state, c.mailingZip || c.pincode].filter(Boolean).join(', '); }
+function riaAddressOf(c){
+  const street = String(c.mailingStreet || c.street || c.address || '').trim(), low = street.toLowerCase();
+  /* "…, VARANASI, UTTAR PRADESH, 221003" already in the street is not said twice. */
+  return [street].concat([recCity(c), c.mailingState || c.state, c.mailingZip || c.pincode].filter(x=>x && !low.includes(String(x).toLowerCase()))).filter(Boolean).join(', ');
+}
 /* The exact field asked for, first: "**NAME — Date of Birth:** 14 May 1988 (Age: 38 yrs) · **PAN:** …". */
 function riaLeadLine(c, fields){
   const dob = riaDob(c), age = calcAge(dob), out = [];
   const say = {dob: ['Date of Birth', dob ? riaDate(dob) + (age!==null ? ' (Age: ' + age + ' yrs)' : '') : 'not on file'], pan: ['PAN', c.pan || 'not on file'],
     mobile: ['Mobile', c.mobile || 'not on file'], email: ['Email', c.email || 'not on file'], address: ['Address', riaAddressOf(c) || 'not on file'],
-    nominee: ['Nominee', riaNomineeOf(c) ? riaNomineeOf(c) + (riaNomineeRelOf(c) ? ' (' + riaNomineeRelOf(c) + ')' : '') : 'none registered'],
+    nominee: ['Nominee', riaNomineeOf(c) ? riaNomineeOf(c) + (riaNomineeRelOf(c) || c.firstNomineeDob ? ' (' + [riaNomineeRelOf(c), c.firstNomineeDob ? 'DOB ' + riaDate(c.firstNomineeDob) : ''].filter(Boolean).join(', ') + ')' : '') : 'none registered'],
     iin: ['IIN / UCC', [c.canIinNo, c.uccNo].filter(Boolean).join(' / ') || 'not on file'], anniversary: ['Anniversary', riaDate(c.anniversaryDate || c.anniversary) || 'not on file'],
     occupation: ['Occupation', c.profession || c.occupation || 'not on file'], bank: ['Bank', [c.bankName, c.ifsc || c.ifscCode].filter(Boolean).join(' · ') || 'not on file']};
   (fields||[]).forEach((k, i)=>{ const v = say[k]; if(v) out.push(i===0 ? '**' + clientDisplayName(c) + ' — ' + v[0] + ':** ' + v[1] : '**' + v[0] + ':** ' + v[1]); });
@@ -63060,12 +63167,12 @@ function riaPersonalCard(c){
     ['Address', riaAddressOf(c)], ['Occupation', c.profession || c.occupation || ''],
     ['Gender / Marital status', [c.gender, c.maritalStatus].filter(Boolean).join(' / ')],
     ['IIN / UCC no.', [c.canIinNo, c.uccNo].filter(Boolean).join(' / ') + (c.accountActivated ? ' (activated: ' + c.accountActivated + ')' : '')],
-    ['KYC status', RIA_SEGMENTS.kyc.of(c)], ['Mandate status', RIA_SEGMENTS.mandate.of(c)],
+    ['KYC status', RIA_SEGMENTS.kyc.of(c)], ['Mandate status', RIA_SEGMENTS.mandate.of(c) + (c.mandateType ? ' (' + c.mandateType + ')' : '')],
     ['Bank', [c.bankName, c.ifsc || c.ifscCode ? 'IFSC ' + (c.ifsc || c.ifscCode) : '', c.accNo ? 'A/c ending ' + String(c.accNo).slice(-4) : ''].filter(Boolean).join(' · ')],
-    ['Nominee', nom ? nom + (rel ? ' (' + rel + ')' : '') : 'No nominee registered'],
+    ['Nominee', nom ? nom + (rel || c.firstNomineeDob ? ' (' + [rel, c.firstNomineeDob ? 'DOB ' + riaDate(c.firstNomineeDob) : ''].filter(Boolean).join(', ') + ')' : '') : 'No nominee registered'],
     ['Risk profile', c.riskProfile || c.iseqCategory || ''],
     ['Branch', c.branch || ''], ['Relationship manager', riaRmOf(c)[0] || ''],
-    ['Total AUM', money(numVal(clientBookAum(c)))], ['Monthly SIP', money(numVal(clientBookSip(c)))]];
+    ['Total AUM', money(numVal(riaAum(c)))], ['Monthly SIP', money(numVal(riaSip(c)))]];
 }
 function riaAnswerClient(topic, c, fields){
   if(topic==='personal' || topic==='dob'){
@@ -63078,8 +63185,8 @@ function riaAnswerClient(topic, c, fields){
   const name = clientDisplayName(c), head = '**' + name + '** · ' + [c.uccNo || c.canIinNo || c.id, c.branch, riaRmOf(c)[0] ? 'RM ' + riaRmOf(c)[0] : ''].filter(Boolean).join(' · ');
   const L = [head, ''], turn = {actions: riaClientActions(c), deskClient: c.id};       // "↗ Open Account" is among the actions
   const kv = (k, v) => L.push('**' + k + ':** ' + (v==null || v==='' ? 'not recorded' : v));
-  const sips = (DB.platformSips||[]).filter(s=>s.clientId===c.id && !s.deletedAt);
-  const sipM = numVal(clientBookSip(c));
+  const sips = (DB.platformSips||[]).filter(s=>riaIdsOf(c).includes(s.clientId) && !s.deletedAt);
+  const sipM = numVal(riaSip(c));
   if(topic==='kyc' || topic==='profile'){
     kv('KYC status', RIA_SEGMENTS.kyc.of(c));
     kv('IIN / UCC', [c.canIinNo, c.uccNo].filter(Boolean).join(' / '));
@@ -63098,7 +63205,7 @@ function riaAnswerClient(topic, c, fields){
     kv('Active SIPs', sips.length ? sips.length + ' — ' + money(sipM) + ' a month' : (sipM ? money(sipM) + ' a month (BOSS ledger)' : 'none'));
     const next = RIA_SEGMENTS.mandate.actions[RIA_SEGMENTS.mandate.of(c)]; if(next) kv('Next step', next);
   }
-  if(topic==='profile'){ L.push(''); kv('AUM', money(numVal(clientBookAum(c)))); kv('Date of birth', riaDob(c) ? riaDate(riaDob(c)) + ' (age ' + calcAge(riaDob(c)) + ')' : ''); }
+  if(topic==='profile'){ L.push(''); kv('AUM', money(numVal(riaAum(c)))); kv('Date of birth', riaDob(c) ? riaDate(riaDob(c)) + ' (age ' + calcAge(riaDob(c)) + ')' : ''); }
   if(topic==='sip'){
     kv('Monthly SIP', money(sipM));
     const ledger = riaClientTxns(c, /SIP/i);
@@ -63114,7 +63221,7 @@ function riaAnswerClient(topic, c, fields){
     if(list.length) turn.table = {title: topic==='redeem' ? 'Redemptions & switches' : 'Transactions (latest first)', cols:['Date', 'Type', 'Scheme', 'Amount', 'Status'], rows: list.map(riaTxnRow)};
   }
   if(topic==='tasks'){
-    const list = (DB.tasks||[]).filter(t=>t.clientId===c.id && !t.deletedAt && !/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||'')));
+    const list = (DB.tasks||[]).filter(t=>riaIdsOf(c).includes(t.clientId) && !t.deletedAt && !/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||'')));
     L.push(list.length ? riaN(list.length) + ' open task' + (list.length===1 ? '' : 's') + '.' : 'No open tasks.');
     if(list.length) turn.table = {title:'Open tasks', cols:['Task', 'Type', 'Due', 'Status', 'Owner'], rows: list.map(t=>[t.title || '', t.taskType || '', riaDate(t.dueDate), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo)])};
   }
@@ -63171,24 +63278,24 @@ async function riaAnswerGroup(topic, g){
     d.groups.slice(0, 6).forEach(x=>L.push('- ' + x.label + ': ' + riaN(x.count)));
     turn.table = {title: dim.label + ' — ' + label, cols:['Client', 'Client ID / UCC', dim.label, 'Branch', 'RM'], rows: clients.map(c=>[clientDisplayName(c), c.uccNo || c.canIinNo || c.id, RIA_SEGMENTS[topic].of(c), c.branch || '', riaRmOf(c)[0] || ''])};
   } else if(topic==='sip' || topic==='holdings'){
-    const aum = clients.reduce((s,c)=>s + numVal(clientBookAum(c)), 0), sip = clients.reduce((s,c)=>s + numVal(clientBookSip(c)), 0);
+    const aum = clients.reduce((s,c)=>s + numVal(riaAum(c)), 0), sip = clients.reduce((s,c)=>s + numVal(riaSip(c)), 0);
     L.push('**AUM:** ' + money(aum) + ' · **Monthly SIP:** ' + money(sip) + '.');
     const d = riaDimDashboard('clients', RIA_EXTRA_DIMS[0], clients, 'SIP status — ' + label);
     turn.charts = d.charts;
     turn.table = {title:'SIP & AUM — ' + label, cols:['Client', 'Client ID / UCC', 'AUM', 'Monthly SIP', 'SIP status', 'Branch'],
-      rows: clients.slice().sort((a,b)=>numVal(clientBookAum(b)) - numVal(clientBookAum(a))).map(c=>[clientDisplayName(c), c.uccNo || c.canIinNo || c.id, money(numVal(clientBookAum(c))), money(numVal(clientBookSip(c))), RIA_SEGMENTS.sip.of(c), c.branch || ''])};
+      rows: clients.slice().sort((a,b)=>numVal(riaAum(b)) - numVal(riaAum(a))).map(c=>[clientDisplayName(c), c.uccNo || c.canIinNo || c.id, money(numVal(riaAum(c))), money(numVal(riaSip(c))), RIA_SEGMENTS.sip.of(c), c.branch || ''])};
   } else if(topic==='txn' || topic==='redeem'){
-    const ids = new Set(clients.map(c=>c.id)), re = topic==='redeem' ? /Redemption|SWP|Switch/i : null;
+    const ids = new Set(clients.flatMap(riaIdsOf)), re = topic==='redeem' ? /Redemption|SWP|Switch/i : null;
     const list = (DB.transactions||[]).filter(t=>ids.has(t.clientId) && !t.deletedAt && (!re || re.test(t.transactionType||''))).sort((a,b)=>String(b.initiatedDate||b.createdAt||'').localeCompare(String(a.initiatedDate||a.createdAt||'')));
     const by = {}; list.forEach(t=>{ const k = t.status || 'Not recorded'; by[k] = (by[k]||0) + 1; });
     L.push(riaN(list.length) + ' transactions: ' + Object.keys(by).map(k=>k + ' ' + by[k]).join(', ') + '.');
     if(list.length){ turn.charts = [{kind:'donut', module:'analytics', fmt:'count', title:'Transactions by status — ' + label, items: Object.keys(by).map(k=>({label:k, value:by[k]})), centre: riaN(list.length), centreNote:'transactions'}];
-      turn.table = {title:'Transactions — ' + label, cols:['Client', 'Date', 'Type', 'Scheme', 'Amount', 'Status'], rows: list.map(t=>[clientName(t.clientId)].concat(riaTxnRow(t)))}; }
+      turn.table = {title:'Transactions — ' + label, cols:['Client', 'Date', 'Type', 'Scheme', 'Amount', 'Status'], rows: list.map(t=>[riaClientNameOf(t.clientId)].concat(riaTxnRow(t)))}; }
   } else if(topic==='tasks'){
-    const ids = new Set(clients.map(c=>c.id));
+    const ids = new Set(clients.flatMap(riaIdsOf));
     const list = (DB.tasks||[]).filter(t=>ids.has(t.clientId) && !t.deletedAt && !/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||'')));
     L.push(riaN(list.length) + ' open tasks.');
-    if(list.length) turn.table = {title:'Open tasks — ' + label, cols:['Client', 'Task', 'Due', 'Status', 'Owner'], rows: list.map(t=>[clientName(t.clientId), t.title || '', riaDate(t.dueDate), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo)])};
+    if(list.length) turn.table = {title:'Open tasks — ' + label, cols:['Client', 'Task', 'Due', 'Status', 'Owner'], rows: list.map(t=>[riaClientNameOf(t.clientId), t.title || '', riaDate(t.dueDate), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo)])};
   }
   turn.content = L.join('\n').trim();
   riaPushBot(turn);
@@ -63330,12 +63437,12 @@ function riaParseStatus(q){
   return out;
 }
 const RIA_FILTER_SOURCES = {
-  clients:      {label:'Clients', rows: ()=>riaVisible(), date: r=>r.createdAt, branch: r=>r.branch},
+  clients:      {label:'Clients', rows: ()=>riaVisible(), date: r=>r.createdAt, branch: r=>r.branch || r.branchName},
   leads:        {label:'Leads', rows: ()=>analyticsRecords('leads') || [], date: r=>r.createdAt, branch: r=>r.branch},
-  transactions: {label:'Transactions', rows: ()=>{ const ids = new Map(riaVisible().map(c=>[c.id, c])); return (DB.transactions||[]).filter(t=>!t.deletedAt && ids.has(t.clientId)); },
-                 date: r=>r.initiatedDate || r.createdAt, branch: r=>{ const c = (DB.clients||[]).find(x=>x.id===r.clientId); return (c && c.branch) || r.branch; }},
-  sips:         {label:'SIP registrations', rows: ()=>{ const ids = new Set(riaVisible().map(c=>c.id)); return (DB.platformSips||[]).filter(s=>!s.deletedAt && ids.has(s.clientId)); },
-                 date: r=>r.startDate || r.regDate || r.firstSeenAt, branch: r=>{ const c = (DB.clients||[]).find(x=>x.id===r.clientId); return (c && c.branch) || ''; }},
+  transactions: {label:'Transactions', rows: ()=>{ const ids = new Map(riaVisible().flatMap(c=>riaIdsOf(c).map(id=>[id, c]))); return (DB.transactions||[]).filter(t=>!t.deletedAt && ids.has(t.clientId)); },
+                 date: r=>r.initiatedDate || r.createdAt, branch: r=>{ return riaBranchOfId(r.clientId) || r.branch; }},
+  sips:         {label:'SIP registrations', rows: ()=>{ const ids = new Set(riaVisible().flatMap(riaIdsOf)); return (DB.platformSips||[]).filter(s=>!s.deletedAt && ids.has(s.clientId)); },
+                 date: r=>r.startDate || r.regDate || r.firstSeenAt, branch: r=>{ return riaBranchOfId(r.clientId); }},
   tasks:        {label:'Tasks', rows: ()=>(typeof analyticsTaskRows==='function' ? analyticsTaskRows() : null) || [], date: r=>r.dueDate, branch: r=>r.branch},
   meetings:     {label:'Meetings', rows: ()=>can('Meetings','view') ? visibleRecords((DB.meetings||[]).filter(m=>!m.deletedAt), r=>r.assignTo, r=>r.branch) : [], date: r=>r.scheduledDate, branch: r=>r.branch},
   business:     {label:'Business entries (DBT)', rows: ()=>can('Business','view') ? visibleRecords((DB.businessEntries||[]).filter(x=>!x.deletedAt), r=>r.assignedTo||r.createdBy, r=>r.branch) : [],
@@ -63394,7 +63501,7 @@ function riaRunFilter(f){
   if(f.overdue){ rows = rows.filter(t=>t.dueDate && t.dueDate < today && !/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||''))); applied.push('overdue'); }
   (f.status||[]).forEach(s=>{ rows = rows.filter(s.test); applied.push(s.label); });
   (f.amounts||[]).forEach(a=>{
-    const get = f.source==='clients' ? (a.field==='sip' ? c=>numVal(clientBookSip(c)) : c=>numVal(clientBookAum(c))) : (r=>numVal(r.amount || r.monthlyAmount));
+    const get = f.source==='clients' ? (a.field==='sip' ? c=>numVal(riaSip(c)) : c=>numVal(riaAum(c))) : (r=>numVal(r.amount || r.monthlyAmount));
     rows = rows.filter(r=>a.op==='gt' ? get(r) > a.value : a.op==='lt' ? get(r) < a.value : get(r)===0); applied.push(a.label);
   });
   const key = f.dobMode && !(f.period && f.period.years) && !f.age
@@ -63408,21 +63515,21 @@ function riaFilterTable(f, rows){
   const D = r=>riaDate(String(RIA_FILTER_SOURCES[f.source].date(r)||'').slice(0, 10));
   if(f.source==='clients') return {cols:['Name', f.dobMode ? 'Date of birth' : 'Date added', 'Age', 'Branch', 'RM', 'Stage', 'KYC', 'Mandate', 'AUM', 'SIP', 'Mobile'],
     rows: rows.map(c=>{ const a = calcAge(riaDob(c)); return [clientDisplayName(c), f.dobMode ? riaDate(riaDob(c)) : D(c), a===null ? '' : a, c.branch || '', riaRmOf(c)[0] || '',
-      stateLabel('CMS', stateOf('CMS', c)), RIA_SEGMENTS.kyc.of(c), RIA_SEGMENTS.mandate.of(c), money(numVal(clientBookAum(c))), money(numVal(clientBookSip(c))), riaMob(c.mobile)]; })};
+      stateLabel('CMS', stateOf('CMS', c)), RIA_SEGMENTS.kyc.of(c), RIA_SEGMENTS.mandate.of(c), money(numVal(riaAum(c))), money(numVal(riaSip(c))), riaMob(c.mobile)]; })};
   if(f.source==='leads') return {cols:['Name', 'Date added', 'Stage', 'Source', 'Branch', 'RM', 'Mobile'],
     rows: rows.map(l=>[leadName(l.id), D(l), stateLabel('LMS', stateOf('LMS', l)), l.source || '', l.branch || '', teamName(l.assignedTo), riaMob(l.mobile)])};
   if(f.source==='transactions') return {cols:['Client', 'Date', 'Type', 'Scheme', 'Amount', 'Status', 'Branch'],
-    rows: rows.map(t=>[clientName(t.clientId), D(t), t.transactionType || '', t.schemeId ? schemeName(t.schemeId) : (t.schemeName || ''), money(numVal(t.amount)), t.status || '', RIA_FILTER_SOURCES.transactions.branch(t)])};
+    rows: rows.map(t=>[riaClientNameOf(t.clientId), D(t), t.transactionType || '', t.schemeId ? schemeName(t.schemeId) : (t.schemeName || ''), money(numVal(t.amount)), t.status || '', RIA_FILTER_SOURCES.transactions.branch(t)])};
   if(f.source==='sips') return {cols:['Client', 'Start', 'Scheme', 'Monthly', 'SIP date', 'Branch'],
-    rows: rows.map(s=>[clientName(s.clientId), D(s), s.schemeName || '', money(numVal(s.monthlyAmount || s.amount)), s.sipDate || '', RIA_FILTER_SOURCES.sips.branch(s)])};
+    rows: rows.map(s=>[riaClientNameOf(s.clientId), D(s), s.schemeName || '', money(numVal(s.monthlyAmount || s.amount)), s.sipDate || '', RIA_FILTER_SOURCES.sips.branch(s)])};
   if(f.source==='tasks') return {cols:['Task', 'Client', 'Due', 'Status', 'Owner', 'Branch'],
-    rows: rows.map(t=>[t.title || '', t.clientId ? clientName(t.clientId) : '', D(t), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo), t.branch || ''])};
+    rows: rows.map(t=>[t.title || '', t.clientId ? riaClientNameOf(t.clientId) : '', D(t), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo), t.branch || ''])};
   if(f.source==='business') return {cols:['Date', 'Product', 'Mode', 'Amount', 'With', 'RM', 'Branch'],
-    rows: rows.map(x=>[D(x), x.product || '', x.transactionType || '', money(numVal(x.amount)), x.clientId ? clientName(x.clientId) : (x.leadId ? leadName(x.leadId) : ''), teamName(x.assignedTo || x.createdBy), x.branch || ''])};
+    rows: rows.map(x=>[D(x), x.product || '', x.transactionType || '', money(numVal(x.amount)), x.clientId ? riaClientNameOf(x.clientId) : (x.leadId ? leadName(x.leadId) : ''), teamName(x.assignedTo || x.createdBy), x.branch || ''])};
   if(f.source==='calls') return {cols:['Date', 'Type', 'Outcome', 'With', 'By', 'Branch'],
-    rows: rows.map(x=>[D(x), x.callType || '', x.outcome || '', x.clientId ? clientName(x.clientId) : (x.leadId ? leadName(x.leadId) : ''), teamName(x.loggedBy || x.assignedTo), x.branch || ''])};
+    rows: rows.map(x=>[D(x), x.callType || '', x.outcome || '', x.clientId ? riaClientNameOf(x.clientId) : (x.leadId ? leadName(x.leadId) : ''), teamName(x.loggedBy || x.assignedTo), x.branch || ''])};
   return {cols:['Subject', 'With', 'Date', 'Status', 'Owner', 'Branch'],
-    rows: rows.map(m=>[m.subject || '', m.clientId ? clientName(m.clientId) : (m.leadId ? leadName(m.leadId) : ''), D(m), m.status || '', teamName(m.assignTo), m.branch || ''])};
+    rows: rows.map(m=>[m.subject || '', m.clientId ? riaClientNameOf(m.clientId) : (m.leadId ? leadName(m.leadId) : ''), D(m), m.status || '', teamName(m.assignTo), m.branch || ''])};
 }
 /* The answer to a filtered question: header, the rows in date order, a dashboard, downloads. */
 function riaAnswerFilter(f){

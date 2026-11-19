@@ -64,7 +64,13 @@
        the records spell it, rows in date (or birthday) order, a dashboard
        and Excel / CSV / PDF; and "Date-wise" among a branch's buttons;
        also "1 Oct se 18 Nov tak … transactions", "… AUM above 10 lakh",
-       leads in "October 2026" and "last month", business and calls. */
+       leads in "October 2026" and "last month", business and calls;
+     - one investor filed as three rows (a platform upload holding the AUM,
+       two later imports holding the DOB, address, UCC, nominee, KYC,
+       mandate and RM, named "<name> - <PAN>"): the full name gives one
+       merged profile; "Maurya ka DOB batao" lists distinct people by full
+       name; the Varanasi DOB list has the investor once. Synthetic values
+       in the shape of the live case. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -831,6 +837,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         return 'chips: ' + chips.ui.items.slice(0, 4).join(', ') + ' → ' + a.table.rows.length + ' clients';
       });
 
+      const riaDateText = (d) => { const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']; const [y, mo, da] = d.split('-'); return da + ' ' + m[+mo - 1] + ' ' + y; };
       const ageOf = (d) => { const b = new Date(d), n = new Date(); let a = n.getFullYear() - b.getFullYear(); const m = n.getMonth() - b.getMonth(); if (m < 0 || (m === 0 && n.getDate() < b.getDate())) a--; return a; };
       await step('"Priya ka date of birth aur PAN card no batao" with four Priyas: all four by full name to click, then her DOB, age, PAN, mobile, email, branch, KYC, mandate, AUM', async () => {
         const n = seen.length;
@@ -838,7 +845,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const list = await lastBot();
         const names = list.ui ? list.ui.items : [];
         if (!/Found \*\*4 clients\*\* matching ‘priya’\. Click the exact client \(by full name\) to continue:/.test(list.text) || names.length !== 4
-          || !names.some((x) => /^\d\. Mrs\. Priya Sharma · Mumbai · CMS-PR1 · PAN: …111S · Mob: …0001$/.test(x)) || !names.some((x) => /Priya Nair · Pune/.test(x)))
+          || !names.some((x) => /^\d\. Mrs\. Priya Sharma · Mumbai · CMS-PR1 · PAN: …111S · Mob: …0001 · DOB 10 Apr 1980$/.test(x)) || !names.some((x) => /Priya Nair · Pune/.test(x)))
           throw new Error(JSON.stringify(list));
         await click('#aiTurns .ria-sub', 'Priya Nair');
         const a = await lastBot();
@@ -943,6 +950,69 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const a = await lastBot();
         if (!isSlice(a) || a.table.rows.length !== varanasi.length || a.table.rows[0][0] !== 'ZZ Varanasi One' || !/Date-wise clients/.test(a.text)) throw new Error(JSON.stringify(a).slice(0, 400));
         return a.text.split('\n')[0].replace(/\*\*/g, '');
+      });
+
+      /* ---- one investor, three rows ---- */
+      const VPAN = 'ABCPM3852Z';
+      const splitRows = [
+        { id: 'CMS-FZSM04857', cmsName: 'Vishal Kumar Maurya', rmName: '', branch: 'Varanasi Branch', pan: VPAN, mobile: '9800000001', email: 'vishal.m@example.test',
+          createdAt: '2026-11-06T09:00:00.000Z', source: 'Platform upload · Finowise' },
+        { id: 'CMS-2G3H35738', cmsName: 'Vishal Kumar Maurya - ' + VPAN, pan: VPAN, dob: '2001-08-14', branchName: 'Varanasi', rmName: 'Shubham', uccNo: '5014000001',
+          mailingStreet: 'S/O: ZZ TEST MAURYA,ZZ VILLAGE,VARANASI,UTTAR PRADESH,221003', mailingCity: 'VARANASI', mailingState: 'UTTAR PRADESH', mailingZip: '221003',
+          firstNomineeName: 'Renu Maurya', firstNomineeRelation: 'Mother', firstNomineeDob: '1977-03-12', createdAt: '2026-11-19T05:49:55.000Z' },
+        { id: 'CMS-XMHVI0245', cmsName: 'Vishal Kumar Maurya - ' + VPAN, pan: VPAN, dob: '2001-08-14', branch: 'Varanasi', branchName: 'Varanasi', rmName: 'USR-GUWU16332', uccNo: '5014000001',
+          mailingStreet: 'S/O: ZZ TEST MAURYA,ZZ VILLAGE,VARANASI,UTTAR PRADESH,221003', kycStatus: 'Validated', accountActivated: 'Yes', mandateType: 'E-Mandate',
+          mandateStatus: 'Approved', firstNomineeName: 'Renu Maurya', createdAt: '2026-11-19T05:58:10.000Z' }];
+      const otherMauryas = [
+        { id: 'CMS-MS1', cmsName: 'Sunil Kumar Maurya', rmName: '', branch: 'Lucknow', pan: 'ABCPM1111M', mobile: '9800000002', dob: '1970-01-01' },
+        { id: 'CMS-MA1', cmsName: 'Mr. Anil Maurya', rmName: '', branch: 'Delhi', pan: 'ABCPM2222N', mobile: '9800000003' },
+        { id: 'CMS-PH1', cmsName: 'ZZ Placeholder Pan', rmName: '', branch: 'Delhi', pan: VPAN }];          // another person on the same PAN (a typo / dummy PAN)
+      await admin.put('/api/storage/clients', { value: JSON.stringify(deskClients.concat(splitRows, otherMauryas)) });
+      await admin.put('/api/storage/platformHoldings', { value: JSON.stringify([{ id: 'PFH-V1', clientId: 'CMS-FZSM04857', schemeName: 'HDFC Flexi Cap Reg Gr', invested: 80000, current: 87494 },
+        { id: 'PFH-D1', clientId: 'CMS-D1', schemeName: 'HDFC Flexi Cap Reg Gr', invested: 1000000, current: 1500000 }]) });
+      await pg3.reload(); await ready(pg3);
+      await pg3.evaluate(async () => { await aiRefreshStatus(true); ai.turns = []; ai.open = true; aiDrawPanel(); });
+      const vAge = ageOf('2001-08-14');
+      const vNeed = ['**Client Personal & KYC Profile**', '**Full name:** Vishal Kumar Maurya\n', '**Date of birth:** 14 Aug 2001 (Age: ' + vAge + ' yrs)', '**PAN card no.:** ' + VPAN,
+        '**Client ID / Code:** 5014000001', '**IIN / UCC no.:** 5014000001 (activated: Yes)', '**KYC status:** KYC validated', '**Mandate status:** Mandate approved (E-Mandate)',
+        '**Nominee:** Renu Maurya (Mother, DOB 12 Mar 1977)', '**Address:** S/O: ZZ TEST MAURYA,ZZ VILLAGE,VARANASI,UTTAR PRADESH,221003\n', '**Relationship manager:** Shubham',
+        '**Branch:** Varanasi', '**Mobile no.:** 9800000001', '**Total AUM:** ₹87,494'];
+      const vCheck = (a) => { const missing = vNeed.filter((x) => !a.text.includes(x)); if (missing.length || /not recorded/.test(a.text.split('**Anniversary')[0]) || /- ABCPM/.test(a.text)) throw new Error(JSON.stringify({ missing, text: a.text.slice(0, 900) })); };
+      await step('one investor in three rows: "Vishal Kumar Maurya" and "Vishal Kumar Maurya ka date of birth batao" give one merged profile (DOB, PAN, UCC, KYC, mandate, nominee, address, RM, AUM)', async () => {
+        const n = seen.length;
+        await typeIn('Vishal Kumar Maurya');
+        const a = await lastBot(); vCheck(a);
+        await typeIn('Vishal Kumar Maurya ka date of birth batao');
+        const b = await lastBot(); vCheck(b);
+        if (!b.text.startsWith('**Vishal Kumar Maurya — Date of Birth:** 14 Aug 2001 (Age: ' + vAge + ' yrs)') || seen.length !== n) throw new Error(b.text.slice(0, 300));
+        return b.text.split('\n')[0].replace(/\*\*/g, '') + '; RM Shubham, KYC validated, mandate approved (E-Mandate), AUM ₹87,494';
+      });
+      await step('"Maurya ka DOB batao" with three Mauryas (one of them in three rows): each person once, by full name, with branch, PAN and DOB; clicking Vishal gives the merged profile', async () => {
+        await typeIn('Maurya ka DOB batao');
+        const list = await lastBot();
+        const items = list.ui ? list.ui.items : [];
+        if (!/Found \*\*3 clients\*\* matching/.test(list.text) || items.length !== 3 || items.filter((x) => /Vishal Kumar Maurya/.test(x)).length !== 1
+          || !items.some((x) => /^\d\. Vishal Kumar Maurya · Varanasi · 5014000001 · PAN: …852Z · Mob: …0001 · DOB 14 Aug 2001 · AUM /.test(x))
+          || !items.some((x) => /Sunil Kumar Maurya · Lucknow/.test(x)) || !items.some((x) => /Anil Maurya · Delhi/.test(x)) || items.some((x) => /- ABCPM/.test(x))) throw new Error(JSON.stringify(list));
+        await click('#aiTurns .ria-sub', 'Vishal Kumar Maurya');
+        const a = await lastBot(); vCheck(a);
+        if (!a.text.startsWith('**Vishal Kumar Maurya — Date of Birth:** 14 Aug 2001')) throw new Error(a.text.slice(0, 300));
+        return items.map((x) => x.split(' · ')[0].replace(/^\d\. /, '')).join(', ') + ' → Vishal: DOB 14 Aug 2001, UCC 5014000001';
+      });
+      await step('"Varanasi branch ke clients ka date of birth wise data dikhao": the three-row investor once, with the DOB; the planner and Analytics count people, not rows', async () => {
+        await typeIn('Varanasi branch ke clients ka date of birth wise data dikhao');
+        const a = await lastBot();
+        const vRows = a.table ? a.table.rows.filter((r) => /Vishal/.test(r[0])) : [];
+        const want = deskClients.filter((c) => /varanasi/i.test(c.branch || '')).length + 1;
+        if (!a.table || a.table.rows.length !== want || vRows.length !== 1 || vRows[0][0] !== 'Vishal Kumar Maurya' || !vRows[0].includes(riaDateText('2001-08-14'))) throw new Error(JSON.stringify({ want, rows: a.table && a.table.rows }));
+        const r = await pg3.evaluate(() => ({ read: aiReadSource('clients', { where: [{ col: 'name', op: 'contains', value: 'Vishal' }], cols: ['name', 'branch', 'rm', 'aum'] }),
+          analytics: analyticsRecords('clients').filter((c) => /Vishal/.test(c.cmsName)).length,
+          ids: (analyticsRecords('clients').find((c) => /Vishal/.test(c.cmsName))._ids || []).slice().sort().join(),
+          apart: analyticsRecords('clients').filter((c) => c.cmsName === 'ZZ Placeholder Pan' && !c._ids).length, dossier: bossClientDossier(riaVisible().find((c) => /Vishal/.test(c.cmsName))) }));
+        const row = r.read.rows && r.read.rows[0];
+        if (r.read.total !== 1 || r.analytics !== 1 || r.ids !== 'CMS-2G3H35738,CMS-FZSM04857,CMS-XMHVI0245' || r.apart !== 1 || !row || JSON.stringify(row).indexOf('Shubham') < 0 || JSON.stringify(row).indexOf('87494') < 0 || /ABCPM3852Z/.test(JSON.stringify(r.dossier))
+          || r.dossier.aum !== 87494 || r.dossier.dob !== '2001-08-14') throw new Error(JSON.stringify(r).slice(0, 700));
+        return want + ' Varanasi clients, Vishal once (DOB ' + riaDateText('2001-08-14') + '); planner: 1 row, RM Shubham, AUM 87494; dossier PAN stays masked; a different name on the same PAN stays a separate person';
       });
     } finally { await browser.close(); }
     await step('no answer anywhere in this run said "The AI service is busy"', async () => {
