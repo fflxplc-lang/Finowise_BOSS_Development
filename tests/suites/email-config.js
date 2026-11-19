@@ -172,6 +172,11 @@ suite({mail:true}, async t => {
       const tpl = allMailTemplates().find(x=>x.name === 'ZZ Renewal Due');
       mailTemplateGroup = tpl.stage;
       navigate('settings','mailtemplates');
+      /* Cards open read-only; "✏️ Edit Template" opens this one. */
+      const card = document.querySelector('[data-mail-template="' + tpl.key + '"]');
+      const edit = card && Array.from(card.querySelectorAll('button')).find(b=>/Edit Template/.test(b.textContent));
+      if(!edit) return {err:'the new template has no Edit Template button'};
+      edit.click();
       const subj = document.getElementById('mt2_subj_' + tpl.key);
       const body = document.getElementById('mt2_body_' + tpl.key);
       if(!subj || !body) return {err:'the new template has no editor'};
@@ -462,6 +467,55 @@ suite({mail:true}, async t => {
     if(u.withSwitch < 2) throw new Error('only ' + u.withSwitch + ' card carries a switch');
     if(!u.says) throw new Error('the card does not say which way it is');
     return u.withSwitch + ' letters on this tab, each with its own switch';
+  });
+
+  await t.step('every card opens read-only — subject and message shown, no boxes — and "✏️ Edit Template" opens that card alone; Cancel and Save close it', async () => {
+    const r = await t.eval(async ()=>{
+      window._editingMailTemplate = null;
+      navigate('settings','mailtemplates');
+      const stage = (mailTemplateMeta('fqScoreCard')||{}).stage;
+      mailTemplateGroup = stage; navigate('settings','mailtemplates');
+      const cards = () => Array.from(document.querySelectorAll('#content [data-mail-template]'));
+      const view = cards().map(c=>({key: c.getAttribute('data-mail-template'), mode: c.getAttribute('data-mode'),
+        inputs: c.querySelectorAll('input[type=text], textarea').length, preview: !!c.querySelector('.mail-tpl-preview'),
+        edit: Array.from(c.querySelectorAll('button')).some(b=>/✏️ Edit Template/.test(b.textContent)),
+        save: Array.from(c.querySelectorAll('button')).some(b=>/^Save/.test(b.textContent.trim()))}));
+      const key = 'fqScoreCard', before = mailTemplateOf(key);
+      editMailTemplate(key);
+      const open = cards().map(c=>({key: c.getAttribute('data-mail-template'), mode: c.getAttribute('data-mode'), boxes: c.querySelectorAll('input[type=text], textarea').length,
+        buttons: Array.from(c.querySelectorAll('button')).map(b=>b.textContent.trim())}));
+      const card = document.querySelector('[data-mail-template="' + key + '"]');
+      const border = card.getAttribute('style');
+      /* a chip goes in at the cursor */
+      const ta = document.getElementById('mt2_body_' + key); ta.focus(); ta.selectionStart = ta.selectionEnd = 0;
+      const chip = Array.from(card.querySelectorAll('code')).find(c=>/insertMailVar/.test(c.getAttribute('onclick')||''));
+      const v = chip ? chip.textContent : ''; if(chip) chip.click();
+      const inserted = ta.value.indexOf(v) === 0;
+      /* Cancel: nothing saved, back to the view */
+      Array.from(card.querySelectorAll('button')).find(b=>b.textContent.trim()==='Cancel').click();
+      const afterCancel = {editing: window._editingMailTemplate, mode: document.querySelector('[data-mail-template="' + key + '"]').getAttribute('data-mode'), same: JSON.stringify(mailTemplateOf(key)) === JSON.stringify(before)};
+      /* Save Changes: saved, and the card closes */
+      editMailTemplate(key);
+      document.getElementById('mt2_body_' + key).value = before.body + '\nZZ view-mode test line';
+      await saveMailTemplate(key, true);
+      const saved = mailTemplateOf(key).body, closed = document.querySelector('[data-mail-template="' + key + '"]').getAttribute('data-mode');
+      const shown = document.querySelector('[data-mail-template="' + key + '"] .mail-tpl-preview').textContent;
+      /* put the wording back */
+      editMailTemplate(key); document.getElementById('mt2_body_' + key).value = before.body;
+      if(document.getElementById('mt2_subj_' + key)) document.getElementById('mt2_subj_' + key).value = before.subject || '';
+      await saveMailTemplate(key, true);
+      return {view, open, border, chip: v, inserted, afterCancel, saved: /ZZ view-mode test line/.test(saved), closed, shown: /ZZ view-mode test line/.test(shown), restored: mailTemplateOf(key).body === before.body};
+    });
+    const badView = r.view.filter(c=>c.mode!=='view' || c.inputs || !c.preview || !c.edit || c.save);
+    if(!r.view.length || badView.length) throw new Error('not read-only: ' + JSON.stringify(badView.length ? badView : r.view));
+    const opened = r.open.filter(c=>c.mode==='edit');
+    if(opened.length !== 1 || opened[0].key !== 'fqScoreCard' || opened[0].boxes < 1 || !opened[0].buttons.includes('Save Changes') || !opened[0].buttons.includes('Cancel')
+      || r.open.some(c=>c.mode==='view' && c.boxes)) throw new Error('editing opened more than the one card: ' + JSON.stringify(r.open));
+    if(!/border:1\.5px solid var\(--primary\)/.test(r.border)) throw new Error('the open card is not marked: ' + r.border);
+    if(!r.inserted) throw new Error('the placeholder chip ' + r.chip + ' did not go in at the cursor');
+    if(r.afterCancel.editing || r.afterCancel.mode !== 'view' || !r.afterCancel.same) throw new Error('Cancel: ' + JSON.stringify(r.afterCancel));
+    if(!r.saved || r.closed !== 'view' || !r.shown || !r.restored) throw new Error('Save: ' + JSON.stringify(r));
+    return r.view.length + ' cards read-only; Edit opened fqScoreCard alone (Save Changes / Preview / Cancel); chip ' + r.chip + ' inserted; Cancel kept the wording; Save closed the card and the view shows the new wording';
   });
 
   await t.step('there is no control that switches every template at once', async () => {

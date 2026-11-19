@@ -230,6 +230,21 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       return '200 with the SOP answer';
     });
 
+    await step('a missing-field filter answered by BOSS when the provider cannot: "Total Clients | Clients without Mobile Number", then Client ID | Client Name | Branch | Status', async () => {
+      gemini('503');
+      const f = { field: 'Mobile Number', status: 'Not Recorded / Missing', totalBook: 5348, matchingCount: 27,
+        rows: Array.from({ length: 25 }, (_, i) => ({ id: 'CMS-ZZ' + i, name: 'ZZ No Mobile ' + i, branch: i % 2 ? 'Varanasi' : '', pan: i % 3 ? '******' + (1000 + i) + 'Z' : 'Not recorded', status: 'Mobile Number: Missing' })) };
+      const r = await admin.post('/api/ai/chat', { connector: 'gemini', system: 'You are RIA AI.', maxTokens: 1200,
+        messages: [{ role: 'user', content: '<data>\n' + JSON.stringify({ attributeFilter: f }) + '\n</data>\n\nQuestion: jiska mobile no add nhi hai usko filter krke list do' }] });
+      const t = (r.json && r.json.text) || '';
+      const lines = t.split('\n');
+      if (r.status !== 200 || !r.json.fallback || lines[0] !== '**Total Clients:** 5,348 | **Clients without Mobile Number:** 27' || !t.includes('| Client ID | Client Name | Branch | Status |')
+        || !t.includes('| CMS-ZZ0 | ZZ No Mobile 0 | Not recorded | Mobile Number: Missing |') || lines.filter((l) => /^\| CMS-ZZ/.test(l)).length !== 25
+        || !/Showing 25 of 27\. The full list is in the Excel \/ CSV export/.test(t) || /\[[a-z]+-[a-z-]+\]/.test(t) || /\*{6}/.test(t)) throw new Error(t.slice(0, 600));
+      gemini('ok');
+      return lines[0].replace(/\*\*/g, '') + '; 25 table rows; "Showing 25 of 27" with the export; no SOP, no PAN';
+    });
+
     await step('Gemini overloaded on its model is tried next on gemini-2.5-flash, whose answer is used', async () => {
       gemini('ok'); mode['gemini-2.5-pro'] = '503';
       const n = seen.length;

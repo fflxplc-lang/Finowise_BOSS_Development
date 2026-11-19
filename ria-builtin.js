@@ -476,6 +476,7 @@ function chat(messages, opts) {
   } else if (opts.aum && opts.aum.message && /\baum\b/i.test(q)) out.push(opts.aum.message);
 
   if (data) {
+    if (data.attributeFilter) out.push(...describeAttributeFilter(data.attributeFilter));
     if (data.countSummary) out.push(...describeCount(data.countSummary, q));
     if (data.intel) out.push(...describeIntel(data.intel));
     if (Array.isArray(data.suggestedActions) && data.suggestedActions.length) {
@@ -498,7 +499,9 @@ function chat(messages, opts) {
 
   /* A count question is answered by its numbers; an SOP under it is noise. */
   const countQ = isCountQ(q) && !house && !(data && data.intel) && !(data && Array.isArray(data.clients) && data.clients.length);   // a client's own question keeps its SOPs
-  if (countQ) {
+  if (data && data.attributeFilter) {
+    /* A filter over the book is answered by its count and its list; no SOP under it. */
+  } else if (countQ) {
     if (!data || !(data.reads || data.countSummary || data.clients)) out.push(isHinglish(q)
       ? 'Is ginti ke liye BOSS ne koi records nahi padhe. Status ka naam likhiye — jaise "kitne KYC pending hain" ya "how many mandates are pending".'
       : 'BOSS read no records for that count. Name the status — for example "how many KYCs are pending" or "how many mandates are pending".');
@@ -557,6 +560,20 @@ function openLine(q, pages, data) {
     .filter(Boolean).sort((a, b) => b.length - a.length);
   for (const n of names) if (t.includes(' ' + n + ' ')) { const p = pageFor(n, pages); if (p) return p.view; }
   return '';
+}
+
+/* "Jiska mobile no add nhi hai": the book's total, how many lack the field, and who.
+   Exactly what the page counted; nothing estimated. */
+function describeAttributeFilter(f) {
+  const n = (x) => Number(x || 0).toLocaleString('en-IN');
+  const cell = (x) => String(x == null || x === '' ? 'Not recorded' : x).replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
+  const rows = Array.isArray(f.rows) ? f.rows : [];
+  const out = ['**Total Clients:** ' + n(f.totalBook) + ' | **Clients without ' + cell(f.field) + ':** ' + n(f.matchingCount)];
+  if (!rows.length) { out.push('', 'Every client in your scope has a ' + cell(f.field) + ' on record.'); return out; }
+  out.push('', '| Client ID | Client Name | Branch | Status |', '|---|---|---|---|');
+  rows.forEach((x) => out.push('| ' + [x.id, x.name, x.branch, x.status || (cell(f.field) + ': Missing')].map(cell).join(' | ') + ' |'));
+  if (Number(f.matchingCount) > rows.length) out.push('', 'Showing ' + n(rows.length) + ' of ' + n(f.matchingCount) + '. The full list is in the Excel / CSV export from the client filter (for example "clients whose ' + cell(f.field).toLowerCase() + ' is not added").');
+  return out;
 }
 
 function answer({ system, messages, aum, now } = {}) {

@@ -59077,8 +59077,29 @@ function aiStale(conv){ if(conv !== (ai.conv || 0)) throw AI_STALE; }
 function aiIgnoreStale(e){ if(e !== AI_STALE) throw e; }
 /* "This client", "is client ka", "iska": the question points at the record on screen. */
 const AI_POINTS_AT_RECORD = /\b(this|that|current|the open|is|iss|isi|yeh|ye|wo|us)\s+(client|investor|customer|account|record|lead|person|banda|bande)\b|\b(iska|iski|iske|inka|inki|inke|uska|uski|uske)\b/i;
-/* "All clients whose…", "kitne clients", "which clients": a question about the book, not one client. */
+/* "All clients whose…", "kitne clients", "jiska mobile no add nhi hai": a question
+   about the book, not one client, so the record on screen is not its subject. */
 const AI_ABOUT_BOOK = /\b(all|every|sabhi|saare|sare|sab|which|kaun\s?se|kitne|how many|list|jin|jinka|jinke|jinki)\b[^?.]*\bclients\b|\bclients\b[^?.]*\b(whose|jinka|jinke|jinki|jin|without|with no|not added|missing|blank)\b/i;
+const AI_MISSING_FIELD = /\b(jiska|jiski|jiske|jinka|jinki|jinke|kiska|kinka|kinki|kiski|whose|missing|without|no|bina|blank|empty)\s+(mobile|phone|pan|dob|date\s*of\s*birth|e-?mail|nominee|ucc|bank|mandate)\b|\b(mobile|phone|pan|dob|date\s*of\s*birth|e-?mail|nominee|ucc|bank|mandate)\b(?:\s+(?:no|number|num|card|id|details?))?\s+(not\s*added|not\s*recorded|not\s*updated|not\s*entered|missing|blank|empty|add\s*n(?:hi|ahi|ahin)|n(?:hi|ahi|ahin)\s+hai|n(?:hi|ahi|ahin))\b/i;
+function bossIsBookWideFilter(q){
+  const t = String(q || '');
+  return AI_ABOUT_BOOK.test(t) || AI_MISSING_FIELD.test(t)
+    || /\b(all\s+clients|sabhi\s+clients|list\s+of\s+clients|kitne\s+clients|how\s+many\s+clients|branch[- ]?wise\s+clients|top\s+clients|total\s+clients|filter\s+(?:karke|krke|kar\s+ke|the)\b)/i.test(t);
+}
+/* "Jiska mobile no add nhi hai": the clients in this user's scope lacking that field,
+   counted here from the records, for the answer to quote. PAN masked, as everywhere
+   the model reads. */
+function bossAttributeFilter(q){
+  const t = String(q || '').toLowerCase();
+  if(!AI_MISSING_FIELD.test(t) && !riaMissingFilters(t).length) return null;
+  const pick = /\b(mobile|phone)\b/.test(t) ? 'Mobile Number' : /\b(dob|birth)\b/.test(t) ? 'Date of Birth' : /\bpan\b/.test(t) ? 'PAN' : /\be-?mail\b/.test(t) ? 'Email' : '';
+  const m = RIA_MISSING_FIELDS.find(x=>x.field===pick);
+  if(!m || !can('CMS', 'view')) return null;
+  const all = riaVisible(), list = all.filter(m.test);
+  return {field: m.field, status: 'Not Recorded / Missing', totalBook: all.length, matchingCount: list.length,
+    rows: list.slice(0, 25).map(c=>({id: c.id, name: clientDisplayName(c), branch: c.branch || c.branchName || 'Not recorded',
+      pan: c.pan ? bossMask(c.pan, 4) : 'Not recorded', status: m.field + ': Missing'}))};
+}
 /* The screen as this question may use it: the open record only if it is this conversation's subject. */
 function aiConvContext(q){
   const c = ai.context || {};
@@ -59086,7 +59107,7 @@ function aiConvContext(q){
   if(ai.droppedRecord && ai.droppedRecord !== c.recordId) ai.droppedRecord = null;   // another record opened since
   const points = AI_POINTS_AT_RECORD.test(String(q || ''));
   if(points){ ai.droppedRecord = null; return c; }
-  if(ai.droppedRecord === c.recordId || AI_ABOUT_BOOK.test(String(q || ''))){
+  if(ai.droppedRecord === c.recordId || bossIsBookWideFilter(q)){
     const out = Object.assign({}, c); delete out.recordId; delete out.recordName; delete out.module; return out;
   }
   return c;
@@ -59874,6 +59895,7 @@ HOW RIA AI ANSWERS
   You are RIA AI: a senior wealth-management operations and planning expert (30+ years, CFP-level) for this firm.
   - For any question about the market, a chart or a technical read, apply the discipline of a Chartered Market Technician (CMT, the US charter): read the primary trend (200-day average, 52-week range), the secondary trend (50-day) and the short-term trend (20-day); ask for confirmation from independent signals (trend, momentum, volume, volatility) before leaning on one; treat a signal that the others contradict as unconfirmed; and always state the level at which the view is invalidated. Use only the indicators in <data>; never invent a pattern, count or divergence that is not computed there. Do not tell anyone you hold the charter.
   - Answer from the <data> and the <sops> you are given. Quote figures exactly as they appear in <data>; never estimate one.
+  - When <data> has attributeFilter, open with "**Total Clients:** <totalBook> | **Clients without <field>:** <matchingCount>", then a table Client ID | Client Name | Branch | Status of its rows. Where matchingCount is more than the rows, say the rest are in the Excel / CSV export. Name no client that is not in its rows.
   - For a how-to question, give the steps of the matching SOP in order, the documents needed and the TAT. Name the SOP id in brackets.
   - For a client, lead with what is pending or wrong, then what to do next and which SOP does it.
   - If <data> does not contain what is needed, say exactly what is missing (which field, which record) instead of guessing.
@@ -60050,6 +60072,10 @@ async function bossRunChat(q){
     if(!got.error && got.rows.length) data.openLead = got.rows[0];
   }
   if(!forced) bossClientsNamedIn(q).forEach(c=>{ if(!people.includes(c)) people.push(c); });
+  /* A filter over the book reads the book: no one client stands in for it. */
+  const oneClient = forced || AI_POINTS_AT_RECORD.test(q) || bossClientsNamedIn(q).length;   // "Vishal ka PAN nahi hai kya" is about Vishal
+  const attr = !oneClient && bossIsBookWideFilter(q) ? bossAttributeFilter(q) : null;
+  if(attr){ people.length = 0; data.attributeFilter = attr; sops = []; }
   /* About a client, the SOPs that matter are the ones for what is wrong on
      that account, ahead of whatever the words of the question matched. */
   if(people.length && !bossLooksLikeHowTo(q)){
@@ -60065,7 +60091,7 @@ async function bossRunChat(q){
   const policyQ = bossIsPolicy(sops[0]) && !/\b(clients?|leads?|meetings?|tasks?|aum|kitne|kitni|how many|mere|my)\b/i.test(q);
   /* "KYC status ka chart": the chart is counted here from live records,
      and the model only says what it shows. */
-  const chartQ = bossChartIntent(q);
+  const chartQ = attr ? null : bossChartIntent(q);
   let chart = bossChartFor(chartQ);
   /* Every chart answer is a dashboard: at a glance, the donut, the breakdown, the next actions. */
   let dash = chart ? riaDashForChart(chartQ, chart) : null;
@@ -60074,16 +60100,16 @@ async function bossRunChat(q){
      policy's market view beside them instead of whatever SOP the words hit. */
   /* "How many KYCs are pending": the count is read here, now, and no SOP
      goes with it. */
-  const countQ = !chart && !chartQ && !people.length ? bossCountIntent(q) : null;
+  const countQ = !attr && !chart && !chartQ && !people.length ? bossCountIntent(q) : null;
   if(countQ){ data.reads = [countQ.read]; if(countQ.summary) data.countSummary = countQ.summary; if(!dash) dash = countQ.dash; }
   /* A question about one client ("what is pending on this client") keeps
      the SOPs for what is wrong on that account. */
   if(countQ || (!people.length && bossCountQuestion(q) && bossLooksLikeData(q))) sops = [];
   /* "Complete portfolio analysis", "risk analysis sharpe beta", "tax
      harvesting", "future projection"…: worked out here, with its charts. */
-  const intel = !chart && !countQ ? riaIntel(q, people) : null;
+  const intel = !attr && !chart && !countQ ? riaIntel(q, people) : null;
   if(intel) data.intel = riaIntelForAi(intel);
-  const mktNames = !chart && !chartQ && !countQ && !intel ? lexiMarketAsk(q, people) : null;
+  const mktNames = !attr && !chart && !chartQ && !countQ && !intel ? lexiMarketAsk(q, people) : null;
   let market = null;
   if(mktNames){
     ai.phase = 'RIA AI is reading live prices'; aiDrawPanel();
@@ -60097,7 +60123,7 @@ async function bossRunChat(q){
     data.liveMarket = lexiMarketForAi(market, lexiMoneyIn(q), shortlist);
     data.marketZone = lexiLiveZoneLabel(market.quotes);
     sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean))];
-  } else if(!chart && !chartQ && !countQ && !intel && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
+  } else if(!attr && !chart && !chartQ && !countQ && !intel && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
     ai.phase = 'RIA AI is reading the live market'; aiDrawPanel();
     const now = await lexiMarketRead(['NIFTY 50']);
     aiStale(conv);
@@ -60107,7 +60133,7 @@ async function bossRunChat(q){
       sops = [...new Set(['policy-valuation-matrix', 'policy-risk-allocation'].map(bossSopById).filter(Boolean).concat(sops))].slice(0, 5);
     }
   }
-  if(!countQ && !intel && !mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
+  if(!attr && !countQ && !intel && !mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
     ai.phase = 'RIA AI is checking the records'; aiDrawPanel();
     const plan = await bossPlanReads(q);
     aiStale(conv);
@@ -60119,7 +60145,7 @@ async function bossRunChat(q){
   }
   if(people.length) data.clients = people.slice(0,3).map(bossClientDossier).filter(Boolean);
   /* "Kis client ka kya sell karna hai": the book's signals, as computed. */
-  if(!mktNames && !people.length && !(intel && intel.actions) && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
+  if(!attr && !mktNames && !people.length && !(intel && intel.actions) && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
     data.portfolioSignals = lexiBookSignals().filter(x=>x.need).slice(0, 15).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
       rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold' && r.scheme && r.scheme!=='—').map(r=>r.action+': '+r.scheme+' ('+r.why+')')}));
     const z = lexiZoneLabel(); if(!/not set/i.test(z)) data.marketZone = z;
@@ -63180,15 +63206,32 @@ function riaParseStatus(q){
     else if(/\bactive\b/.test(t)) out.push({label:'IIN active', test: c=>/^IIN active$/i.test(ANALYTICS_SOURCES.clients.dims.find(d=>d.id==='iin').value(c))});
   }
   if(/\b(no|missing|without|bina)\s+nominee|nominee\s+(missing|nahi|pending|not)/.test(t)) out.push({label:'no nominee', test: c=>!riaNomineeOf(c)});
-  /* "Clients whose mobile number is not added", "bina email wale clients". */
-  const blankOf = (w) => new RegExp('\\b(no|missing|without|bina|blank|empty)\\s+(' + w + ')|\\b(' + w + ')\\b[^?.]*\\b(not added|not updated|not entered|not recorded|not available|missing|blank|empty|nahi|nahin|na ho|not there)\\b').test(t);
-  if(blankOf('mobile|mobile number|mobile no|phone|phone number|contact number')) out.push({label:'mobile number not added', missing:true, test: c=>String(c.mobile||'').replace(/\D/g, '').length < 10});
-  if(blankOf('e-?mail|email id|mail id')) out.push({label:'email not added', missing:true, test: c=>!/@/.test(String(c.email||''))});
+  out.push(...riaMissingFilters(t));
   const risk = (t.match(/\b(moderately aggressive|moderately conservative|aggressive|moderate|conservative)\b/) || [])[1];
   if(risk && /\b(risk|profile|iseq|investor|clients?)\b/.test(t)) out.push({label: risk + ' risk profile', test: c=>RIA_SEGMENTS.risk.of(c).toLowerCase().indexOf(risk)===0});
   const tax = (t.match(/\b(huf|nri|individual|company|trust|firm)\b/) || [])[1];
   if(tax) out.push({label: tax.toUpperCase() + ' tax status', test: c=>RIA_SEGMENTS.tax.of(c).toLowerCase().includes(tax)});
   return out;
+}
+/* "Clients whose mobile number is not added", "jiska mobile no add nhi hai usko
+   filter krke list do", "bina PAN wale clients", "clients without DOB". A question
+   about one named client that only says "nahi" ("Vishal ka PAN batao, nahi mil
+   raha") is not a filter: the trailing form needs a word about the book too. */
+const RIA_MISSING_FIELDS = [
+  {field:'Mobile Number', words:'mobile|mobile number|mobile no|phone|phone number|contact number', label:'mobile number not added',
+   test: c=>String(c.mobile||'').replace(/\D/g, '').length < 10},
+  {field:'Email', words:'e-?mail|email id|mail id', label:'email not added', test: c=>!/@/.test(String(c.email||''))},
+  {field:'Date of Birth', words:'dob|d\\.o\\.b|date of birth|birth ?date|janam tithi', label:'date of birth not added',
+   test: c=>{ const d = riaDob(c); return !d || isNaN(new Date(d).getTime()); }},
+  {field:'PAN', words:'pan|pan card|pan number|pan no', label:'PAN not added', test: c=>!String(c.pan||'').trim()}];
+const RIA_BOOK_CUE = /\b(clients|investors|customers|jiska|jiski|jiske|jinka|jinki|jinke|jin|kiska|kinka|kinki|whose|list|filter|sabhi|saare|sare|all|kitne|how many|wale|waale|wala|which|kaun)\b/;
+function riaMissingFilters(t){
+  const tail = '(not added|not updated|not entered|not recorded|not available|not there|missing|blank|empty|add n(?:hi|ahi|ahin)|n(?:hi|ahi|ahin)|na ho)';
+  return RIA_MISSING_FIELDS.filter(m=>{
+    const lead = new RegExp('\\b(no|missing|without|bina|blank|empty)\\s+(' + m.words + ')\\b').test(t);
+    const trail = new RegExp('\\b(' + m.words + ')\\b[^?.]*\\b' + tail + '\\b').test(t) && RIA_BOOK_CUE.test(t);
+    return lead || trail;
+  }).map(m=>({label: m.label, field: m.field, missing: true, test: m.test}));
 }
 const RIA_FILTER_SOURCES = {
   clients:      {label:'Clients', rows: ()=>riaVisible(), date: r=>r.createdAt, branch: r=>r.branch || r.branchName},
@@ -63218,8 +63261,9 @@ function riaQueryFilterEngine(q){
   const bHit = branches.map(b=>({b, core: riaNorm(b).replace(/\bbranch\b/g, '').trim()})).filter(x=>x.core && n.includes(' ' + x.core + ' '));
   const branchWord = bHit.length ? bHit.sort((a,b)=>b.core.length - a.core.length)[0].core : '';
   const cityWord = !branchWord && source==='clients' ? ([...new Set(all.map(r=>riaNorm(recCity(r))).filter(Boolean))].find(c=>n.includes(' ' + c + ' ')) || '') : '';
-  const dobMode = source==='clients' && RIA_DOB_WORDS.test(q);
-  const period = riaParsePeriod(q), age = dobMode ? riaParseAge(q) : null, amounts = riaParseAmounts(q), status = source==='clients' ? riaParseStatus(q) : [];
+  const status = source==='clients' ? riaParseStatus(q) : [];
+  const dobMode = source==='clients' && RIA_DOB_WORDS.test(q) && !status.some(x=>x.field==='Date of Birth');
+  const period = riaParsePeriod(q), age = dobMode ? riaParseAge(q) : null, amounts = riaParseAmounts(q);
   const dateWise = RIA_DATEWISE.test(q);
   const overdue = source==='tasks' && /\boverdue\b/.test(t);
   /* A slice needs a branch, a DOB filter, an amount, "date wise", or an explicit date range. */
@@ -63290,8 +63334,16 @@ function riaAnswerFilter(f){
   const {rows, applied, src} = riaRunFilter(f);
   const what = (f.dobMode ? 'Clients by date of birth' : (f.dateWise || f.period ? 'Date-wise ' : '') + src.label).replace(/^Date-wise ([A-Z])/, (m, x)=>'Date-wise ' + x.toLowerCase());
   const title = (applied.length ? applied.map(a=>a.charAt(0).toUpperCase() + a.slice(1)).join(' · ') + ' — ' : '') + what;
-  const tb = riaFilterTable(f, rows);
-  const turn = {content:'**' + title + ' (' + riaN(rows.length) + ' record' + (rows.length===1 ? '' : 's') + '):**\n'
+  const missing = f.source==='clients' ? (f.status||[]).filter(x=>x.missing) : [];
+  let tb = riaFilterTable(f, rows), head = '';
+  if(missing.length){
+    /* "Total Clients: 5,348 | Clients without Mobile Number: 412", then who they are. */
+    const fields = missing.map(x=>x.field).join(' / ');
+    head = '**Total Clients:** ' + riaN(src.rows().length) + ' | **Clients without ' + fields + ':** ' + riaN(rows.length) + '\n\n';
+    tb = {cols:['Client ID', 'Client Name', 'Branch', 'Status'], show: 25,
+      rows: rows.map(c=>[c.id, clientDisplayName(c), c.branch || c.branchName || 'Not recorded', missing.map(x=>x.field + ': Missing').join(' · ')])};
+  }
+  const turn = {content: head + '**' + title + ' (' + riaN(rows.length) + ' record' + (rows.length===1 ? '' : 's') + '):**\n'
       + (rows.length ? (f.dobMode && !(f.period && f.period.years) && !f.age ? 'In birthday order (January to December).' : 'In date order, oldest first.') + ' The first ' + Math.min(25, rows.length) + ' are below; every row is in the downloads.'
         : 'Nothing in your visible records matches all of these filters.'),
     table: Object.assign({title}, tb), actions:[{label:'⬇ Download Excel', act:{t:'dl', fmt:'xlsx'}}, {label:'⬇ Download CSV', act:{t:'dl', fmt:'csv'}}, {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'☰ Main Menu', act:{t:'menu'}}]};
@@ -80585,7 +80637,10 @@ function renderSettingsMailTemplates(){
   const groups = stages.map(st=>st.id);
   const all = allMailTemplates();
   const defs = all.filter(d=>d.stage === mailTemplateGroup)
-    .map(d=>({key:d.key, label:d.name, group:d.stage, when:d.when, vars:d.vars, custom:d.custom}));
+    .map(d=>({key:d.key, label:d.name, group:d.stage, when:d.when, vars:d.vars, custom:d.custom,
+              noSubject: !!(MAIL_TEMPLATE_DEFS.find(x=>x.key===d.key)||{}).noSubject}));
+  /* One letter open for editing at a time; every other card is a read-only view. */
+  window._editingMailTemplate = window._editingMailTemplate || null;
   return `
     <div class="section-title" style="margin-top:0">Email Templates</div>
     <p style="color:var(--muted);font-size:13px;margin-top:0">
@@ -80605,19 +80660,21 @@ function renderSettingsMailTemplates(){
       const live = mailTemplateIsActive(d.key);
       const def = defaultMailTemplate(d.key);
       const edited = JSON.stringify({s:t.subject||'',b:t.body||''}) !== JSON.stringify({s:def.subject||'',b:def.body||''});
+      const editing = window._editingMailTemplate === d.key;
       return `
-      <div class="card" style="margin-bottom:14px">
+      <div class="card" style="margin-bottom:14px${editing ? ';border:1.5px solid var(--primary)' : ''}" data-mail-template="${esc(d.key)}" data-mode="${editing ? 'edit' : 'view'}">
         <div class="between">
           <div><b style="font-size:13.5px">${esc(d.label)}</b>
             ${d.custom
-              ? '<span class="badge ok" style="margin-left:6px">yours</span>'
+              ? '<span class="badge ok" style="margin-left:6px">custom</span>'
               : edited? '<span class="badge info" style="margin-left:6px">edited</span>'
                       : '<span class="badge muted" style="margin-left:6px">as shipped</span>'}
             ${live? '<span class="badge ok" style="margin-left:6px">active</span>'
                   : '<span class="badge danger" style="margin-left:6px">inactive</span>'}
+            ${editing? '<span class="badge info" style="margin-left:6px">editing</span>' : ''}
             <div class="small-note" style="margin-top:2px">${esc(d.when)}</div>
             ${(()=>{ const used = mailRules().filter(r=>r.template===d.key);
-              return used.length? `<div class="small-note" style="margin:2px 0 0">Sent at ${used.map(r=>esc(r.module) + ' \u00b7 ' + esc(stateLabel(r.module, r.state))).join('; ')}.</div>` : ''; })()}</div>
+              return used.length? `<div class="small-note" style="margin:2px 0 0">Sent at ${used.map(r=>esc(r.module) + ' · ' + esc(stateLabel(r.module, r.state))).join('; ')}.</div>` : ''; })()}</div>
           <div class="row" style="align-items:center;gap:10px">
             ${/* This letter's own switch, beside this letter. Nothing here
                  reaches another template: it writes one key, and only the
@@ -80626,20 +80683,32 @@ function renderSettingsMailTemplates(){
               <input type="checkbox" class="check" ${live?'checked':''}
                      onchange="setMailTemplateActive('${d.key}', this.checked)">
               ${live? 'Active' : 'Inactive'}</label>
-            <button class="btn sm ghost" onclick="previewMailTemplate('${d.key}')">Preview</button>
-            ${/* A template the firm wrote has no shipped wording to go back to. */ ''}
-            ${(!d.custom && edited)? `<button class="btn sm ghost" onclick="resetMailTemplate('${d.key}')">Reset to default</button>`:''}
           </div>
         </div>
         ${live? '' : `<div class="small-note" style="margin-top:8px;color:var(--danger)">
-          Switched off. This letter alone is held \u2014 every other template goes out as configured.
+          Switched off. This letter alone is held — every other template goes out as configured.
           The wording below stays as it is, so switching it back on puts it back exactly as it was.</div>`}
+        ${editing ? `
         ${d.noSubject? '' : `<div class="field" style="margin-top:10px"><label>Subject</label>
           <input type="text" id="mt2_subj_${d.key}" value="${esc(t.subject||'')}"></div>`}
         <div class="field"><label>Message</label>
-          <textarea id="mt2_body_${d.key}" style="min-height:150px">${esc(t.body||'')}</textarea></div>
-        <div class="small-note" style="margin-top:0">Placeholders: ${d.vars.map(v=>`<code>{${v}}</code>`).join(' ')}</div>
-        <button class="btn sm primary" style="margin-top:10px" onclick="saveMailTemplate('${d.key}', ${d.noSubject?'false':'true'})">Save</button>
+          <textarea id="mt2_body_${d.key}" style="min-height:180px">${esc(t.body||'')}</textarea></div>
+        <div class="small-note" style="margin-top:0">Placeholders (click to insert at the cursor):
+          ${d.vars.map(v=>`<code class="cell-link" style="cursor:pointer" title="Insert {${esc(v)}}" onmousedown="event.preventDefault()" onclick="insertMailVar('${d.key}', '${esc(v)}')">{${esc(v)}}</code>`).join(' ')}</div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          <button class="btn sm primary" onclick="saveMailTemplate('${d.key}', ${d.noSubject?'false':'true'})">Save Changes</button>
+          <button class="btn sm ghost" onclick="previewMailTemplate('${d.key}')">Preview</button>
+          <button class="btn sm ghost" onclick="cancelMailTemplateEdit()">Cancel</button>
+        </div>` : `
+        ${d.noSubject? '' : `<div style="font-size:13px;margin:8px 0 6px"><b>Subject:</b> <span style="color:var(--text);font-weight:500">${esc(t.subject || '(No subject)')}</span></div>`}
+        <div class="mail-tpl-preview" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13px;line-height:1.5;max-height:140px;overflow-y:auto;white-space:pre-wrap;color:var(--text);margin:${d.noSubject?'10px':'0'} 0 10px">${esc(t.body || '(Empty message)')}</div>
+        <div class="small-note" style="margin-top:0">Placeholders: ${d.vars.map(v=>`<code>{${esc(v)}}</code>`).join(' ')}</div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          <button class="btn sm primary ghost" onclick="editMailTemplate('${d.key}')">✏️ Edit Template</button>
+          <button class="btn sm ghost" onclick="previewMailTemplate('${d.key}')">Preview</button>
+          ${/* A template the firm wrote has no shipped wording to go back to. */ ''}
+          ${(!d.custom && edited)? `<button class="btn sm ghost" onclick="resetMailTemplate('${d.key}')">Reset to default</button>`:''}
+        </div>`}
       </div>`;
     }).join('')}
   `;
@@ -80652,6 +80721,7 @@ async function saveMailTemplate(key, hasSubject){
   DB.config.mailTemplates[key] = hasSubject ? {subject, body} : {body};
   await save('config');
   await logAudit('Settings', key, 'Email Template Saved', [{field:'Template', oldValue:'', newValue:key}]);
+  if(window._editingMailTemplate === key) window._editingMailTemplate = null;
   navigate('settings');
 }
 async function resetMailTemplate(key){
@@ -80666,9 +80736,10 @@ async function resetMailTemplate(key){
 /* The preview reads the boxes as they are now, so it shows what is about to be
    saved rather than what was saved last time. */
 function previewMailTemplate(key){
-  const d = MAIL_TEMPLATE_DEFS.find(x=>x.key===key) || {vars:[]};
+  const d = MAIL_TEMPLATE_DEFS.find(x=>x.key===key) || (()=>{ const m = mailTemplateMeta(key); return m ? {label: m.name, vars: m.vars} : {vars:[]}; })();
   const subjEl = document.getElementById('mt2_subj_'+key), bodyEl = document.getElementById('mt2_body_'+key);
   const t = mailTemplateOf(key);
+  const hasSubject = !d.noSubject;
   const subject = subjEl ? subjEl.value : (t.subject||'');
   const body = bodyEl ? bodyEl.value : (t.body||'');
   const vars = mailPreviewVars();
@@ -80676,7 +80747,7 @@ function previewMailTemplate(key){
   const strays = [...new Set(unknown.map(x=>x.slice(1,-1)))].filter(v=>vars[v]===undefined);
   openModal('Preview — '+esc(d.label||key), `
     <div class="small-note" style="margin-top:0">As <b>${esc(vars.Name)}</b> would receive it.</div>
-    ${subjEl? `<div class="cw-prev" style="margin-top:10px"><div class="cw-prev-sub">${esc(fillTemplate(subject, vars))}</div>
+    ${hasSubject? `<div class="cw-prev" style="margin-top:10px"><div class="cw-prev-sub">${esc(fillTemplate(subject, vars))}</div>
       <div class="cw-prev-body" style="white-space:pre-wrap">${esc(fillTemplate(body, vars))}</div></div>`
       : `<div class="cw-prev" style="margin-top:10px"><div class="cw-prev-body" style="white-space:pre-wrap">${esc(fillTemplate(body, vars))}</div></div>`}
     ${strays.length? `<div class="small-note" style="margin-top:10px;color:var(--warn)">
@@ -81545,6 +81616,17 @@ async function removeMailStage(id){
 function customMailTemplates(){ return (DB.config.customMailTemplates || []).filter(t=>t && t.key); }
 /* One list, whichever they came from, so everything downstream — the
    editor, the rules, the send — reads a single shape. */
+/* A placeholder chip, clicked while editing, goes in at the cursor of the message. */
+function insertMailVar(key, v){
+  const el = document.getElementById('mt2_body_' + key);
+  if(!el) return;
+  const a = el.selectionStart == null ? el.value.length : el.selectionStart, b = el.selectionEnd == null ? a : el.selectionEnd;
+  const ins = '{' + v + '}';
+  el.value = el.value.slice(0, a) + ins + el.value.slice(b);
+  el.focus(); el.selectionStart = el.selectionEnd = a + ins.length;
+}
+function editMailTemplate(key){ window._editingMailTemplate = key; navigate('settings'); }
+function cancelMailTemplateEdit(){ window._editingMailTemplate = null; navigate('settings'); }
 function allMailTemplates(){
   const shipped = MAIL_TEMPLATE_DEFS.map(d=>({key:d.key, name:d.label, stage:d.group,
     when:d.when, vars:d.vars || [], custom:false}));

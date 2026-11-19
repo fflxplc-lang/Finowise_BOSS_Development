@@ -17,6 +17,13 @@
         never lands in the new conversation, and the new one is not held up
      6. Clear, then refresh the page
      7. nothing of a conversation is kept in browser storage to come back
+     8. "jiska mobile no add nhi hai usko filter krke list do" after a client
+        and Clear: the book's total, how many lack a mobile, and who, as
+        Client ID | Client Name | Branch | Status
+     9. missing DOB and missing PAN the same way; "<client> ka PAN batao,
+        nahi mil raha" stays a question about that client
+    10. the model path: a missing-field question hands over the book's
+        filter (attributeFilter, PAN masked), never a client from before
 
    Synthetic clients only. */
 const http = require('http');
@@ -52,8 +59,8 @@ const sent = (from) => seen.slice(from).map(j => JSON.stringify(j.messages || []
 
 const CLIENTS = [
   {id:'CMS-CC-A', cmsName:'ZZ Alpha Clientone', branch:'Pune', mobile:'9800000101', email:'alpha@example.test', pan:'ABCPA1111A', dob:'1980-01-01', rmName:''},
-  {id:'CMS-CC-B', cmsName:'ZZ Bravo Clienttwo', branch:'Pune', mobile:'9800000102', email:'', pan:'ABCPB2222B', dob:'1985-02-02', rmName:''},
-  {id:'CMS-CC-N1', cmsName:'ZZ Nomobile One', branch:'Mumbai', mobile:'', email:'n1@example.test', rmName:''},
+  {id:'CMS-CC-B', cmsName:'ZZ Bravo Clienttwo', branch:'Pune', mobile:'9800000102', email:'', pan:'ABCPB2222B', rmName:''},
+  {id:'CMS-CC-N1', cmsName:'ZZ Nomobile One', branch:'Mumbai', mobile:'', email:'n1@example.test', pan:'ABCPN3333N', dob:'1990-03-03', rmName:''},
   {id:'CMS-CC-N2', cmsName:'ZZ Nomobile Two', branch:'Delhi', email:'', rmName:''}];
 
 suite(async t => {
@@ -212,6 +219,60 @@ suite(async t => {
     const cleared = await t.eval(() => ({turns: ai.turns.length, flow: ai.flow, force: ai.forceClient || null, sel: ai.selection, report: ai.report, busy: ai.busy}));
     if(cleared.turns || cleared.flow || cleared.force || cleared.sel || cleared.report || cleared.busy) throw new Error(JSON.stringify(cleared));
     return Object.keys(st.local).length + ' localStorage / ' + Object.keys(st.session).length + ' sessionStorage keys, none with the conversation; after Clear every conversation field is empty';
+  });
+
+  const lastTable = () => t.eval(() => { const x = ai.turns[ai.turns.length - 1] || {}; return {text: String(x.content || ''), cols: x.table ? x.table.cols : null, rows: x.table ? x.table.rows : [], book: riaVisible().length}; });
+  const attrCheck = (a, field, want) => {
+    const head = '**Total Clients:** ' + a.book.toLocaleString('en-IN') + ' | **Clients without ' + field + ':** ' + want.length;
+    const names = a.rows.map(r => r[1]).sort();
+    if(a.text.indexOf(head) !== 0 || JSON.stringify(a.cols) !== JSON.stringify(['Client ID', 'Client Name', 'Branch', 'Status']) || names.join() !== want.slice().sort().join()
+      || a.rows.some(r => r[3] !== field + ': Missing') || /Alpha/.test(a.text + JSON.stringify(a.rows)))
+      throw new Error(field + ': ' + JSON.stringify({head, a}).slice(0, 700));
+    return head.replace(/\*\*/g, '');
+  };
+
+  await t.step('8. "ZZ Alpha Clientone" → Clear → "jiska mobile no add nhi hai usko filter krke list do": the total, the count, and the clients without a mobile, nothing of ZZ Alpha', async () => {
+    await fresh();
+    await ask('ZZ Alpha Clientone');
+    await ask('ZZ Alpha Clientone ka portfolio kholo');
+    await clear();
+    const n = seen.length;
+    await ask('jiska mobile no add nhi hai usko filter krke list do');
+    const a = await lastTable();
+    const head = attrCheck(a, 'Mobile Number', ['ZZ Nomobile One', 'ZZ Nomobile Two']);
+    if(/Alpha/.test(sent(n))) throw new Error('sent: ' + sent(n).slice(0, 400));
+    return head + '; rows: ' + a.rows.map(r => r[0] + ' ' + r[1]).join(', ') + ' (' + (seen.length - n) + ' model calls)';
+  });
+
+  await t.step('9. "clients without DOB" and "bina PAN wale clients ki list do"; "ZZ Alpha Clientone ka PAN batao, nahi mil raha" is still about ZZ Alpha', async () => {
+    await fresh();
+    const dob = (await afterClear('clients without DOB'), await lastTable());
+    const h1 = attrCheck(dob, 'Date of Birth', ['ZZ Bravo Clienttwo', 'ZZ Nomobile Two']);
+    await afterClear('bina PAN wale clients ki list do');
+    const h2 = attrCheck(await lastTable(), 'PAN', ['ZZ Nomobile Two']);
+    await afterClear('Show me all clients whose email is not added');
+    const h3 = attrCheck(await lastTable(), 'Email', ['ZZ Bravo Clienttwo', 'ZZ Nomobile Two']);
+    await afterClear('ZZ Alpha Clientone ka PAN batao, nahi mil raha');
+    const one = await lastTable();
+    if(/Total Clients/.test(one.text) || !/ZZ Alpha Clientone/.test(one.text) || !/ABCPA1111A/.test(one.text)) throw new Error('the client question became a filter: ' + one.text.slice(0, 400));
+    return [h1, h2, h3].join('; ') + '; the single-client question answered with ZZ Alpha’s PAN';
+  });
+
+  await t.step('10. the model path: "jiska mobile no add nhi hai" sends the book’s filter (PAN masked), "ZZ Alpha Clientone ka PAN nahi hai kya" sends ZZ Alpha', async () => {
+    await fresh();
+    const n = seen.length;
+    await t.eval(async () => { ai.turns.push({role:'user', content:'jiska mobile no add nhi hai'}); await bossRunChat('jiska mobile no add nhi hai'); });
+    const u = seen.length > n ? seen[seen.length - 1].messages.slice(-1)[0].content : '';
+    const data = JSON.parse((u.match(/<data>\n([\s\S]*?)\n<\/data>/) || [])[1] || '{}');
+    const f = data.attributeFilter || {};
+    if(f.field !== 'Mobile Number' || f.matchingCount !== 2 || (f.rows || []).map(r => r.name).sort().join() !== 'ZZ Nomobile One,ZZ Nomobile Two' || data.clients || /Alpha/.test(u)
+      || (f.rows || []).some(r => r.pan !== 'Not recorded' && !/^\*+/.test(r.pan))) throw new Error(u.slice(0, 700));
+    if(!/attributeFilter, open with "\*\*Total Clients:\*\*/.test(seen[seen.length - 1].messages[0].content)) throw new Error('the answer rules do not say how to lay it out');
+    const n2 = seen.length;
+    await t.eval(async () => { ai.turns.push({role:'user', content:'ZZ Alpha Clientone ka PAN nahi hai kya?'}); await bossRunChat('ZZ Alpha Clientone ka PAN nahi hai kya?'); });
+    const u2 = seen.slice(n2).map(j => j.messages.slice(-1)[0].content).join('\n');
+    if(/attributeFilter/.test(u2) || !/ZZ Alpha Clientone/.test(u2)) throw new Error(u2.slice(0, 500));
+    return 'attributeFilter: Mobile Number, ' + f.matchingCount + ' of ' + f.totalBook + ', PAN masked; the one-client question carried ZZ Alpha’s dossier, no filter';
   });
 
   await t.step('CRM records untouched: the four clients are as they were saved', async () => {
