@@ -299,8 +299,21 @@ function describeReads(reads) {
   });
   return lines;
 }
-function describeClient(c) {
+/* "Priya ka DOB aur PAN": the client's own fields, as the page sent them
+   (the PAN masked — it went to the provider). */
+const PERSONAL_RE = /\b(dob|date of birth|birth ?day|janam|age|pan|mobile|phone|e-?mail|address|nominee|iin|ucc|anniversary|occupation|profession|personal|profile|details?)\b/i;
+const PERSONAL_FIELDS = /^(date of birth|pan|mobile|email|e-?mail|mailing street|mailing city|mailing state|mailing zip|city|occupation|profession|anniversary date|gender|marital status|can \/ iin no\.?|iin|ucc no\.?|ucc|kyc status|mandate status|bank name|ifsc|nominee|first nominee name)/i;
+function describePersonal(c) {
+  const lines = ['**' + (c.client || c.name || 'Client') + '** — personal & KYC profile' + (c.code ? ' (' + c.code + ')' : '')];
+  if (c.dob) lines.push('- Date of birth: ' + c.dob + (c.age !== undefined && c.age !== null ? ' (age ' + c.age + ')' : ''));
+  Object.entries(c.fields || {}).filter(([k]) => PERSONAL_FIELDS.test(k) && !/^date of birth/i.test(k)).slice(0, 18).forEach(([k, v]) => lines.push('- ' + k + ': ' + v));
+  if (c.branch || c.rm) lines.push('- Branch: ' + (c.branch || '—') + (c.rm ? ', RM ' + c.rm : ''));
+  if (c.aum !== undefined && c.aum !== null && c.aum !== '') lines.push('- AUM ' + money(c.aum) + (c.monthlySip ? ', monthly SIP ' + money(c.monthlySip) : ''));
+  return lines;
+}
+function describeClient(c, q) {
   if (!c) return [];
+  if (q && PERSONAL_RE.test(q)) return describePersonal(c);
   const lines = [(c.client || c.name || 'Client') + (c.code ? ' (' + c.code + ')' : '') + (c.stage ? ' — ' + c.stage : '') + (c.rm ? ', RM ' + c.rm : '')];
   if (c.aum !== undefined && c.aum !== null && c.aum !== '') lines.push('AUM ' + money(c.aum) + (c.monthlySip ? ', monthly SIP ' + money(c.monthlySip) : '') + '.');
   (c.bossAlerts || []).slice(0, 5).forEach((a) => lines.push('- ' + a));
@@ -435,7 +448,7 @@ function chat(messages, opts) {
       out.push('', '**Suggested next actions:**');
       data.suggestedActions.forEach((x) => out.push('- ' + x.action + ': ' + Number(x.records).toLocaleString('en-IN')));
     }
-    (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c)); out.push(''); });
+    (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c, q)); out.push(''); });
     if (data.openLead) out.push('Lead on screen: ' + rowLine(data.openLead) + '.');
     if (data.chart) out.push(...describeChart(data.chart));
     if (data.reads) out.push(...describeReads(data.reads));

@@ -52,7 +52,13 @@
        Check Status → Mandate Status → PAN → the client's mandate, IIN, bank
        and SIPs, with buttons for what next, no model call; a name two
        clients share gives a list to click; "Varanasi" finds "Varanasi
-       Branch", and the DOB list comes with its charts and an Excel file. */
+       Branch", and the DOB list comes with its charts and an Excel file;
+     - personal data and shared names: "Priya ka date of birth aur PAN card
+       no batao" with four Priyas lists them by full name (a "Mrs." prefix
+       included), and the one picked — clicked or typed by number — gets
+       her DOB, age, PAN, mobile, email, branch, RM, KYC, mandate and AUM;
+       a unique client's DOB and PAN come back directly; "Priya ka
+       portfolio" waits for the pick and then answers for that client. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -696,7 +702,12 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         { id: 'CMS-D3', cmsName: 'ZZ Amit Shah', rmName: '', branch: 'Pune', pan: 'ABCPS3333T', kycStatus: 'On Hold' },
         { id: 'CMS-D4', cmsName: 'ZZ Varanasi One', rmName: '', branch: 'Varanasi Branch', dob: '1985-01-20' },
         { id: 'CMS-D5', cmsName: 'ZZ Varanasi Two', rmName: '', branch: 'Varanasi Branch', dob: '1950-11-05' },
-        { id: 'CMS-D6', cmsName: 'ZZ Varanasi Three', rmName: '', branch: 'Varanasi' }]);
+        { id: 'CMS-D6', cmsName: 'ZZ Varanasi Three', rmName: '', branch: 'Varanasi' },
+        { id: 'CMS-P1', cmsName: 'Mrs. Priya Sharma', rmName: '', branch: 'Mumbai', pan: 'ABCPS1111S', mobile: '9811100001', email: 'priya.s@example.test', dob: '1980-04-10' },
+        { id: 'CMS-P2', cmsName: 'Priya Verma', rmName: '', branch: 'Delhi', pan: 'ABCPV2222V', mobile: '9811100002', email: 'priya.v@example.test', dob: '1985-06-21', kycStatus: 'Validated' },
+        { id: 'CMS-P3', cmsName: 'Priya Nair', rmName: '', branch: 'Pune', pan: 'ABCPN4444N', mobile: '9811100003', email: 'priya.n@example.test', dob: '1992-02-02',
+          kycStatus: 'Validated', mandateStatus: 'Approved', firstNomineeName: 'Ravi Nair', firstNomineeRelation: 'Spouse', mailingCity: 'Pune', mailingState: 'Maharashtra' },
+        { id: 'CMS-P4', cmsName: 'Priya Gupta', rmName: '', branch: 'Lucknow', pan: 'ABCPG5555G', mobile: '9811100004', email: 'priya.g@example.test', dob: '1975-12-30' }]);
       await admin.put('/api/storage/clients', { value: JSON.stringify(deskClients) });
       await admin.put('/api/storage/platformSips', { value: JSON.stringify([{ id: 'PFS-I1', clientId: 'CMS-I1', schemeName: 'Parag Parikh Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000 },
         { id: 'PFS-D1', clientId: 'CMS-D1', schemeName: 'HDFC Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000, sipDate: 10 }]) });
@@ -755,7 +766,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         await click('#aiTurns .ria-sub', '1. Investor Name');
         await typeIn('ZZ Amit');
         const list = await lastBot();
-        if (!list.ui || list.ui.items.length !== 2 || !/2 clients match/.test(list.text) || !list.ui.items.every((x) => /ZZ Amit/.test(x))) throw new Error(JSON.stringify(list));
+        if (!list.ui || list.ui.items.length !== 2 || !/Found \*\*2 clients\*\* matching ‘ZZ Amit’\. Click the exact client \(by full name\)/.test(list.text) || !list.ui.items.every((x) => /ZZ Amit/.test(x))) throw new Error(JSON.stringify(list));
         await click('#aiTurns .ria-sub', 'ZZ Amit Shah');
         const a = await lastBot();
         if (!/\*\*ZZ Amit Shah\*\*/.test(a.text) || !/\*\*KYC status:\*\* On hold \/ rejected — physical KYC needed/.test(a.text)) throw new Error(a.text);
@@ -791,6 +802,56 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const want = deskClients.filter((c) => /varanasi/i.test(c.branch || '')).length;
         if (!a.table || a.table.rows.length !== want || !a.actions.includes('DOB & Age List') || !a.actions.includes('⬇ Download Excel')) throw new Error(JSON.stringify(a).slice(0, 400));
         return 'chips: ' + chips.ui.items.slice(0, 4).join(', ') + ' → ' + a.table.rows.length + ' clients';
+      });
+
+      const ageOf = (d) => { const b = new Date(d), n = new Date(); let a = n.getFullYear() - b.getFullYear(); const m = n.getMonth() - b.getMonth(); if (m < 0 || (m === 0 && n.getDate() < b.getDate())) a--; return a; };
+      await step('"Priya ka date of birth aur PAN card no batao" with four Priyas: all four by full name to click, then her DOB, age, PAN, mobile, email, branch, KYC, mandate, AUM', async () => {
+        const n = seen.length;
+        await typeIn('Priya ka date of birth aur PAN card no batao');
+        const list = await lastBot();
+        const names = list.ui ? list.ui.items : [];
+        if (!/Found \*\*4 clients\*\* matching ‘priya’\. Click the exact client \(by full name\) to continue:/.test(list.text) || names.length !== 4
+          || !names.some((x) => /^\d\. Mrs\. Priya Sharma · Mumbai · CMS-P1 · PAN: …111S · Mob: …0001$/.test(x)) || !names.some((x) => /Priya Nair · Pune/.test(x)))
+          throw new Error(JSON.stringify(list));
+        await click('#aiTurns .ria-sub', 'Priya Nair');
+        const a = await lastBot();
+        const need = ['**Priya Nair — Date of Birth:** 02 Feb 1992 (Age: ' + ageOf('1992-02-02') + ' yrs) · **PAN:** ABCPN4444N', '**Client Personal & KYC Profile**',
+          '**Mobile no.:** 9811100003', '**Email ID:** priya.n@example.test', '**Branch:** Pune', '**KYC status:** KYC validated', '**Mandate status:** Mandate approved',
+          '**Nominee:** Ravi Nair (Spouse)', '**Address:** Pune, Maharashtra', '**Total AUM:**', '**Relationship manager:**'];
+        const missing = need.filter((x) => !a.text.includes(x));
+        if (missing.length || !a.text.startsWith(need[0]) || !a.actions.includes('Personal Profile & DOB / PAN') || !a.actions.includes('↗ Open Account') || seen.length !== n) throw new Error(JSON.stringify({ missing, text: a.text.slice(0, 400), calls: seen.length - n }));
+        return names.length + ' listed (' + names.map((x) => x.split(' · ')[0].replace(/^\d\. /, '')).join(', ') + '); picked Priya Nair → ' + need[0].replace(/\*\*/g, '');
+      });
+
+      await step('the list answered by number: "Priya ka mobile number" → "2" → that Priya, mobile first', async () => {
+        await typeIn('Priya ka mobile number');
+        const list = await lastBot();
+        const second = list.ui.items[1].split(' · ')[0].replace(/^2\. /, '');
+        await typeIn('2');
+        const a = await lastBot();
+        if (!a.text.startsWith('**' + second + ' — Mobile:** 981110000') || !/\*\*Client Personal & KYC Profile\*\*/.test(a.text)) throw new Error(JSON.stringify({ second, text: a.text.slice(0, 300) }));
+        return '"2" → ' + a.text.split('\n')[0].replace(/\*\*/g, '');
+      });
+
+      await step('a unique client: "ZZ Ravi Kumar ka DOB aur PAN card no batao" → DOB and PAN at once', async () => {
+        await typeIn('ZZ Ravi Kumar ka DOB aur PAN card no batao');
+        const a = await lastBot();
+        const want = '**ZZ Ravi Kumar — Date of Birth:** 15 Mar 1960 (Age: ' + ageOf('1960-03-15') + ' yrs) · **PAN:** ABCPK1234Q';
+        if (!a.text.startsWith(want) || a.ui) throw new Error(a.text.slice(0, 300));
+        return want.replace(/\*\*/g, '');
+      });
+
+      await step('"Priya ka portfolio": the question waits for the pick, then is answered for that Priya', async () => {
+        gemini('503');
+        await typeIn('Priya ka portfolio dikhao aur analysis karo');
+        const list = await lastBot();
+        if (!list.ui || list.ui.items.length !== 4) throw new Error(JSON.stringify(list));
+        await click('#aiTurns .ria-sub', 'Priya Gupta');
+        await pg3.waitForFunction(() => !ai.busy, null, { timeout: 15000 });
+        const r = await pg3.evaluate(() => { const t = ai.turns[ai.turns.length - 1]; const u = ai.turns[ai.turns.length - 2];
+          return { text: String(t.content || ''), user: u && u.content, scope: t.intel ? t.intel.scope.label : '', forced: ai.forceClient }; });
+        if (!/Priya Gupta/.test(r.text + r.scope) || /Priya (Sharma|Verma|Nair)/.test(r.text) || r.forced) throw new Error(JSON.stringify(r).slice(0, 400));
+        return 'answered for ' + (r.scope || 'Priya Gupta') + ' after the pick';
       });
     } finally { await browser.close(); }
     await step('no answer anywhere in this run said "The AI service is busy"', async () => {
