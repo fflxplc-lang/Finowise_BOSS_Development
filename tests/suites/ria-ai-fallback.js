@@ -946,7 +946,9 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const a = await sliceOf('1 Oct se 18 Nov tak Varanasi branch ke transactions');
         if (!isSlice(a) || a.table.rows.length !== 1 || a.table.rows[0][0] !== 'ZZ Ravi Kumar' || a.table.rows[0][4] !== '₹50,000' || a.table.cols[1] !== 'Date') throw new Error(JSON.stringify(a).slice(0, 400));
         const b = await sliceOf('Varanasi branch clients with AUM above 10 lakh');
-        if (!isSlice(b) || b.table.rows.length !== 1 || b.table.rows[0][0] !== 'ZZ Ravi Kumar' || !/AUM above 10 lakh/.test(b.text)) throw new Error(JSON.stringify(b).slice(0, 400));
+        /* a list by money: Client ID | Client Name | Branch | Mobile | AUM | Monthly SIP, counted against the book */
+        if (b.table.rows.length !== 1 || b.table.rows[0][1] !== 'ZZ Ravi Kumar' || b.table.rows[0][4] !== '₹15,00,000' || !/AUM above 10 lakh/.test(b.text) || !/^📊 \*\*Total Clients in Book:\*\* \d+ \| \*\*Matching Clients:\*\* 1 \|/.test(b.text)
+          || !b.actions.includes('📄 Download PDF (1 clients)') || !b.actions.includes('📊 Download Excel (.xlsx)')) throw new Error(JSON.stringify(b).slice(0, 400));
         return 'transactions 1 Oct–18 Nov: ' + a.table.rows.length + ' (₹50,000); AUM > ₹10 lakh: ZZ Ravi Kumar';
       });
       await step('leads by period: "Mumbai branch mein October 2026 ke leads date wise" and "… last month ke leads date wise"', async () => {

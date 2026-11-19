@@ -63243,6 +63243,7 @@ function riaParseAmounts(q){
   /* the figure, then the comparison: "20 lakh se jyada", "50L+", "1 crore or more" — about the AUM unless SIP is named */
   const post = new RegExp('(?:rs\\.?|₹|inr)?\\s*(\\d+(?:\\.\\d+)?)\\s*' + RIA_AMT_UNIT + '\\s*(\\+|plus|or more|and above|or above|or less|and below|se (?:jyada|zyada|upar|adhik|kam))', 'g');
   while((m = post.exec(t))){ const near = t.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30);
+    if(!m[2] && !/(?:rs\.?|₹|inr)\s*$/.test(t.slice(Math.max(0, m.index - 4), m.index + m[0].indexOf(m[1])))) continue;   // "60+ age" is an age, not money
     push(/\bsips?\b/.test(near) && !/\b(aum|invest\w*|portfolio|holding)/.test(near) ? 'sip' : 'aum', riaAmtOp(m[3]), m[1], m[2], m.index + m[0].indexOf(m[1])); }
   const noSip = /\b(zero|no|without|bina|koi)\s+(?:active\s+|running\s+)?sips?\b|\b(?:have|has|having|do|does|did)\s*(?:not|n't|nt)\s*(?:have\s+|got\s+)?(?:any\s+)?(?:active\s+|running\s+)?sips?\b|\bnot\s+(?:having|have|has)\s+(?:any\s+)?(?:active\s+)?sips?\b|\bsips?\s*(?:=\s*0|zero|nahi|nhi|nahin|na)\b|\bsips?\s+(?:not\s+(?:started|registered|running|active))/;
   if(noSip.test(t)) out.push({field:'sip', op:'zero', value:0, label:'no SIP'});
