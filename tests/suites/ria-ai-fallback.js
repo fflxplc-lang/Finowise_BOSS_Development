@@ -58,7 +58,11 @@
        included), and the one picked — clicked or typed by number — gets
        her DOB, age, PAN, mobile, email, branch, RM, KYC, mandate and AUM;
        a unique client's DOB and PAN come back directly; "Priya ka
-       portfolio" waits for the pick and then answers for that client. */
+       portfolio" waits for the pick and then answers for that client;
+     - any slice: "Varanasi branch ke clients date wise", "… March / May
+       birthday wale", "… pending KYC", "… 60+ age wale" — the branch as
+       the records spell it, rows in date (or birthday) order, a dashboard
+       and Excel / CSV / PDF; and "Date-wise" among a branch's buttons. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -696,12 +700,12 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
 
       /* ---- the guided desk ---- */
       const deskClients = clients.concat([
-        { id: 'CMS-D1', cmsName: 'ZZ Ravi Kumar', rmName: '', branch: 'Varanasi Branch', pan: 'ABCPK1234Q', mobile: '9876500001', canIinNo: 'IIN5001', mandateStatus: 'Approved',
+        { id: 'CMS-D1', cmsName: 'ZZ Ravi Kumar', rmName: '', branch: 'Varanasi Branch', createdAt: '2026-10-05T10:00:00.000Z', pan: 'ABCPK1234Q', mobile: '9876500001', canIinNo: 'IIN5001', mandateStatus: 'Approved',
           mandateType: 'E-Mandate', bankName: 'HDFC Bank', ifsc: 'HDFC0001234', accNo: '123456789012', dob: '1960-03-15', kycStatus: 'Validated' },
         { id: 'CMS-D2', cmsName: 'ZZ Amit Verma', rmName: '', branch: 'Mumbai', pan: 'ABCPV2222R', dob: '1990-07-02' },
         { id: 'CMS-D3', cmsName: 'ZZ Amit Shah', rmName: '', branch: 'Pune', pan: 'ABCPS3333T', kycStatus: 'On Hold' },
-        { id: 'CMS-D4', cmsName: 'ZZ Varanasi One', rmName: '', branch: 'Varanasi Branch', dob: '1985-01-20' },
-        { id: 'CMS-D5', cmsName: 'ZZ Varanasi Two', rmName: '', branch: 'Varanasi Branch', dob: '1950-11-05' },
+        { id: 'CMS-D4', cmsName: 'ZZ Varanasi One', rmName: '', branch: 'Varanasi Branch', dob: '1985-01-20', createdAt: '2026-09-01T10:00:00.000Z' },
+        { id: 'CMS-D5', cmsName: 'ZZ Varanasi Two', rmName: '', branch: 'Varanasi Branch', dob: '1950-11-05', createdAt: '2026-11-02T10:00:00.000Z' },
         { id: 'CMS-D6', cmsName: 'ZZ Varanasi Three', rmName: '', branch: 'Varanasi' },
         { id: 'CMS-P1', cmsName: 'Mrs. Priya Sharma', rmName: '', branch: 'Mumbai', pan: 'ABCPS1111S', mobile: '9811100001', email: 'priya.s@example.test', dob: '1980-04-10' },
         { id: 'CMS-P2', cmsName: 'Priya Verma', rmName: '', branch: 'Delhi', pan: 'ABCPV2222V', mobile: '9811100002', email: 'priya.v@example.test', dob: '1985-06-21', kycStatus: 'Validated' },
@@ -852,6 +856,45 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
           return { text: String(t.content || ''), user: u && u.content, scope: t.intel ? t.intel.scope.label : '', forced: ai.forceClient }; });
         if (!/Priya Gupta/.test(r.text + r.scope) || /Priya (Sharma|Verma|Nair)/.test(r.text) || r.forced) throw new Error(JSON.stringify(r).slice(0, 400));
         return 'answered for ' + (r.scope || 'Priya Gupta') + ' after the pick';
+      });
+
+      const varanasi = deskClients.filter((c) => /varanasi/i.test(c.branch || ''));
+      const sliceOf = async (q) => { await typeIn(q); return lastBot(); };
+      const isSlice = (a) => a.table && a.actions.includes('⬇ Download Excel') && a.actions.includes('⬇ Download CSV') && a.actions.includes('⬇ Download PDF');
+      await step('"Varanasi branch ke clients date wise dikhao": every Varanasi / Varanasi Branch client, in the order they were added, with a dashboard and downloads', async () => {
+        const n = seen.length;
+        const a = await sliceOf('Varanasi branch ke clients date wise dikhao');
+        const names = a.table ? a.table.rows.map((r) => r[0]) : [];
+        if (!isSlice(a) || !/^\*\*Varanasi branch — Date-wise clients \(\d+ records\):\*\*/.test(a.text) || a.table.rows.length !== varanasi.length || names.slice(0, 3).join() !== 'ZZ Varanasi One,ZZ Ravi Kumar,ZZ Varanasi Two'
+          || a.table.cols[1] !== 'Date added' || !a.charts.some((c) => /^donut:KYC status/.test(c)) || !a.charts.some((c) => /^hbar:Month-wise/.test(c)) || seen.length !== n) throw new Error(JSON.stringify(a).slice(0, 500));
+        return a.text.split('\n')[0].replace(/\*\*/g, '') + ' — first: ' + names.slice(0, 3).join(', ');
+      });
+      await step('"Varanasi branch ke March birthday wale clients" → the March birthday; "… May …" → none, said so', async () => {
+        const a = await sliceOf('Varanasi branch ke March birthday wale clients');
+        if (!isSlice(a) || a.table.rows.length !== 1 || a.table.rows[0][0] !== 'ZZ Ravi Kumar' || a.table.cols[1] !== 'Date of birth' || !/Birthday mar/i.test(a.text)) throw new Error(JSON.stringify(a).slice(0, 400));
+        const b = await sliceOf('Varanasi branch ke May birthday wale clients');
+        if (!b.table || b.table.rows.length !== 0 || !/Nothing in your visible records matches all of these filters/.test(b.text)) throw new Error(JSON.stringify(b).slice(0, 400));
+        return 'March: ZZ Ravi Kumar; May: none';
+      });
+      await step('"Varanasi branch ke pending KYC clients" and "… 60+ age wale clients": branch and status, branch and age', async () => {
+        const a = await sliceOf('Varanasi branch ke pending KYC clients');
+        const want = varanasi.filter((c) => c.kycStatus !== 'Validated').length;
+        if (!isSlice(a) || a.table.rows.length !== want || a.table.rows.some((r) => r[6] === 'KYC validated') || !/Pending KYC/.test(a.text)) throw new Error(JSON.stringify(a).slice(0, 400));
+        const b = await sliceOf('Varanasi branch ke 60+ age wale clients');
+        const names = b.table ? b.table.rows.map((r) => r[0]).sort().join() : '';
+        if (!isSlice(b) || names !== 'ZZ Ravi Kumar,ZZ Varanasi Two' || !/Age 60\+/.test(b.text)) throw new Error(JSON.stringify(b).slice(0, 400));
+        return 'pending KYC: ' + want + ' of ' + varanasi.length + '; 60+: ' + names;
+      });
+      await step('the guided desk: a branch\u2019s "Date-wise (created date)" button gives the same date-wise list', async () => {
+        await click('.ai-compose .ria-menu-btn', '☰');
+        await click('#aiTurns .ria-tile', 'Statements & Reports');
+        await click('#aiTurns .ria-sub', 'Branch-wise Client / DOB Report');
+        await click('#aiTurns .ria-sub', '5. Branch / RM Name');
+        await click('#aiTurns .ria-sub', 'Varanasi Branch (');
+        await click('#aiTurns .ria-act', 'Date-wise (created date)');
+        const a = await lastBot();
+        if (!isSlice(a) || a.table.rows.length !== varanasi.length || a.table.rows[0][0] !== 'ZZ Varanasi One' || !/Date-wise clients/.test(a.text)) throw new Error(JSON.stringify(a).slice(0, 400));
+        return a.text.split('\n')[0].replace(/\*\*/g, '');
       });
     } finally { await browser.close(); }
     await step('no answer anywhere in this run said "The AI service is busy"', async () => {
