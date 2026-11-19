@@ -62,7 +62,9 @@
      - any slice: "Varanasi branch ke clients date wise", "… March / May
        birthday wale", "… pending KYC", "… 60+ age wale" — the branch as
        the records spell it, rows in date (or birthday) order, a dashboard
-       and Excel / CSV / PDF; and "Date-wise" among a branch's buttons. */
+       and Excel / CSV / PDF; and "Date-wise" among a branch's buttons;
+       also "1 Oct se 18 Nov tak … transactions", "… AUM above 10 lakh",
+       leads in "October 2026" and "last month", business and calls. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -715,6 +717,27 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       await admin.put('/api/storage/clients', { value: JSON.stringify(deskClients) });
       await admin.put('/api/storage/platformSips', { value: JSON.stringify([{ id: 'PFS-I1', clientId: 'CMS-I1', schemeName: 'Parag Parikh Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000 },
         { id: 'PFS-D1', clientId: 'CMS-D1', schemeName: 'HDFC Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000, sipDate: 10 }]) });
+      const lm = new Date(); lm.setDate(1); lm.setMonth(lm.getMonth() - 1);
+      const lastMonthDay = (d) => new Date(lm.getFullYear(), lm.getMonth(), d, 12).toISOString();
+      await admin.put('/api/storage/transactions', { value: JSON.stringify([
+        { id: 'TX-S1', clientId: 'CMS-D1', initiatedDate: '2026-10-10', transactionType: 'Purchase', amount: 50000, status: 'Completed' },
+        { id: 'TX-S2', clientId: 'CMS-D1', initiatedDate: '2026-11-25', transactionType: 'SIP', amount: 5000, status: 'Pending' },
+        { id: 'TX-S3', clientId: 'CMS-D2', initiatedDate: '2026-10-12', transactionType: 'Purchase', amount: 70000, status: 'Completed' }]) });
+      await admin.put('/api/storage/platformHoldings', { value: JSON.stringify(H.map((h, i) => ({ id: 'PFH-I' + i, clientId: 'CMS-I1', schemeName: h[0], invested: h[1], current: h[2], purchaseDate: h[3] }))
+        .concat([{ id: 'PFH-D1', clientId: 'CMS-D1', schemeName: 'HDFC Flexi Cap Reg Gr', invested: 1000000, current: 1500000 }])) });
+      const sliceLeads = [
+        { id: 'LMS-S1', firstName: 'ZZ Lead', lastName: 'Oct A', branch: 'Mumbai', createdAt: '2026-10-20T10:00:00.000Z' },
+        { id: 'LMS-S2', firstName: 'ZZ Lead', lastName: 'Oct B', branch: 'Mumbai', createdAt: '2026-10-03T10:00:00.000Z' },
+        { id: 'LMS-S3', firstName: 'ZZ Lead', lastName: 'Last Month', branch: 'Mumbai', createdAt: lastMonthDay(15) },
+        { id: 'LMS-S4', firstName: 'ZZ Lead', lastName: 'Pune', branch: 'Pune', createdAt: '2026-10-05T10:00:00.000Z' }];
+      await admin.put('/api/storage/leads', { value: JSON.stringify(sliceLeads) });
+      await admin.put('/api/storage/businessEntries', { value: JSON.stringify([
+        { id: 'DBT-S1', entryDate: '2026-11-03', product: 'Mutual Fund', transactionType: 'Lumpsum', amount: 200000, branch: 'Varanasi Branch', clientId: 'CMS-D1' },
+        { id: 'DBT-S2', entryDate: '2026-10-21', product: 'Mutual Fund', transactionType: 'SIP', amount: 10000, branch: 'Varanasi Branch', clientId: 'CMS-D4' },
+        { id: 'DBT-S3', entryDate: '2026-10-22', product: 'Insurance', transactionType: 'New', amount: 30000, branch: 'Mumbai' }]) });
+      await admin.put('/api/storage/callEntries', { value: JSON.stringify([
+        { id: 'CALL-S1', callDate: '2026-11-04', callType: 'Outbound', outcome: 'Connected', branch: 'Varanasi Branch', clientId: 'CMS-D1' },
+        { id: 'CALL-S2', callDate: '2026-11-05', callType: 'Inbound', outcome: 'Callback', branch: 'Pune' }]) });
       const pg3 = await (await browser.newContext({ acceptDownloads: true })).newPage();
       await signIn(pg3, srv.base); await ready(pg3);
       await pg3.evaluate(async () => { await aiRefreshStatus(true); ai.turns = []; ai.open = true; aiDrawPanel(); });
@@ -884,6 +907,31 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const names = b.table ? b.table.rows.map((r) => r[0]).sort().join() : '';
         if (!isSlice(b) || names !== 'ZZ Ravi Kumar,ZZ Varanasi Two' || !/Age 60\+/.test(b.text)) throw new Error(JSON.stringify(b).slice(0, 400));
         return 'pending KYC: ' + want + ' of ' + varanasi.length + '; 60+: ' + names;
+      });
+      await step('"1 Oct se 18 Nov tak Varanasi branch ke transactions" and "Varanasi branch clients with AUM above 10 lakh"', async () => {
+        const a = await sliceOf('1 Oct se 18 Nov tak Varanasi branch ke transactions');
+        if (!isSlice(a) || a.table.rows.length !== 1 || a.table.rows[0][0] !== 'ZZ Ravi Kumar' || a.table.rows[0][4] !== '₹50,000' || a.table.cols[1] !== 'Date') throw new Error(JSON.stringify(a).slice(0, 400));
+        const b = await sliceOf('Varanasi branch clients with AUM above 10 lakh');
+        if (!isSlice(b) || b.table.rows.length !== 1 || b.table.rows[0][0] !== 'ZZ Ravi Kumar' || !/AUM above 10 lakh/.test(b.text)) throw new Error(JSON.stringify(b).slice(0, 400));
+        return 'transactions 1 Oct–18 Nov: ' + a.table.rows.length + ' (₹50,000); AUM > ₹10 lakh: ZZ Ravi Kumar';
+      });
+      await step('leads by period: "Mumbai branch mein October 2026 ke leads date wise" and "… last month ke leads date wise"', async () => {
+        const a = await sliceOf('Mumbai branch mein October 2026 ke leads date wise');
+        const octWant = sliceLeads.filter((l) => l.branch === 'Mumbai' && l.createdAt.slice(0, 7) === '2026-10').map((l) => l.firstName + ' ' + l.lastName).sort((x, y) => x.localeCompare(y));
+        const got = a.table ? a.table.rows.map((r) => r[0]) : [];
+        if (!isSlice(a) || got.slice().sort().join() !== octWant.join() || got[0] !== 'ZZ Lead Oct B' || a.table.cols[1] !== 'Date added') throw new Error(JSON.stringify({ octWant, a }).slice(0, 500));
+        const b = await sliceOf('Mumbai branch mein last month ke leads date wise');
+        const lmKey = lm.getFullYear() + '-' + String(lm.getMonth() + 1).padStart(2, '0');
+        const lmWant = sliceLeads.filter((l) => l.branch === 'Mumbai' && l.createdAt.slice(0, 7) === lmKey).length;
+        if (!isSlice(b) || b.table.rows.length !== lmWant || !b.table.rows.some((r) => r[0] === 'ZZ Lead Last Month')) throw new Error(JSON.stringify({ lmWant, b }).slice(0, 500));
+        return 'October 2026: ' + got.join(', ') + ' (oldest first); last month: ' + lmWant;
+      });
+      await step('business and calls: "Varanasi branch ka business date wise" and "Varanasi branch ke calls date wise"', async () => {
+        const a = await sliceOf('Varanasi branch ka business date wise');
+        if (!isSlice(a) || a.table.rows.length !== 2 || a.table.cols[0] !== 'Date' || a.table.rows[0][3] !== '₹10,000') throw new Error(JSON.stringify(a).slice(0, 400));
+        const b = await sliceOf('Varanasi branch ke calls date wise');
+        if (!isSlice(b) || b.table.rows.length !== 1 || b.table.rows[0][2] !== 'Connected') throw new Error(JSON.stringify(b).slice(0, 400));
+        return 'business: ' + a.table.rows.map((r) => r[0] + ' ' + r[3]).join(', ') + '; calls: ' + b.table.rows.length;
       });
       await step('the guided desk: a branch\u2019s "Date-wise (created date)" button gives the same date-wise list', async () => {
         await click('.ai-compose .ria-menu-btn', '☰');
