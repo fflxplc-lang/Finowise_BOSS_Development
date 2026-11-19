@@ -62664,7 +62664,7 @@ const RIA_ESCALATION = [
 ];
 
 function riaGreeting(){
-  const h = new Date().getHours(), part = h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening';
+  const h = new Date().getHours(), part = h < 12 ? 'Happy Morning' : h < 17 ? 'Happy Afternoon' : 'Happy Evening';
   const u = typeof me==='function' ? me() : null;
   const name = (u && (u.name || u.fullName)) || (typeof teamName==='function' ? teamName(currentUser) : '') || '';
   const first = String(name).trim().split(/\s+/)[0];
