@@ -59045,7 +59045,52 @@ function aiTogglePanel(){
   if(ai.open) setTimeout(()=>{ const el = document.getElementById('aiInput'); if(el) el.focus(); }, 30);
 }
 function aiCloseP(){ ai.open = false; aiDrawPanel(); }
-function aiClearTurns(){ ai.turns = []; ai.report = null; ai.error = null; if(typeof aiClearDesk==='function') aiClearDesk(); aiDrawPanel(); }
+/* CLEAR STARTS A NEW CONVERSATION.
+
+   Everything that belonged to the old one goes: the messages, the desk's
+   pending question or pick list, a client picked for one question, a
+   report or selection being worked on, the anchor and the "thinking"
+   line. The conversation number moves on, so an answer to the old one
+   that is still being fetched or typed is dropped when it lands instead
+   of appearing here (aiStale). And the record open on screen stops being
+   this conversation's subject: before, a client opened during the old
+   conversation stayed in every later question's context, so "show all
+   clients whose mobile number is not added" was answered about that one
+   client. It becomes the subject again when the question says so ("this
+   client", "is client ka") or another record is opened.
+   Nothing in the CRM is touched: records, the SOP library, settings,
+   sign-in and permissions are not conversation state. */
+function aiClearTurns(){
+  ai.conv = (ai.conv || 0) + 1;
+  ai.turns = []; ai.report = null; ai.error = null;
+  ai.forceClient = null; ai.selection = null; ai.selectionEl = null;
+  ai.scrollAnchor = null; ai.phase = ''; ai.busy = false; ai.draft = '';
+  const el = document.getElementById('aiInput'); if(el) el.value = '';
+  ai.context = aiContextOf();
+  ai.droppedRecord = ai.context && ai.context.recordId || null;
+  if(typeof aiClearDesk==='function') aiClearDesk();
+  aiDrawPanel();
+}
+/* An answer belongs to the conversation it was asked in. */
+const AI_STALE = {stale: true};
+function aiStale(conv){ if(conv !== (ai.conv || 0)) throw AI_STALE; }
+function aiIgnoreStale(e){ if(e !== AI_STALE) throw e; }
+/* "This client", "is client ka", "iska": the question points at the record on screen. */
+const AI_POINTS_AT_RECORD = /\b(this|that|current|the open|is|iss|isi|yeh|ye|wo|us)\s+(client|investor|customer|account|record|lead|person|banda|bande)\b|\b(iska|iski|iske|inka|inki|inke|uska|uski|uske)\b/i;
+/* "All clients whose…", "kitne clients", "which clients": a question about the book, not one client. */
+const AI_ABOUT_BOOK = /\b(all|every|sabhi|saare|sare|sab|which|kaun\s?se|kitne|how many|list|jin|jinka|jinke|jinki)\b[^?.]*\bclients\b|\bclients\b[^?.]*\b(whose|jinka|jinke|jinki|jin|without|with no|not added|missing|blank)\b/i;
+/* The screen as this question may use it: the open record only if it is this conversation's subject. */
+function aiConvContext(q){
+  const c = ai.context || {};
+  if(!c.recordId) return c;
+  if(ai.droppedRecord && ai.droppedRecord !== c.recordId) ai.droppedRecord = null;   // another record opened since
+  const points = AI_POINTS_AT_RECORD.test(String(q || ''));
+  if(points){ ai.droppedRecord = null; return c; }
+  if(ai.droppedRecord === c.recordId || AI_ABOUT_BOOK.test(String(q || ''))){
+    const out = Object.assign({}, c); delete out.recordId; delete out.recordName; delete out.module; return out;
+  }
+  return c;
+}
 /* The panel is drawn into its own node, outside the page the app renders,
    so opening it, typing in it and closing it never touch what is on the
    screen behind — a half-finished MOM is exactly where it was. */
@@ -59069,10 +59114,10 @@ function aiDrawPanel(){
       <div class="ai-head">
         <div>
           <b>RIA AI Assistant</b>
-          <div class="ai-sub">${esc(aiContextLine(ai.context)||'Ask about anything you can already see.')}</div>
+          <div class="ai-sub">${esc(aiContextLine(aiConvContext(''))||'Ask about anything you can already see.')}</div>
         </div>
         <div class="row" style="gap:6px">
-          <button class="btn sm ghost" onclick="aiClearTurns()" ${ai.busy?'disabled':''} title="Start a fresh conversation">Clear</button>
+          <button class="btn sm ghost" onclick="aiClearTurns()" title="Start a fresh conversation">Clear</button>
           <button class="btn sm ghost" onclick="aiCloseP()" aria-label="Close the assistant">✕</button>
         </div>
       </div>
@@ -59181,14 +59226,17 @@ async function riaTotalAumTurn(){
     return {};
   }
   ai.phase = 'RIA AI is calculating AUM from BOSS records'; aiDrawPanel();
+  const conv = ai.conv || 0;
   let res, body = {};
   try {
     res = await fetch('/api/ai/aum', {headers: apiHeaders()});
     body = await res.json().catch(()=>({}));
   } catch(e) {
+    aiStale(conv);
     ai.turns.push({role:'assistant', content:'BOSS could not be reached to calculate AUM just now, so nothing was estimated. Please try again.'});
     return {};
   }
+  aiStale(conv);
   if(!res.ok || !body.ok){
     ai.turns.push({role:'assistant', content: body.message || 'BOSS could not calculate AUM for your account, so nothing was estimated.'});
     return {};
@@ -59223,13 +59271,18 @@ async function aiSend(){
   ai.turns.push({role:'user', content:q});
   aiAnchorTurn(ai.turns.length - 1);
   ai.busy = true; aiDrawPanel();
-  const awaiting = !!(ai.flow && ai.flow.step==='await_value');
-  const nav = awaiting ? null : bossPageOpenIntent(q);
-  const desk = nav ? null : await riaDeskHandle(q);
-  const out = desk ? desk
-            : nav ? bossOpenNow(q, nav)
-            : riaTotalAumIntent(q) ? await riaTotalAumTurn()
-            : aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
+  const conv = ai.conv || 0;
+  let out;
+  try{
+    const awaiting = !!(ai.flow && ai.flow.step==='await_value');
+    const nav = awaiting ? null : bossPageOpenIntent(q);
+    const desk = nav ? null : await riaDeskHandle(q);
+    out = desk ? desk
+        : nav ? bossOpenNow(q, nav)
+        : riaTotalAumIntent(q) ? await riaTotalAumTurn()
+        : aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
+  }catch(e){ aiIgnoreStale(e); return; }
+  if(conv !== (ai.conv || 0)) return;            // cleared meanwhile: the new conversation is not touched
   ai.busy = false; ai.phase = '';
   ai.forceClient = null;                         // a picked client answers one question, never the next
   if(out && out.error) ai.error = out.error;
@@ -59238,10 +59291,12 @@ async function aiSend(){
 }
 function aiClearDesk(){ ai.flow = null; ai.homeCat = null; }
 async function aiRunChat(q){
-  const ctx = aiContextLine(ai.context);
+  const conv = ai.conv || 0;
+  const ctx = aiContextLine(aiConvContext(q));
   const history = ai.turns.slice(-10).map(t=>({role:t.role, content:t.content}));
   if(ctx) history.unshift({role:'user', content:'(context) '+ctx});
   const r = await aiAsk(history, {});
+  aiStale(conv);
   if(!r.ok) return {error:r.message};
   ai.turns.push({role:'assistant', content:r.text});
   return {};
@@ -59250,11 +59305,13 @@ async function aiRunChat(q){
    report; the user previews it and downloads it. The model never sees the
    records unless the user then asks it something about them. */
 async function aiRunReport(q){
+  const conv = ai.conv || 0;
   ai.report = null;
   const sys = aiSystemBrief() + '\n\nYou are writing a REPORT SPECIFICATION, not a report.\n'
     + 'Sources available to this user:\n' + aiReportSourceMenu() + '\n\n' + AI_REPORT_SPEC
     + '\n\nToday is ' + new Date().toISOString().slice(0,10) + '.';
   const r = await aiAsk([{role:'user', content:q}], {system: sys, temperature: 0, maxTokens: 900});
+  aiStale(conv);
   if(!r.ok) return {error:r.message};
   const parsed = aiParseReportSpec(r.text);
   if(parsed.error) return {error: parsed.error};
@@ -59877,6 +59934,7 @@ function bossOpen(line){
     const tab = BOSS_CLIENT_TABS.includes(p[2]) ? p[2] : 'overview';
     window._clientTab = tab;
     navigate('cms', c.id);
+    ai.droppedRecord = null;
     return {kind:'cms', id:c.id, tab, label: clientDisplayName(c) + ' › ' + tab.charAt(0).toUpperCase() + tab.slice(1)};
   }
   const v = bossPages().includes(p[0]) ? p[0] : bossPageAlias(p.join(' '));
@@ -59973,7 +60031,8 @@ function bossReopen(i){
   ai.context = aiContextOf(); aiDrawPanel();
 }
 async function bossRunChat(q){
-  const ctx = ai.context || {};
+  const conv = ai.conv || 0;
+  const ctx = aiConvContext(q);
   let sops = bossSopSearch(q, 4);
   const data = {};
   const people = [];
@@ -60029,10 +60088,11 @@ async function bossRunChat(q){
   if(mktNames){
     ai.phase = 'RIA AI is reading live prices'; aiDrawPanel();
     market = await lexiMarketRead(mktNames);
+    aiStale(conv);
     /* Every name drawn from the sentence failed: it was filler, not a company. */
     let shortlist = mktNames === LEXI_MKT_SHORTLIST || (mktNames.length === LEXI_MKT_SHORTLIST.length && mktNames.every((n, i) => n === LEXI_MKT_SHORTLIST[i]));
     if(!market.quotes.length && !shortlist && lexiMarketBuyIntent(q)){
-      const none = market.notFound; market = await lexiMarketRead(LEXI_MKT_SHORTLIST); market.notFound = none.concat(market.notFound); shortlist = true;
+      const none = market.notFound; market = await lexiMarketRead(LEXI_MKT_SHORTLIST); aiStale(conv); market.notFound = none.concat(market.notFound); shortlist = true;
     }
     data.liveMarket = lexiMarketForAi(market, lexiMoneyIn(q), shortlist);
     data.marketZone = lexiLiveZoneLabel(market.quotes);
@@ -60040,6 +60100,7 @@ async function bossRunChat(q){
   } else if(!chart && !chartQ && !countQ && !intel && lexiMarketNowAsk(q, policyQ, bossIsPolicy(sops[0]))){
     ai.phase = 'RIA AI is reading the live market'; aiDrawPanel();
     const now = await lexiMarketRead(['NIFTY 50']);
+    aiStale(conv);
     if(now.quotes.length){
       data.marketNow = lexiMarketForAi(now, 0, false);
       data.marketZone = lexiLiveZoneLabel(now.quotes);
@@ -60049,6 +60110,7 @@ async function bossRunChat(q){
   if(!countQ && !intel && !mktNames && !people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
     ai.phase = 'RIA AI is checking the records'; aiDrawPanel();
     const plan = await bossPlanReads(q);
+    aiStale(conv);
     if(plan.error) return {error: plan.error};
     if(plan.client) bossClientsNamedIn(plan.client).forEach(c=>{ if(!people.includes(c)) people.push(c); });
     const reads = bossDoReads(plan.reads);
@@ -60080,9 +60142,11 @@ async function bossRunChat(q){
     market: market && market.quotes.length ? market.quotes : undefined};
   let shown = false;
   const r = await aiAsk(history.concat([{role:'user', content: ask}]), {system: sys, maxTokens: 1200,
-    onText: text => { if(!shown){ shown = true; ai.turns.push(turn); aiDrawPanel(); } turn.content = text; bossPaintLive(text); }});
+    onText: text => { if(conv !== (ai.conv || 0)) return; if(!shown){ shown = true; ai.turns.push(turn); aiDrawPanel(); } turn.content = text; bossPaintLive(text); }});
+  aiStale(conv);
   if(!r.ok){ if(shown) ai.turns.splice(ai.turns.indexOf(turn), 1); return {error: r.message}; }
   if(!shown){ ai.turns.push(turn); aiDrawPanel(); await bossTypeOut(turn, r.text); }
+  aiStale(conv);
   const m = String(r.text||'').match(BOSS_OPEN_RE);
   turn.content = riaCleanText(bossStripOpen(r.text)); delete turn.live;
   if(m){
@@ -60113,6 +60177,7 @@ function bossTypeOut(turn, text){
   return new Promise(done => {
     let n = 0;
     const tick = () => {
+      if(!ai.turns.includes(turn)) return done();
       n = Math.min(text.length, n + step);
       turn.content = text.slice(0, n); bossPaintLive(turn.content);
       if(n < text.length) setTimeout(tick, 22); else done();
@@ -62544,7 +62609,7 @@ function riaAct(ti, k){
   if(ai.busy) return;
   const t = ai.turns[ti]; const it = t && t.ui && t.ui.items && t.ui.items[k];
   if(!it) return;
-  return riaRun(it.act, it.label);
+  return riaRun(it.act, it.label).catch(aiIgnoreStale);
 }
 function riaFollow(ti, k){
   if(ai.busy) return;
@@ -62552,7 +62617,7 @@ function riaFollow(ti, k){
   if(!a) return;
   if(a.act.t==='pdf') return bossDownloadTurnPdf(ti);
   if(a.act.t==='dl') return riaDownloadTable(ti, a.act.fmt);
-  return riaRun(a.act, a.label);
+  return riaRun(a.act, a.label).catch(aiIgnoreStale);
 }
 async function riaRun(act, label){
   if(act.t==='menu'){ riaPushUser(label || 'Main Menu'); return riaShowMenu(); }
@@ -62590,8 +62655,11 @@ async function riaRun(act, label){
 async function riaResumeChat(q, c){
   ai.forceClient = c.id;
   ai.busy = true; ai.phase = ''; aiDrawPanel();
+  const conv = ai.conv || 0;
   let out = null;
-  try{ out = await bossRunChat(q); }finally{ ai.busy = false; ai.phase = ''; }
+  try{ out = await bossRunChat(q); }catch(e){ aiIgnoreStale(e); return; }
+  if(conv !== (ai.conv || 0)) return;
+  ai.busy = false; ai.phase = ''; ai.forceClient = null;
   if(out && out.error) ai.error = out.error;
   riaDone();
 }
@@ -62619,11 +62687,13 @@ async function riaFind(by, value){
     let hits = cs.filter(c=>String(c.pan||'').toUpperCase()===P);
     /* PANs this account sees masked: the server matches the full PAN, in scope only. */
     if(!hits.length && RIA_PAN_RE.test(P) && cs.some(c=>/\*/.test(String(c.pan||'')))){
+      const conv = ai.conv || 0;
       try{
         const r = await fetch('/api/clients/pan-match', {method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({pans:[P]})});
         const d = await r.json(); const ids = d && d.ok && d.results && d.results[0] ? d.results[0].ids || [] : [];
         hits = cs.filter(c=>riaIdsOf(c).some(id=>ids.includes(id)));
       }catch(e){ /* no server match: fall through */ }
+      aiStale(conv);
     }
     if(!hits.length && /^[A-Z0-9]{4}$/.test(P)) hits = cs.filter(c=>String(c.pan||'').toUpperCase().slice(-4)===P);
     return {hits};
@@ -63110,6 +63180,10 @@ function riaParseStatus(q){
     else if(/\bactive\b/.test(t)) out.push({label:'IIN active', test: c=>/^IIN active$/i.test(ANALYTICS_SOURCES.clients.dims.find(d=>d.id==='iin').value(c))});
   }
   if(/\b(no|missing|without|bina)\s+nominee|nominee\s+(missing|nahi|pending|not)/.test(t)) out.push({label:'no nominee', test: c=>!riaNomineeOf(c)});
+  /* "Clients whose mobile number is not added", "bina email wale clients". */
+  const blankOf = (w) => new RegExp('\\b(no|missing|without|bina|blank|empty)\\s+(' + w + ')|\\b(' + w + ')\\b[^?.]*\\b(not added|not updated|not entered|not recorded|not available|missing|blank|empty|nahi|nahin|na ho|not there)\\b').test(t);
+  if(blankOf('mobile|mobile number|mobile no|phone|phone number|contact number')) out.push({label:'mobile number not added', missing:true, test: c=>String(c.mobile||'').replace(/\D/g, '').length < 10});
+  if(blankOf('e-?mail|email id|mail id')) out.push({label:'email not added', missing:true, test: c=>!/@/.test(String(c.email||''))});
   const risk = (t.match(/\b(moderately aggressive|moderately conservative|aggressive|moderate|conservative)\b/) || [])[1];
   if(risk && /\b(risk|profile|iseq|investor|clients?)\b/.test(t)) out.push({label: risk + ' risk profile', test: c=>RIA_SEGMENTS.risk.of(c).toLowerCase().indexOf(risk)===0});
   const tax = (t.match(/\b(huf|nri|individual|company|trust|firm)\b/) || [])[1];
@@ -63150,7 +63224,7 @@ function riaQueryFilterEngine(q){
   const overdue = source==='tasks' && /\boverdue\b/.test(t);
   /* A slice needs a branch, a DOB filter, an amount, "date wise", or an explicit date range. */
   const dobFilter = dobMode && (period || age);
-  if(!(branchWord || cityWord || dobFilter || amounts.length || dateWise || (period && period.explicit) || overdue)) return null;
+  if(!(branchWord || cityWord || dobFilter || amounts.length || dateWise || (period && period.explicit) || overdue || status.some(x=>x.missing))) return null;
   return {source, branchWord, cityWord, dobMode, period, age, amounts, status, dateWise, overdue};
 }
 /* Run the filters; the rows in date order. */
