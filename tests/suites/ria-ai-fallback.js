@@ -967,9 +967,13 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         { id: 'CMS-MS1', cmsName: 'Sunil Kumar Maurya', rmName: '', branch: 'Lucknow', pan: 'ABCPM1111M', mobile: '9800000002', dob: '1970-01-01' },
         { id: 'CMS-MA1', cmsName: 'Mr. Anil Maurya', rmName: '', branch: 'Delhi', pan: 'ABCPM2222N', mobile: '9800000003' },
         { id: 'CMS-PH1', cmsName: 'ZZ Placeholder Pan', rmName: '', branch: 'Delhi', pan: VPAN }];          // another person on the same PAN (a typo / dummy PAN)
-      await admin.put('/api/storage/clients', { value: JSON.stringify(deskClients.concat(splitRows, otherMauryas)) });
-      await admin.put('/api/storage/platformHoldings', { value: JSON.stringify([{ id: 'PFH-V1', clientId: 'CMS-FZSM04857', schemeName: 'HDFC Flexi Cap Reg Gr', invested: 80000, current: 87494 },
-        { id: 'PFH-D1', clientId: 'CMS-D1', schemeName: 'HDFC Flexi Cap Reg Gr', invested: 1000000, current: 1500000 }]) });
+      const splitPut = await admin.put('/api/storage/clients', { value: JSON.stringify(deskClients.concat(splitRows, otherMauryas)) });
+      if (splitPut.status !== 200) throw new Error('clients not saved: ' + splitPut.status + ' ' + splitPut.text.slice(0, 200));
+      /* added to what is there: the store refuses a save that drops records */
+      const heldGot = await admin.get('/api/storage/platformHoldings'); const heldNow = JSON.parse((heldGot.json && heldGot.json.value) || '[]');
+      if (!heldNow.length) throw new Error('could not read the holdings: ' + heldGot.status);
+      const heldPut = await admin.put('/api/storage/platformHoldings', { value: JSON.stringify(heldNow.concat([{ id: 'PFH-V1', clientId: 'CMS-FZSM04857', schemeName: 'HDFC Flexi Cap Reg Gr', invested: 80000, current: 87494 }])) });
+      if (heldPut.status !== 200) throw new Error('holdings not saved: ' + heldPut.status + ' ' + heldPut.text.slice(0, 200));
       await pg3.reload(); await ready(pg3);
       await pg3.evaluate(async () => { await aiRefreshStatus(true); ai.turns = []; ai.open = true; aiDrawPanel(); });
       const vAge = ageOf('2001-08-14');
