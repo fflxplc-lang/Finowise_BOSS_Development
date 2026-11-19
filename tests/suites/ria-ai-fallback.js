@@ -713,11 +713,11 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         actions: (t.actions || []).map((a) => a.label), table: t.table ? { title: t.table.title, cols: t.table.cols, rows: t.table.rows } : null, charts: (t.charts || []).map((c) => c.kind + ':' + c.title) }; });
       const typeIn = (q) => pg3.evaluate(async (q) => { const el = document.getElementById('aiInput'); el.value = q; ai.draft = q; const t0 = performance.now(); await aiSend(); return Math.round(performance.now() - t0); }, q);
 
-      await step('the desk: "Hi <name>! Good Morning / Afternoon / Evening.", six category tiles, and a ☰ menu button beside the input', async () => {
+      await step('the desk: "Hi <name>! Happy Morning / Afternoon / Evening.", six category tiles, and a ☰ menu button beside the input', async () => {
         const r = await pg3.evaluate(() => ({ greet: (document.querySelector('#aiTurns .ria-greet') || {}).textContent || '', tiles: [...document.querySelectorAll('#aiTurns .ria-tile .ria-tile-t')].map((x) => x.textContent),
           menu: !!document.querySelector('.ai-compose .ria-menu-btn') }));
         const want = ['Most Asked', 'Check Status', 'Statements & Reports', 'Portfolio & Advisory', 'Self Service & SOPs', 'Help & Support'];
-        if (!/^Hi .+! Good (Morning|Afternoon|Evening)\.$/.test(r.greet) || r.tiles.join() !== want.join() || !r.menu) throw new Error(JSON.stringify(r));
+        if (!/^Hi .+! Happy (Morning|Afternoon|Evening)\.$/.test(r.greet) || r.tiles.join() !== want.join() || !r.menu) throw new Error(JSON.stringify(r));
         await click('.ai-compose .ria-menu-btn', '☰');
         const b = await lastBot();
         if (!b.ui || b.ui.kind !== 'menu') throw new Error('☰ did not draw the menu: ' + JSON.stringify(b));
