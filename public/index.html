@@ -2850,6 +2850,23 @@ html,body{overflow-x:hidden;max-width:100%}
 .ria-tag{font-size:10px;font-weight:600;padding:2px 8px;border-radius:999px;background:rgba(242,92,42,.12);color:#C2410C;white-space:nowrap}
 .ria-suggest{border-color:rgba(242,92,42,.35)}
 .ria-kpi-card{padding:8px}
+.ria-desk{margin:2px 0 4px}
+.ria-greet{font-size:16px;font-weight:700;color:var(--navy);margin:0 0 2px}
+.ria-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.ria-tile{all:unset;cursor:pointer;display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--card);box-shadow:0 1px 2px var(--edge);transition:border-color .16s var(--ease),box-shadow .16s var(--ease)}
+.ria-tile:hover{border-color:var(--gold)}
+.ria-tile:focus-visible{box-shadow:var(--ring-gold)}
+.ria-tile.on{border-color:var(--gold);background:var(--gold-light)}
+.ria-tile-i{font-size:18px}
+.ria-tile-t{font-weight:700;font-size:13px;color:var(--text)}
+.ria-tile-b{font-size:11px;color:var(--muted);line-height:1.3}
+.ria-subs,.ria-list{display:flex;flex-direction:column;gap:4px;margin:8px 0 2px}
+.ria-sub{all:unset;cursor:pointer;padding:7px 12px;border:1px solid var(--line);border-radius:var(--radius-xs);background:var(--card);font-size:12.5px;color:var(--navy)}
+.ria-sub:hover{border-color:var(--gold);background:var(--gold-light)}
+.ria-sub:focus-visible{box-shadow:var(--ring-gold)}
+.ria-acts{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}
+.ria-table{margin:8px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.ria-menu-btn{font-size:15px;line-height:1;min-width:34px}
 .ria-sec{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#0F766E;margin:6px 2px -2px;border-top:1px solid var(--line);padding-top:8px}
 .ria-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
 .ria-kpi{border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
@@ -58983,6 +59000,10 @@ const AI_SOURCES = {
       aum:r=>clientBookAum(r), sip:r=>numVal(r.monthlySip),
       /* The statuses a "how many KYCs are pending" question groups by. */
       kyc:r=>r.kycStatus||'', mandate:r=>r.mandateStatus||'', risk:r=>r.riskProfile||r.iseqCategory||'',
+      /* Date of birth and the person: "Varanasi branch ke clients ka DOB wise data". */
+      dob:r=>riaDob(r), age:r=>{ const a = calcAge(riaDob(r)); return a===null ? '' : a; }, ageGroup:r=>riaAgeGroup(r), birthMonth:r=>riaBirthMonth(r),
+      anniversary:r=>r.anniversaryDate||r.anniversary||'', gender:r=>r.gender||'', occupation:r=>r.occupation||'',
+      city:r=>recCity(r), state:r=>r.mailingState||r.state||'', nominee:r=>r.firstNomineeName||'',
       tax:r=>(typeof bossTaxStatus==='function') ? bossTaxStatus(r) : (r.taxStatus||''),
       iin:r=>!String(r.canIinNo||r.uccNo||'').trim() ? 'No IIN' : (/^yes$/i.test(String(r.accountActivated||'')) ? 'IIN active' : 'IIN not active'),
     }},
@@ -59044,7 +59065,10 @@ function aiReadSource(name, opts){
     const want = String(w.value==null?'':w.value).toLowerCase();
     rows = rows.filter(r=>{
       const v = String(get(r)==null?'':get(r)).toLowerCase();
-      return w.op==='ne' ? v!==want : w.op==='contains' ? v.includes(want) : v===want;
+      /* A name, a branch, an RM or a city asked for as "equal" is matched as
+         "contains", so "Varanasi" finds "Varanasi Branch". */
+      const loose = w.op==='eq' && ['branch','rm','name','city'].includes(w.col);
+      return w.op==='ne' ? v!==want : (w.op==='contains' || loose) ? v.includes(want) : v===want;
     });
   });
   const cols = (opts.cols||[]).filter(c=>src.cols[c]);
@@ -59173,7 +59197,10 @@ function aiDownload(bytes, filename, type){
    side rather than in two downloads. */
 function xlsxEscape(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function xlsxColName(i){ let s=''; i++; while(i>0){ const m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=Math.floor((i-1)/26); } return s; }
-function xlsxSheetXml(table){
+/* Named apart from the sheet writer further down (xlsxSheetXml(rows, …)):
+   two functions of one name meant the later one won, and this workbook
+   (the RIA AI report download) could not be written. */
+function xlsxTableSheetXml(table){
   const rows = [table.cols.concat()].concat(table.rows);
   const body = rows.map((r,ri)=>'<row r="'+(ri+1)+'">'+r.map((cell,ci)=>{
     const ref = xlsxColName(ci)+(ri+1);
@@ -59220,7 +59247,7 @@ function xlsxBuild(tables){
       +'<cellStyleXfs count="1"><xf/></cellStyleXfs>'
       +'<cellXfs count="2"><xf xfId="0"/><xf xfId="0" fontId="1" fillId="2" applyFont="1" applyFill="1"/></cellXfs>'
       +'</styleSheet>'},
-  ].concat(tables.map((t,i)=>({name:'xl/worksheets/sheet'+(i+1)+'.xml', data: xlsxSheetXml(t)})));
+  ].concat(tables.map((t,i)=>({name:'xl/worksheets/sheet'+(i+1)+'.xml', data: xlsxTableSheetXml(t)})));
   return zipStore(files);
 }
 /* A Word document, the same way: WordprocessingML in a stored zip. */
@@ -59337,7 +59364,7 @@ function aiTogglePanel(){
   if(ai.open) setTimeout(()=>{ const el = document.getElementById('aiInput'); if(el) el.focus(); }, 30);
 }
 function aiCloseP(){ ai.open = false; aiDrawPanel(); }
-function aiClearTurns(){ ai.turns = []; ai.report = null; ai.error = null; aiDrawPanel(); }
+function aiClearTurns(){ ai.turns = []; ai.report = null; ai.error = null; if(typeof aiClearDesk==='function') aiClearDesk(); aiDrawPanel(); }
 /* The panel is drawn into its own node, outside the page the app renders,
    so opening it, typing in it and closing it never touch what is on the
    screen behind — a half-finished MOM is exactly where it was. */
@@ -59378,14 +59405,8 @@ function aiDrawPanel(){
       ${blocked? `<div class="ai-blocked">${esc(aiBlockedReason())}</div>` : ''}
       <div class="ai-turns" id="aiTurns">
         ${ai.turns.length? ai.turns.map(t=>aiTurnHtml(t)).join('')
-          : `<div class="ai-hint">
-              <p>It can see exactly what you can see, and nothing else. It cannot change a record — it drafts, explains, and builds reports you download.</p>
-              <div class="ai-chips">
-                ${(ai.context && ai.context.module==='CMS' && ai.context.recordId
-                    ? ['What is pending on this client?','Show this client\'s portfolio','When is the next review, and what should we discuss?','What is the process to update a nominee?']
-                    : ['What is pending on my clients this week?','What should I do if a KYC is on hold?','Which documents are needed for transmission?','Branch-wise report of leads created this month'])
-                  .map(q=>`<button class="quick-chip" onclick="aiPrefill(${JSON.stringify(q).replace(/"/g,'&quot;')})">${esc(q)}</button>`).join('')}
-              </div>
+          : `<div class="ai-hint">${riaMenuHtml(ai.homeCat || null, -1)}
+              <p class="small-note" style="margin:10px 0 0">It can see exactly what you can see, and nothing else. It cannot change a record — it drafts, explains, and builds reports you download.</p>
             </div>`}
         ${ai.busy && !ai.turns.some(t=>t.live)? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-thinking"><span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(ai.phase || 'RIA AI is thinking')}</div></div>`:''}
         ${ai.error? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-err">${esc(ai.error)}</div></div>`:''}
@@ -59404,6 +59425,7 @@ function aiDrawPanel(){
       <div class="ai-compose">
         <textarea id="aiInput" rows="2" placeholder="${blocked? 'The assistant is not available' : 'Ask in English or Hinglish…'}"
           ${blocked?'disabled':''} onkeydown="aiComposeKey(event)">${esc(ai.draft||'')}</textarea>
+        <button class="btn ghost sm ria-menu-btn" ${blocked||ai.busy?'disabled':''} onclick="riaShowMenu()" title="Main menu" aria-label="Main menu">☰</button>
         <button class="btn primary sm" ${blocked||ai.busy?'disabled':''} onclick="aiSend()">Send</button>
       </div>
       <div class="ai-foot">Answers are generated. Check anything you are going to act on — and nothing here changes a BOSS record.</div>
@@ -59428,8 +59450,9 @@ function aiScrollTurns(keepTop){
 function aiTurnHtml(t){
   const ti = ai.turns.indexOf(t);
   if(t.role==='user') return `<div class="ai-turn ai-me" data-ti="${ti}"><div class="ai-bubble">${esc(t.content)}</div></div>`;
-  return `<div class="ai-turn ai-bot" data-ti="${ti}"><div class="ai-bubble${t.live?' ai-caret':''}"${t.live?' id="aiLiveBubble"':''}>${aiFormat(t.content)}</div>
-    ${t.live? '' : bossTurnFoot(t)}
+  return `<div class="ai-turn ai-bot" data-ti="${ti}">${t.content || t.live || !t.ui ? `<div class="ai-bubble${t.live?' ai-caret':''}"${t.live?' id="aiLiveBubble"':''}>${aiFormat(t.content)}</div>` : ''}
+    ${t.ui ? riaUiHtml(t, ti) : ''}${t.table && !t.live ? riaTableHtml(t.table) : ''}
+    ${t.live? '' : bossTurnFoot(t)}${t.live? '' : riaActionsHtml(t, ti)}
     ${t.replaceable? `<div class="ai-acts">
       <button class="btn sm ghost" onclick="aiCopy(${t.i})">Copy</button>
       <button class="btn sm" onclick="aiApplyRevision(${t.i})">Replace the selected text</button>
@@ -59519,8 +59542,11 @@ async function aiSend(){
   ai.turns.push({role:'user', content:q});
   aiAnchorTurn(ai.turns.length - 1);
   ai.busy = true; aiDrawPanel();
-  const nav = bossPageOpenIntent(q);
-  const out = nav ? bossOpenNow(q, nav)
+  const awaiting = !!(ai.flow && ai.flow.step==='await_value');
+  const nav = awaiting ? null : bossPageOpenIntent(q);
+  const desk = nav ? null : await riaDeskHandle(q);
+  const out = desk ? desk
+            : nav ? bossOpenNow(q, nav)
             : riaTotalAumIntent(q) ? await riaTotalAumTurn()
             : aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
   ai.busy = false; ai.phase = '';
@@ -59528,6 +59554,7 @@ async function aiSend(){
   aiDrawPanel();
   ai.scrollAnchor = null;
 }
+function aiClearDesk(){ ai.flow = null; ai.homeCat = null; }
 async function aiRunChat(q){
   const ctx = aiContextLine(ai.context);
   const history = ai.turns.slice(-10).map(t=>({role:t.role, content:t.content}));
@@ -60417,7 +60444,7 @@ function bossTurnFoot(t){
       <button class="btn sm ghost" onclick="aiCloseP();${t.chart.src==='tasks' ? `navigate('analytics');setTimeout(()=>{const e=document.getElementById('anTasks');if(e)e.scrollIntoView({behavior:'smooth'})},50)` : `window._anSrc='${t.chart.src||'clients'}';navigate('analytics')`}">Open Analytics</button></div>` : '';
   const mk = (t.market||[]).map((q, qi) => lexiQuoteCard(q, ai.turns.indexOf(t), qi)).join('');
   const chs = t.charts && t.charts.length ? riaDashHtml(t.charts) : '';
-  const pdf = (t.charts && t.charts.length) || t.intel || t.chart
+  const pdf = ((t.charts && t.charts.length) || t.intel || t.chart) && !(t.actions && t.actions.length)
     ? `<button class="btn sm ghost ria-pdf" onclick="bossDownloadTurnPdf(${ai.turns.indexOf(t)})">⬇ Download PDF Report</button>` : '';
   const gov = t.intel ? `<div class="small-note" style="margin:4px 0">${esc(RIA_GOVERNANCE)}</div>` : '';
   return (cl || sp || op || ch || mk || chs) ? `${mk}${ch}${chs}${gov}<div class="ai-acts" style="flex-wrap:wrap">${op}${pdf}${cl}</div>${sp}` : '';
@@ -60452,6 +60479,12 @@ const ANALYTICS_SOURCES = {
     {id:'category', label:'Client Category', words:['category'], value:r=>r.clientCategory},
     {id:'branch', label:'Branch', words:['branch','branches'], value:r=>r.branch},
     {id:'rm', label:'Relationship Manager', words:['rm','rms','manager'], value:r=>r.assignedTo ? teamName(r.assignedTo) : ''},
+    {id:'agegroup', label:'Age Group', words:['age','ages','senior','seniors'], value:r=>riaAgeGroup(r)},
+    {id:'birthmonth', label:'Birth Month', words:['birthday','birthdays'], value:r=>riaBirthMonth(r)},
+    {id:'gender', label:'Gender', words:['gender','male','female'], value:r=>r.gender},
+    {id:'occupation', label:'Occupation', words:['occupation','profession'], value:r=>r.occupation},
+    {id:'city', label:'City', words:['city','cities'], value:r=>recCity(r)},
+    {id:'state', label:'State', words:['state','states'], value:r=>r.mailingState || r.state},
   ]},
   leads: {label:'Leads', perm:'LMS', list:()=>DB.leads||[], owner:r=>r.assignedTo, branch:r=>r.branch, dims:[
     {id:'stage', label:'Lead Stage', words:['stage','status'], value:r=>stateLabel('LMS', stateOf('LMS', r))},
@@ -60475,7 +60508,7 @@ function analyticsGroup(rows, value){
 /* The client form's own pick-lists, for the fields no named chart covers. */
 function analyticsAutoDims(src, rows){
   if(src !== 'clients') return [];
-  const taken = new Set(['kycStatus','riskProfile','mandateStatus','taxStatus','clientCategory','branch','accountActivated','salutation','gender']);
+  const taken = new Set(['kycStatus','riskProfile','mandateStatus','taxStatus','clientCategory','branch','accountActivated','salutation','gender','occupation','mailingState','mailingCity']);
   return CMS_FIELDS_FLAT.filter(f=>f.t==='select' && !taken.has(f.k)).map(f=>{
     const vals = new Set(rows.map(r=>String(r[f.k]==null?'':r[f.k]).trim()).filter(Boolean));
     return vals.size >= 2 && vals.size <= 25 ? {id:'f:'+f.k, label:f.l, words:[], value:r=>r[f.k], auto:true} : null;
@@ -62261,7 +62294,7 @@ function bossTurnPdfBlocks(i){
   if(!t || t.role!=='assistant') return null;
   const x = t.intel || null;
   const charts = t.charts || [];
-  const scope = x ? x.scope.label : (t.chart ? t.chart.title : 'RIA AI answer');
+  const scope = x ? x.scope.label : t.table && t.table.title ? t.table.title : (t.chart ? t.chart.title : 'RIA AI answer');
   const mods = [...new Set(charts.map(c=>c.module).filter(m=>m && m!=='summary'))];
   const short = {portfolio:'Portfolio', actions:'Buy / Sell / Switch', tax:'Tax harvesting', opportunities:'Cross-sell', risk:'Risk', plan:'GAB & buckets', projection:'Projection', analytics:'Analytics'};
   const chips = mods.map(m=>short[m] || RIA_MODULE_TITLES[m] || m).slice(0, 8);
@@ -62312,6 +62345,11 @@ function bossTurnPdfBlocks(i){
   if(t.chart && t.chart.rows && !charts.length){
     b.push({t:'band', text: riaPdfClean(t.chart.title)});
     b.push({t:'donutTable', valueLabel:'Count', centre: riaN(t.chart.rows.reduce((s,r)=>s + r.count, 0)), items: t.chart.rows.slice(0, 10).map(r=>({label: r.label, value: r.count, display: riaN(r.count)}))});
+  }
+  if(t.table && t.table.rows && t.table.rows.length){
+    b.push({t:'band', text: riaPdfClean(t.table.title || 'Details')});
+    b.push({t:'table', cols: t.table.cols.map((c, k)=>({label:c, w: k ? 1 : 2, bold: !k})), rows: t.table.rows.slice(0, 400).map(r=>r.map(v=>v==null ? '' : String(v)))});
+    if(t.table.rows.length > 400) b.push({t:'p', text:'The first 400 of ' + riaN(t.table.rows.length) + ' rows; the Excel download has them all.', size: 8.4, gray: 0.38});
   }
   /* The advisor's notes, short, at the end — not a wall of bullets up front. */
   const notes = riaPdfClean(t.content).split('\n').map(l=>l.replace(/^[-*•]\s+|^\d+\.\s+/, '').trim()).filter(l=>l && !RIA_NOISE.test(l) && l.length > 3);
@@ -62569,6 +62607,486 @@ function riaDashHtml(charts){
 function riaKpisSvgHtml(ch){
   const tone = {warn:'#B45309', ok:'#047857', bad:'#B91C1C'};
   return `<div class="ria-kpis">${ch.items.map(it=>`<div class="ria-kpi"><div class="ria-kpi-l">${esc(it.label)}</div><div class="ria-kpi-v" style="${it.tone && tone[it.tone] ? 'color:' + tone[it.tone] : ''}">${esc(String(it.value))}</div>${it.note ? `<div class="ria-kpi-n" title="${esc(it.note)}">${esc(it.note)}</div>` : ''}</div>`).join('')}</div>`;
+}
+
+/* =====================================================================
+   RIA AI — THE GUIDED DESK
+
+   Click, don't type. A greeting and six category tiles; a tile opens its
+   options; an option about an investor asks how to find them (name, UCC /
+   IIN / client ID, PAN, mobile, branch / RM, or everybody visible); the
+   value — typed or clicked — is looked up in the records this user may
+   see, and the answer comes back at once with buttons for what to ask
+   next. No model call: every figure is read from BOSS, in this browser,
+   through the same visibility rules every screen uses.
+
+   A bare PAN, mobile number or client ID typed into the chat is looked up
+   the same way, and so is "Varanasi branch ke clients ka DOB wise data".
+   ===================================================================== */
+const RIA_LOOKUP_TOPICS = {
+  kyc:      'KYC & Account Opening Status',
+  mandate:  'Mandate Status',
+  txn:      'Transaction Status',
+  sip:      'SIP Status',
+  redeem:   'Redemption Status',
+  holdings: 'Holdings & Portfolio Valuation',
+  dob:      'Date of Birth (DOB) & Client Profile List',
+  tasks:    'Open Tasks',
+  profile:  'Client Profile',
+};
+const RIA_MENU = [
+  {id:'most', icon:'⭐', title:'Most Asked', blurb:'KYC, mandate, transactions, SIPs, redemptions',
+   subs:[['kyc'], ['mandate'], ['txn'], ['sip'], ['redeem'], ['q:How do I register an e-Mandate? What is the process?', 'Register e-Mandate']]},
+  {id:'status', icon:'🔎', title:'Check Status', blurb:'Any investor: KYC, mandate, IIN, SIPs, holdings, DOB',
+   subs:[['kyc'], ['mandate'], ['txn'], ['sip'], ['holdings'], ['dob'], ['tasks'], ['q:What is the KYC process for a new investor? Steps and documents.', 'Register e-Mandate / KYC Process']]},
+  {id:'reports', icon:'📄', title:'Statements & Reports', blurb:'Valuation, branch / DOB lists, SIP book, capital gains',
+   subs:[['holdings', 'Portfolio Valuation & PDF'], ['dob', 'Branch-wise Client / DOB Report'], ['sip', 'SIP Book Report'],
+     ['q:tax harvesting capital gain report', 'Capital Gain / Tax Harvesting Report'], ['q:complete risk analysis and future projection with pdf', 'Risk & Projection PDF']]},
+  {id:'advisory', icon:'📈', title:'Portfolio & Advisory', blurb:'Analysis, switches, risk, buckets, projections',
+   subs:[['q:complete portfolio analysis', 'Complete Portfolio Analysis'], ['q:buy sell hold switch portfolio analysis', 'Buy / Sell / Hold / Switch'],
+     ['q:risky to safe switch', 'Risky-to-Safe Switch'], ['q:complete risk analysis sharpe beta standard deviation', 'Sharpe / Beta / SD Risk Analysis'],
+     ['q:suggestions of bucket strategy, GAB, HUF, trust and legacy', '3-Bucket / GAB / HUF / Legacy'], ['q:recommended fund basket by risk profile', 'Recommended Fund Basket'],
+     ['q:future projection', 'Future Projection']]},
+  {id:'self', icon:'🛠️', title:'Self Service & SOPs', blurb:'eKYC, mandates, transfers, LA MF, nominee, transmission',
+   subs:[['q:fresh eKYC process steps documents', 'Fresh eKYC'], ['q:physical KYC process steps documents', 'Physical KYC'], ['q:mandate registration process steps', 'Mandate Registration'],
+     ['q:change of broker process steps documents', 'Change of Broker'], ['q:transfer of units process', 'Transfer of Units'], ['q:loan against mutual funds LAMF', 'LA MF'],
+     ['q:nominee and bank update process steps documents', 'Nominee / Bank Update'], ['q:transmission process documents', 'Transmission'], ['screens', 'Open Any BOSS Screen']]},
+  {id:'help', icon:'🆘', title:'Help & Support', blurb:'QMS tickets, escalation matrix, TATs',
+   subs:[['qms', 'QMS Ticket Status'], ['escalation', 'Level 1 / 2 / 3 Escalation Matrix'], ['tat', 'TATs']]},
+];
+const RIA_MODES = [['name', 'Investor Name'], ['ucc', 'UCC / IIN / Client ID'], ['pan', 'PAN Number'], ['mobile', 'Mobile Number'], ['branch', 'Branch / RM Name'], ['all', 'All Visible Clients (Summary & Graphical Chart)']];
+const RIA_ASK_FOR = {name:'Investor Name', ucc:'UCC or IIN or Client ID', pan:'PAN No.', mobile:'Mobile No.', branch:'Branch or RM Name'};
+/* The escalation ladder the firm runs (Help & Support). */
+const RIA_ESCALATION = [
+  {level:'Level 1', who:'Bhavana / Shakeel / Priya', when:'First response on every query; most are closed here'},
+  {level:'Level 2', who:'Manish', when:'Not resolved at Level 1 within its TAT, or the client asks to escalate'},
+  {level:'Level 3', who:'Praveen', when:'Not resolved at Level 2, or a complaint that affects the client'},
+];
+
+function riaGreeting(){
+  const h = new Date().getHours(), part = h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening';
+  const u = typeof me==='function' ? me() : null;
+  const name = (u && (u.name || u.fullName)) || (typeof teamName==='function' ? teamName(currentUser) : '') || '';
+  const first = String(name).trim().split(/\s+/)[0];
+  return 'Hi ' + (first && first!=='—' ? first : 'there') + '! ' + part + '.';
+}
+const riaSubLabel = s => s[1] || RIA_LOOKUP_TOPICS[s[0]] || s[0];
+/* The menu: greeting, six tiles, and the options of the open one. */
+function riaMenuHtml(open, ti){
+  const tile = c => `<button class="ria-tile${open===c.id ? ' on' : ''}" onclick="riaMenuOpen(${ti},'${c.id}')" aria-expanded="${open===c.id}">
+      <span class="ria-tile-i" aria-hidden="true">${c.icon}</span><span class="ria-tile-t">${esc(c.title)}</span><span class="ria-tile-b">${esc(c.blurb)}</span></button>`;
+  const cat = RIA_MENU.find(c=>c.id===open);
+  return `<div class="ria-desk">
+    <div class="ria-greet">${esc(riaGreeting())}</div>
+    <div class="small-note" style="margin:0 0 8px">What would you like to do? Pick a category — no typing needed.</div>
+    <div class="ria-tiles">${RIA_MENU.map(tile).join('')}</div>
+    ${cat ? `<div class="ria-subs" role="list">${cat.subs.map((s, k)=>`<button class="ria-sub" role="listitem" onclick="riaSubPick(${ti},'${cat.id}',${k})">› ${esc(riaSubLabel(s))}</button>`).join('')}</div>` : ''}
+  </div>`;
+}
+/* A turn the desk drew: options to click. */
+function riaUiHtml(t, ti){
+  const u = t.ui;
+  if(!u) return '';
+  if(u.kind==='menu') return riaMenuHtml(u.open || null, ti);
+  if(u.kind==='list') return `<div class="ria-list">${u.items.map((it, k)=>`<button class="ria-sub" onclick="riaAct(${ti},${k})">${esc(it.label)}</button>`).join('')}</div>`;
+  return '';
+}
+function riaActionsHtml(t, ti){
+  if(!t.actions || !t.actions.length) return '';
+  return `<div class="ria-acts">${t.actions.map((a, k)=>`<button class="quick-chip ria-act" onclick="riaFollow(${ti},${k})">${esc(a.label)}</button>`).join('')}</div>`;
+}
+/* A table in the chat: the first rows, every row in the download. */
+function riaTableHtml(tb){
+  if(!tb || !tb.rows) return '';
+  const show = tb.rows.slice(0, tb.show || 25);
+  return `<div class="ria-table"><div class="ria-chart-h"><span>${esc(tb.title || '')}</span><span class="small-note" style="margin:0">${riaN(tb.rows.length)} row${tb.rows.length===1 ? '' : 's'}</span></div>
+    <div class="table-wrap" style="max-height:320px;overflow:auto;margin:6px 0 0"><table><thead><tr>${tb.cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead>
+    <tbody>${show.map(r=>`<tr>${r.map(v=>`<td>${esc(String(v==null ? '' : v))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    ${tb.rows.length > show.length ? `<div class="small-note" style="margin:4px 0 0">Showing ${show.length} of ${riaN(tb.rows.length)}. Every row is in the Excel / CSV / PDF download.</div>` : ''}</div>`;
+}
+
+/* ---- the conversation ---- */
+function riaPushUser(text){ ai.turns.push({role:'user', content: text}); aiAnchorTurn(ai.turns.length - 1); }
+function riaPushBot(t){ ai.turns.push(Object.assign({role:'assistant', content:''}, t)); }
+function riaShowMenu(){
+  ai.flow = null;
+  riaPushBot({ui:{kind:'menu', open:null}});
+  aiAnchorTurn(ai.turns.length - 1);
+  ai.open = true; aiDrawPanel(); ai.scrollAnchor = null;
+}
+function riaMenuOpen(ti, id){
+  if(ai.busy) return;
+  if(ti < 0){ ai.homeCat = ai.homeCat===id ? null : id; aiDrawPanel(); return; }
+  const t = ai.turns[ti]; if(!t || !t.ui) return;
+  t.ui.open = t.ui.open===id ? null : id;
+  aiDrawPanel();
+}
+async function riaSubPick(ti, catId, k){
+  if(ai.busy) return;
+  const cat = RIA_MENU.find(c=>c.id===catId); if(!cat) return;
+  const s = cat.subs[k], key = s[0], label = riaSubLabel(s);
+  if(key.indexOf('q:')===0) return riaAsk(key.slice(2), label);
+  riaPushUser(label);
+  if(RIA_LOOKUP_TOPICS[key]) riaStartLookup(key, label);
+  else if(key==='screens') riaScreens();
+  else if(key==='escalation') riaEscalation();
+  else if(key==='tat') riaTats();
+  else if(key==='qms') riaQms();
+  riaDone();
+}
+/* A question sent the ordinary way, as if typed. */
+async function riaAsk(text, label){
+  ai.flow = null;
+  const el = document.getElementById('aiInput');
+  if(el) el.value = text;
+  ai.draft = text;
+  await aiSend();
+}
+function riaDone(){ ai.open = true; aiDrawPanel(); ai.scrollAnchor = null; }
+function riaStartLookup(topic, label){
+  ai.flow = {topic, step:'pick_mode'};
+  riaPushBot({content: 'Hi, I can instantly help you with **' + (label || RIA_LOOKUP_TOPICS[topic]) + '** of investors. Click on any one to continue:',
+    ui:{kind:'list', items: RIA_MODES.map(([by, l], i)=>({label: (i + 1) + '. ' + l, act:{t:'mode', by, label: l}}))}});
+}
+function riaAct(ti, k){
+  if(ai.busy) return;
+  const t = ai.turns[ti]; const it = t && t.ui && t.ui.items && t.ui.items[k];
+  if(!it) return;
+  return riaRun(it.act, it.label);
+}
+function riaFollow(ti, k){
+  if(ai.busy) return;
+  const t = ai.turns[ti]; const a = t && t.actions && t.actions[k];
+  if(!a) return;
+  if(a.act.t==='pdf') return bossDownloadTurnPdf(ti);
+  if(a.act.t==='dl') return riaDownloadTable(ti, a.act.fmt);
+  return riaRun(a.act, a.label);
+}
+async function riaRun(act, label){
+  if(act.t==='menu'){ riaPushUser(label || 'Main Menu'); return riaShowMenu(); }
+  if(act.t==='say') return riaAsk(act.text, label);
+  if(act.t==='open'){ const o = bossOpen('cms ' + act.id + ' overview'); riaPushUser(label); riaPushBot(o ? {content:'Opened **' + o.label + '**.', opened:o} : {content:'That account is not one you can open.'}); return riaDone(); }
+  if(act.t==='screen'){ riaPushUser(label); bossOpenNow(label, {kind:'page', view: act.view}); return riaDone(); }
+  riaPushUser(label);
+  if(act.t==='help'){ ({qms: riaQms, tat: riaTats, escalation: riaEscalation})[act.what](); return riaDone(); }
+  if(act.t==='mode'){
+    const topic = (ai.flow && ai.flow.topic) || act.topic || 'profile';
+    if(act.by==='all'){ ai.flow = null; await riaAnswerGroup(topic, {by:'all'}); return riaDone(); }
+    ai.flow = {topic, step:'await_value', lookupBy: act.by};
+    const bot = {content:'Please enter **' + RIA_ASK_FOR[act.by] + '** to continue' + (act.by==='name' ? ' (a part of the name is enough).' : act.by==='pan' ? ' (the full PAN, or its last 4 characters).' : '.')};
+    if(act.by==='branch') bot.ui = {kind:'list', items: riaBranchChips().map(b=>({label: b.label, act:{t:'value', value: b.value}}))};
+    riaPushBot(bot);
+    return riaDone();
+  }
+  if(act.t==='value'){ await riaResolve(act.value); return riaDone(); }
+  if(act.t==='client'){ ai.flow = null; const c = riaVisible().find(x=>x.id===act.id); if(c) riaAnswerClient(act.topic || 'profile', c); return riaDone(); }
+  if(act.t==='topic'){
+    if(act.clientId){ const c = riaVisible().find(x=>x.id===act.clientId); if(c) riaAnswerClient(act.topic, c); }
+    else await riaAnswerGroup(act.topic, act.group);
+    return riaDone();
+  }
+}
+
+/* ---- finding investors in what this user may see ---- */
+const riaVisible = () => (typeof analyticsRecords==='function' ? analyticsRecords('clients') : null) || [];
+const riaNorm = s => String(s==null ? '' : s).toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g, ' ').replace(/\s+/g, ' ').trim();
+const riaRmOf = c => [c.rmName, c.assignedTo].filter(Boolean).map(x=>teamName(x)).filter(x=>x && x!=='—');
+/* "Varanasi" finds "Varanasi Branch"; "varanasi branch" finds "Varanasi". */
+function riaBranchHit(c, n){
+  const b = riaNorm(c.branch); if(!b || !n) return false;
+  const core = b.replace(/\bbranch\b/g, '').trim(), want = n.replace(/\bbranch\b/g, '').trim();
+  return !!want && (b.includes(want) || (core && want.includes(core)));
+}
+function riaBranchChips(){
+  const by = {}; riaVisible().forEach(c=>{ const b = String(c.branch||'').trim(); if(b) by[b] = (by[b]||0) + 1; });
+  const rms = {}; riaVisible().forEach(c=>riaRmOf(c).forEach(r=>{ rms[r] = (rms[r]||0) + 1; }));
+  return Object.keys(by).sort((a,b)=>by[b]-by[a]).slice(0, 10).map(b=>({label: b + ' (' + riaN(by[b]) + ')', value: b}))
+    .concat(Object.keys(rms).sort((a,b)=>rms[b]-rms[a]).slice(0, 6).map(r=>({label:'RM: ' + r + ' (' + riaN(rms[r]) + ')', value: r})));
+}
+const RIA_PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+async function riaFind(by, value){
+  const v = String(value==null ? '' : value).trim(), n = riaNorm(v), cs = riaVisible();
+  if(by==='pan'){
+    const P = v.toUpperCase().replace(/\s+/g, '');
+    let hits = cs.filter(c=>String(c.pan||'').toUpperCase()===P);
+    /* PANs this account sees masked: the server matches the full PAN, in scope only. */
+    if(!hits.length && RIA_PAN_RE.test(P) && cs.some(c=>/\*/.test(String(c.pan||'')))){
+      try{
+        const r = await fetch('/api/clients/pan-match', {method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({pans:[P]})});
+        const d = await r.json(); const ids = d && d.ok && d.results && d.results[0] ? d.results[0].ids || [] : [];
+        hits = cs.filter(c=>ids.includes(c.id));
+      }catch(e){ /* no server match: fall through */ }
+    }
+    if(!hits.length && /^[A-Z0-9]{4}$/.test(P)) hits = cs.filter(c=>String(c.pan||'').toUpperCase().slice(-4)===P);
+    return {hits};
+  }
+  if(by==='ucc'){
+    const keys = c => [c.canIinNo, c.uccNo, c.id, typeof clientCode==='function' ? clientCode(c) : ''].filter(Boolean).map(x=>String(x).toLowerCase());
+    let hits = cs.filter(c=>keys(c).includes(v.toLowerCase()));
+    if(!hits.length && v.length >= 3) hits = cs.filter(c=>keys(c).some(k=>k.includes(v.toLowerCase())));
+    return {hits};
+  }
+  if(by==='mobile'){ const m = v.replace(/\D/g, '').slice(-10); return {hits: m.length===10 ? cs.filter(c=>String(c.mobile||'').replace(/\D/g, '').slice(-10)===m) : []}; }
+  if(by==='name'){
+    const ws = n.split(' ').filter(Boolean);
+    return {hits: ws.length ? cs.filter(c=>{ const d = riaNorm(clientDisplayName(c)); return d.includes(n) || ws.every(w=>d.split(' ').some(x=>x.indexOf(w)===0)); }) : []};
+  }
+  if(by==='branch'){
+    let group = cs.filter(c=>riaBranchHit(c, n)), what = 'branch';
+    if(!group.length){ group = cs.filter(c=>riaRmOf(c).some(r=>riaNorm(r).includes(n))); what = 'RM'; }
+    const names = [...new Set(group.map(c=>what==='branch' ? String(c.branch||'').trim() : riaRmOf(c).find(r=>riaNorm(r).includes(n))).filter(Boolean))];
+    return {group, label: (what==='RM' ? 'RM ' : '') + (names.slice(0, 3).join(', ') || v)};
+  }
+  return {hits: []};
+}
+/* What a bare value typed into the chat looks like. */
+function riaBareKind(q){
+  const v = String(q||'').trim();
+  if(RIA_PAN_RE.test(v.toUpperCase())) return 'pan';
+  if(/^[+]?(91[-\s]?)?[6-9][0-9]{9}$/.test(v.replace(/\s+/g, ''))) return 'mobile';
+  if(/^[A-Za-z0-9-]{3,24}$/.test(v) && /[0-9]/.test(v)){
+    const lv = v.toLowerCase();
+    if(riaVisible().some(c=>[c.canIinNo, c.uccNo, c.id].some(x=>x && String(x).toLowerCase()===lv))) return 'ucc';
+  }
+  return '';
+}
+/* A message that is only a client's name ("Priya Sharma"). */
+function riaBareName(q){
+  const n = riaNorm(q), ws = n.split(' ').filter(Boolean);
+  if(!ws.length || ws.length > 4 || n.length < 4) return false;
+  return riaVisible().some(c=>{ const d = riaNorm(clientDisplayName(c)).split(' '); return ws.every(w=>d.includes(w)); });
+}
+const RIA_DOB_RE = /\b(dob|d\.o\.b|date of birth|dates of birth|birth ?days?|birth ?dates?|janam|janm|age ?wise|age group|age-wise)\b/i;
+/* "Varanasi branch ke clients ka date of birth wise data dikhao". */
+function riaDobIntent(q){
+  if(!RIA_DOB_RE.test(q)) return null;
+  /* "Date of birth correction ke documents" is a process, not a list. */
+  if(/\b(correct\w*|change|update|process|procedure|documents?|docs|kaise|steps?|proof)\b/i.test(q)) return null;
+  const n = riaNorm(q), cs = riaVisible();
+  const branches = [...new Set(cs.map(c=>String(c.branch||'').trim()).filter(Boolean))];
+  const hit = branches.filter(b=>{ const core = riaNorm(b).replace(/\bbranch\b/g, '').trim(); return core && (' ' + n + ' ').includes(' ' + core + ' '); });
+  if(hit.length) return {by:'branch', value: hit[0]};
+  const rms = [...new Set(cs.flatMap(riaRmOf))].filter(r=>{ const f = riaNorm(r).split(' ')[0]; return f.length > 2 && (' ' + n + ' ').includes(' ' + f + ' '); });
+  if(rms.length) return {by:'branch', value: rms[0]};
+  return {by:'all'};
+}
+/* The desk's turn at a message, before anything else answers it. */
+async function riaDeskHandle(q){
+  if(/^\s*(☰|menu|main menu|start|help|hi|hello|namaste)\s*[.!]?\s*$/i.test(q)){ ai.flow = null; riaPushBot({ui:{kind:'menu', open:null}}); return {}; }
+  if(ai.flow && ai.flow.step==='await_value'){
+    const r = await riaResolve(q, true);
+    if(r) return {};
+  }
+  const kind = riaBareKind(q);
+  if(kind){ ai.flow = {topic:'profile', step:'await_value', lookupBy: kind}; await riaResolve(q); return {}; }
+  const dob = riaDobIntent(q);
+  if(dob){ ai.flow = null; await riaAnswerGroup('dob', dob.by==='all' ? {by:'all'} : {by:'branch', value: dob.value}); return {}; }
+  if(riaBareName(q) && !(typeof bossPageOpenIntent==='function' && bossPageOpenIntent(q))){ ai.flow = {topic:'profile', step:'await_value', lookupBy:'name'}; await riaResolve(q); return {}; }
+  return null;
+}
+/* A value for the lookup in hand: one client, a choice of several, or a group. */
+async function riaResolve(value, soft){
+  const f = ai.flow || {topic:'profile', lookupBy:'name'};
+  const by = f.lookupBy || 'name', topic = f.topic || 'profile';
+  const found = await riaFind(by, value);
+  if(by==='branch'){
+    if(!found.group.length){ if(soft && String(value).trim().split(/\s+/).length > 5){ ai.flow = null; return false; }
+      riaPushBot({content:'No visible client is in a branch, or with an RM, matching **' + value + '**. Pick one:', ui:{kind:'list', items: riaBranchChips().map(b=>({label:b.label, act:{t:'value', value:b.value}}))},
+        actions:[{label:'☰ Main Menu', act:{t:'menu'}}]}); return true; }
+    ai.flow = null;
+    await riaAnswerGroup(topic, {by:'branch', value: String(value)});
+    return true;
+  }
+  const hits = found.hits || [];
+  if(!hits.length){
+    if(soft && String(value).trim().split(/\s+/).length > 5){ ai.flow = null; return false; }
+    riaPushBot({content:'No client in your visible records matches that ' + RIA_ASK_FOR[by] + '. Check it and enter it again, or look the investor up another way.',
+      actions: RIA_MODES.slice(0, 5).filter(m=>m[0]!==by).map(([b, l])=>({label:'By ' + l, act:{t:'mode', by: b, topic}})).concat([{label:'☰ Main Menu', act:{t:'menu'}}])});
+    return true;
+  }
+  ai.flow = null;
+  if(hits.length === 1){ riaAnswerClient(topic, hits[0]); return true; }
+  const list = hits.slice(0, 10);
+  riaPushBot({content: riaN(hits.length) + ' clients match. Click the one you mean:' + (hits.length > 10 ? ' (the first 10; type more of the ' + RIA_ASK_FOR[by].toLowerCase() + ' to narrow it)' : ''),
+    ui:{kind:'list', items: list.map((c, i)=>({label: (i + 1) + '. ' + riaClientLine(c), act:{t:'client', id: c.id, topic}}))},
+    actions:[{label:'☰ Main Menu', act:{t:'menu'}}]});
+  return true;
+}
+function riaClientLine(c){
+  const code = c.uccNo || c.canIinNo || (typeof clientCode==='function' ? clientCode(c) : '') || c.id;
+  const pan = c.pan ? 'PAN ' + bossMask(c.pan, 4) : '';
+  const aum = numVal(clientBookAum(c));
+  return [clientDisplayName(c), c.branch || '', code, pan, aum ? 'AUM ' + riaCompact2(aum) : ''].filter(Boolean).join(' · ');
+}
+
+/* ---- the answers ---- */
+const riaDob = c => c.dob || (Array.isArray(c.family) && c.family[0] && c.family[0].dob) || '';
+function riaAgeGroup(c){ const a = calcAge(riaDob(c)); return a===null ? 'DOB not on file' : a < 30 ? '<30 yrs' : a < 45 ? '30–44 yrs' : a < 60 ? '45–59 yrs' : '60+ yrs (Senior)'; }
+const RIA_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function riaBirthMonth(c){ const d = new Date(riaDob(c)); return isNaN(d.getTime()) ? 'DOB not on file' : RIA_MONTHS[d.getMonth()]; }
+const riaDate = d => { if(!d) return ''; try{ return fmtDate(String(d).slice(0, 10)); }catch(e){ return String(d); } };
+function riaClientActions(c){
+  return [{label:'KYC & IIN Status', act:{t:'topic', topic:'kyc', clientId:c.id}}, {label:'Mandate Status', act:{t:'topic', topic:'mandate', clientId:c.id}},
+    {label:'Active SIPs', act:{t:'topic', topic:'sip', clientId:c.id}}, {label:'Transactions', act:{t:'topic', topic:'txn', clientId:c.id}},
+    {label:'Portfolio & Risk Charts', act:{t:'topic', topic:'holdings', clientId:c.id}}, {label:'DOB & Profile', act:{t:'topic', topic:'dob', clientId:c.id}},
+    {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'↗ Open Account', act:{t:'open', id:c.id}}, {label:'☰ Main Menu', act:{t:'menu'}}];
+}
+function riaClientTxns(c, re){
+  return (DB.transactions||[]).filter(t=>t.clientId===c.id && !t.deletedAt && (!re || re.test(t.transactionType||'')))
+    .sort((a,b)=>String(b.initiatedDate||b.createdAt||'').localeCompare(String(a.initiatedDate||a.createdAt||'')));
+}
+const riaTxnRow = t => [riaDate(t.initiatedDate || t.createdAt), t.transactionType || '', t.schemeId ? schemeName(t.schemeId) : (t.schemeName || ''), money(numVal(t.amount)), t.status || ''];
+function riaAnswerClient(topic, c){
+  const name = clientDisplayName(c), head = '**' + name + '** · ' + [c.uccNo || c.canIinNo || c.id, c.branch, riaRmOf(c)[0] ? 'RM ' + riaRmOf(c)[0] : ''].filter(Boolean).join(' · ');
+  const L = [head, ''], turn = {actions: riaClientActions(c), deskClient: c.id};       // "↗ Open Account" is among the actions
+  const kv = (k, v) => L.push('**' + k + ':** ' + (v==null || v==='' ? 'not recorded' : v));
+  const sips = (DB.platformSips||[]).filter(s=>s.clientId===c.id && !s.deletedAt);
+  const sipM = numVal(clientBookSip(c));
+  if(topic==='kyc' || topic==='profile'){
+    kv('KYC status', RIA_SEGMENTS.kyc.of(c));
+    kv('IIN / UCC', [c.canIinNo, c.uccNo].filter(Boolean).join(' / '));
+    kv('Account activated', c.accountActivated);
+    kv('PAN', c.pan ? bossMask(c.pan, 4) : '');
+    kv('Tax status', RIA_SEGMENTS.tax.of(c));
+    kv('Nominee', c.firstNomineeName ? 'Registered (' + c.firstNomineeName + ')' : 'No nominee registered');
+    const next = RIA_SEGMENTS.kyc.actions[RIA_SEGMENTS.kyc.of(c)]; if(next) kv('Next step', next);
+  }
+  if(topic==='mandate' || topic==='profile'){
+    if(topic==='profile') L.push('');
+    kv('Mandate status', RIA_SEGMENTS.mandate.of(c));
+    kv('Mandate type', c.mandateType);
+    kv('Bank', [c.bankName, c.ifsc ? 'IFSC ' + c.ifsc : '', c.accNo ? 'A/c ending ' + String(c.accNo).slice(-4) : ''].filter(Boolean).join(' · '));
+    kv('IIN / UCC', [c.canIinNo, c.uccNo].filter(Boolean).join(' / '));
+    kv('Active SIPs', sips.length ? sips.length + ' — ' + money(sipM) + ' a month' : (sipM ? money(sipM) + ' a month (BOSS ledger)' : 'none'));
+    const next = RIA_SEGMENTS.mandate.actions[RIA_SEGMENTS.mandate.of(c)]; if(next) kv('Next step', next);
+  }
+  if(topic==='profile'){ L.push(''); kv('AUM', money(numVal(clientBookAum(c)))); kv('Date of birth', riaDob(c) ? riaDate(riaDob(c)) + ' (age ' + calcAge(riaDob(c)) + ')' : ''); }
+  if(topic==='sip'){
+    kv('Monthly SIP', money(sipM));
+    const ledger = riaClientTxns(c, /SIP/i);
+    turn.table = sips.length ? {title:'SIP registrations', cols:['Scheme', 'Monthly', 'SIP date', 'Start', 'End', 'Folio'],
+        rows: sips.map(s=>[s.schemeName || '', money(numVal(s.monthlyAmount || s.amount)), s.sipDate || '', riaDate(s.startDate), riaDate(s.endDate), s.folio || ''])}
+      : {title:'SIP transactions (BOSS ledger)', cols:['Date', 'Type', 'Scheme', 'Amount', 'Status'], rows: ledger.map(riaTxnRow)};
+    if(!turn.table.rows.length) L.push('No SIP is registered for this client.');
+  }
+  if(topic==='txn' || topic==='redeem'){
+    const list = riaClientTxns(c, topic==='redeem' ? /Redemption|SWP|Switch/i : null);
+    const by = {}; list.forEach(t=>{ const k = t.status || 'Not recorded'; by[k] = (by[k]||0) + 1; });
+    L.push(list.length ? riaN(list.length) + ' ' + (topic==='redeem' ? 'redemption / switch' : '') + ' transaction' + (list.length===1 ? '' : 's') + ': ' + Object.keys(by).map(k=>k + ' ' + by[k]).join(', ') + '.' : 'No ' + (topic==='redeem' ? 'redemption ' : '') + 'transactions on file.');
+    if(list.length) turn.table = {title: topic==='redeem' ? 'Redemptions & switches' : 'Transactions (latest first)', cols:['Date', 'Type', 'Scheme', 'Amount', 'Status'], rows: list.map(riaTxnRow)};
+  }
+  if(topic==='tasks'){
+    const list = (DB.tasks||[]).filter(t=>t.clientId===c.id && !t.deletedAt && !/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||'')));
+    L.push(list.length ? riaN(list.length) + ' open task' + (list.length===1 ? '' : 's') + '.' : 'No open tasks.');
+    if(list.length) turn.table = {title:'Open tasks', cols:['Task', 'Type', 'Due', 'Status', 'Owner'], rows: list.map(t=>[t.title || '', t.taskType || '', riaDate(t.dueDate), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo)])};
+  }
+  if(topic==='dob'){
+    const dob = riaDob(c);
+    kv('Date of birth', dob ? riaDate(dob) : ''); kv('Age', dob ? calcAge(dob) + ' years (' + riaAgeGroup(c) + ')' : '');
+    kv('Anniversary', riaDate(c.anniversaryDate || c.anniversary)); kv('Gender', c.gender); kv('Occupation', c.occupation);
+    kv('City / State', [recCity(c), c.mailingState || c.state].filter(Boolean).join(', ')); kv('Nominee', c.firstNomineeName);
+  }
+  if(topic==='holdings'){
+    const intel = riaIntel('portfolio analysis', [c]);
+    const ps = riaPositions(c);
+    kv('Portfolio value', money(ps.reduce((s,p)=>s + p.current, 0))); kv('Invested', money(ps.reduce((s,p)=>s + p.invested, 0)));
+    if(ps.length) turn.table = {title:'Holdings', cols:['Scheme', 'Category', 'Invested', 'Current', 'Gain'], rows: ps.map(p=>[p.scheme, p.cat ? p.cat.label : p.cls, money(p.invested), money(p.current), money(p.current - p.invested)])};
+    if(intel){ turn.charts = intel.charts; turn.intel = intel; }
+    if(!ps.length) L.push('No holdings on file for this client.');
+  }
+  turn.content = L.join('\n');
+  riaPushBot(turn);
+}
+function riaGroupActions(g){
+  return [{label:'DOB & Age List', act:{t:'topic', topic:'dob', group:g}}, {label:'KYC Breakdown', act:{t:'topic', topic:'kyc', group:g}},
+    {label:'Mandate Breakdown', act:{t:'topic', topic:'mandate', group:g}}, {label:'SIP & AUM Summary', act:{t:'topic', topic:'sip', group:g}},
+    {label:'⬇ Download Excel', act:{t:'dl', fmt:'xlsx'}}, {label:'⬇ Download CSV', act:{t:'dl', fmt:'csv'}}, {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'☰ Main Menu', act:{t:'menu'}}];
+}
+async function riaAnswerGroup(topic, g){
+  let clients = riaVisible(), label = 'All visible clients';
+  if(g && g.by==='branch'){ const f = await riaFind('branch', g.value); clients = f.group; label = f.label; }
+  const turn = {actions: riaGroupActions(g || {by:'all'})};
+  const L = ['**' + label + '** — ' + riaN(clients.length) + ' client' + (clients.length===1 ? '' : 's') + '.', ''];
+  if(!clients.length){ turn.content = L[0] + ' No clients to show.'; return riaPushBot(turn); }
+  if(topic==='dob' || topic==='profile'){
+    const key = c => { const d = new Date(riaDob(c)); return isNaN(d.getTime()) ? 9999 : d.getMonth() * 100 + d.getDate(); };
+    const rows = clients.slice().sort((a,b)=>key(a) - key(b) || String(clientDisplayName(a)).localeCompare(String(clientDisplayName(b))));
+    const withDob = clients.filter(c=>riaDob(c)).length, seniors = clients.filter(c=>riaAgeGroup(c)==='60+ yrs (Senior)').length;
+    const thisMonth = clients.filter(c=>riaBirthMonth(c)===RIA_MONTHS[new Date().getMonth()]).length;
+    L.push('**Date of birth on file:** ' + riaN(withDob) + ' of ' + riaN(clients.length) + ' (' + Math.round(withDob / clients.length * 100) + '%).');
+    L.push('**Seniors (60+):** ' + riaN(seniors) + ' · **Birthdays in ' + RIA_MONTHS[new Date().getMonth()] + ':** ' + riaN(thisMonth) + '.');
+    L.push('The list runs in birthday order (January to December); clients with no DOB on file come last.');
+    turn.table = {title:'Clients by date of birth — ' + label, cols:['Client', 'Client ID / UCC', 'Date of birth', 'Age', 'Age group', 'Birth month', 'Branch', 'RM'],
+      rows: rows.map(c=>[clientDisplayName(c), c.uccNo || c.canIinNo || c.id, riaDate(riaDob(c)), calcAge(riaDob(c))===null ? '' : calcAge(riaDob(c)), riaAgeGroup(c), riaBirthMonth(c), c.branch || '', riaRmOf(c)[0] || ''])};
+    const ag = analyticsGroup(clients, riaAgeGroup), bm = {}; clients.forEach(c=>{ const m = riaBirthMonth(c); bm[m] = (bm[m]||0) + 1; });
+    turn.charts = [
+      {kind:'kpis', module:'analytics', title: label + ' — at a glance', items:[{label:'Clients', value: riaN(clients.length)}, {label:'DOB on file', value: Math.round(withDob / clients.length * 100) + '%', note: riaN(withDob) + ' clients'},
+        {label:'Seniors 60+', value: riaN(seniors)}, {label:'Birthdays this month', value: riaN(thisMonth), tone:'ok'}]},
+      {kind:'donut', module:'analytics', fmt:'count', title:'Age group — ' + label, items: ag.map(x=>({label:x.label, value:x.count})), centre: riaN(clients.length), centreNote:'clients'},
+      {kind:'hbar', module:'analytics', fmt:'count', title:'Birth month — ' + label, series:['clients'], rows: RIA_MONTHS.concat(['DOB not on file']).filter(m=>bm[m]).map(m=>({label:m, values:[bm[m]]}))}];
+  } else if(topic==='kyc' || topic==='mandate'){
+    const dim = ANALYTICS_SOURCES.clients.dims.find(d=>d.id===topic);
+    const d = riaDimDashboard('clients', dim, clients, dim.label + ' — ' + label);
+    turn.charts = d.charts;
+    d.groups.slice(0, 6).forEach(x=>L.push('- ' + x.label + ': ' + riaN(x.count)));
+    turn.table = {title: dim.label + ' — ' + label, cols:['Client', 'Client ID / UCC', dim.label, 'Branch', 'RM'], rows: clients.map(c=>[clientDisplayName(c), c.uccNo || c.canIinNo || c.id, RIA_SEGMENTS[topic].of(c), c.branch || '', riaRmOf(c)[0] || ''])};
+  } else if(topic==='sip' || topic==='holdings'){
+    const aum = clients.reduce((s,c)=>s + numVal(clientBookAum(c)), 0), sip = clients.reduce((s,c)=>s + numVal(clientBookSip(c)), 0);
+    L.push('**AUM:** ' + money(aum) + ' · **Monthly SIP:** ' + money(sip) + '.');
+    const d = riaDimDashboard('clients', RIA_EXTRA_DIMS[0], clients, 'SIP status — ' + label);
+    turn.charts = d.charts;
+    turn.table = {title:'SIP & AUM — ' + label, cols:['Client', 'Client ID / UCC', 'AUM', 'Monthly SIP', 'SIP status', 'Branch'],
+      rows: clients.slice().sort((a,b)=>numVal(clientBookAum(b)) - numVal(clientBookAum(a))).map(c=>[clientDisplayName(c), c.uccNo || c.canIinNo || c.id, money(numVal(clientBookAum(c))), money(numVal(clientBookSip(c))), RIA_SEGMENTS.sip.of(c), c.branch || ''])};
+  } else if(topic==='txn' || topic==='redeem'){
+    const ids = new Set(clients.map(c=>c.id)), re = topic==='redeem' ? /Redemption|SWP|Switch/i : null;
+    const list = (DB.transactions||[]).filter(t=>ids.has(t.clientId) && !t.deletedAt && (!re || re.test(t.transactionType||''))).sort((a,b)=>String(b.initiatedDate||b.createdAt||'').localeCompare(String(a.initiatedDate||a.createdAt||'')));
+    const by = {}; list.forEach(t=>{ const k = t.status || 'Not recorded'; by[k] = (by[k]||0) + 1; });
+    L.push(riaN(list.length) + ' transactions: ' + Object.keys(by).map(k=>k + ' ' + by[k]).join(', ') + '.');
+    if(list.length){ turn.charts = [{kind:'donut', module:'analytics', fmt:'count', title:'Transactions by status — ' + label, items: Object.keys(by).map(k=>({label:k, value:by[k]})), centre: riaN(list.length), centreNote:'transactions'}];
+      turn.table = {title:'Transactions — ' + label, cols:['Client', 'Date', 'Type', 'Scheme', 'Amount', 'Status'], rows: list.map(t=>[clientName(t.clientId)].concat(riaTxnRow(t)))}; }
+  } else if(topic==='tasks'){
+    const ids = new Set(clients.map(c=>c.id));
+    const list = (DB.tasks||[]).filter(t=>ids.has(t.clientId) && !t.deletedAt && !/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||'')));
+    L.push(riaN(list.length) + ' open tasks.');
+    if(list.length) turn.table = {title:'Open tasks — ' + label, cols:['Client', 'Task', 'Due', 'Status', 'Owner'], rows: list.map(t=>[clientName(t.clientId), t.title || '', riaDate(t.dueDate), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo)])};
+  }
+  turn.content = L.join('\n').trim();
+  riaPushBot(turn);
+}
+
+/* ---- Help & Support, Self Service ---- */
+function riaEscalation(){
+  riaPushBot({content:'**QMS escalation matrix**\n' + RIA_ESCALATION.map(e=>'**' + e.level + ' — ' + e.who + ':** ' + e.when).join('\n')
+    + '\n\nLog every query in QMS first; the SLA rules in Setup escalate an overdue query to the next level by themselves.',
+    table:{title:'Escalation matrix', cols:['Level', 'Who', 'When it comes to them'], rows: RIA_ESCALATION.map(e=>[e.level, e.who, e.when])},
+    actions:[{label:'QMS Ticket Status', act:{t:'help', what:'qms'}}, {label:'TATs', act:{t:'help', what:'tat'}}, {label:'☰ Main Menu', act:{t:'menu'}}]});
+}
+function riaTats(){
+  const rows = (typeof BOSS_SOPS!=='undefined' ? BOSS_SOPS : []).filter(s=>s.tat).map(s=>[s.t, s.c || '', s.tat]);
+  riaPushBot({content:'**Turnaround times (TATs)** from the firm’s SOPs — ' + riaN(rows.length) + ' processes.', table:{title:'TATs by process', cols:['Process', 'Category', 'TAT'], rows, show: 40},
+    actions:[{label:'Escalation Matrix', act:{t:'help', what:'escalation'}}, {label:'⬇ Download Excel', act:{t:'dl', fmt:'xlsx'}}, {label:'☰ Main Menu', act:{t:'menu'}}]});
+}
+function riaQms(){
+  const qs = typeof visibleRecords==='function' && can('Queries','view') ? visibleRecords((DB.queries||[]).filter(x=>!x.deletedAt), r=>r.assignedTo, r=>r.branch) : [];
+  const by = {}; qs.forEach(x=>{ const k = x.status || 'Not recorded'; by[k] = (by[k]||0) + 1; });
+  const open = qs.filter(x=>!/closed|resolved|done/i.test(String(x.status||'')));
+  riaPushBot({content: qs.length ? '**QMS tickets:** ' + riaN(qs.length) + ' in your view — ' + Object.keys(by).map(k=>k + ' ' + by[k]).join(', ') + '. Open: ' + riaN(open.length) + '.' : 'No QMS tickets in your view.',
+    charts: qs.length ? [{kind:'donut', module:'analytics', fmt:'count', title:'QMS tickets by status', items: Object.keys(by).map(k=>({label:k, value:by[k]})), centre: riaN(qs.length), centreNote:'tickets'}] : undefined,
+    table: open.length ? {title:'Open tickets', cols:['Ticket', 'Subject', 'Status', 'Priority', 'Raised', 'Owner'], rows: open.map(x=>[x.id, x.subject || '', x.status || '', x.priority || '', riaDate(x.createdAt), teamName(x.assignedTo)])} : undefined,
+    actions:[{label:'Escalation Matrix', act:{t:'help', what:'escalation'}}, {label:'↗ Open QMS', act:{t:'screen', view:'queries'}}, {label:'☰ Main Menu', act:{t:'menu'}}]});
+}
+function riaScreens(){
+  const pick = ['dashboard','lms','cms','rms','dst','dwt','business','queries','meetings','transactions','analytics','reports','settings'].filter(v=>bossPages().includes(v));
+  riaPushBot({content:'Which screen should I open?', ui:{kind:'list', items: pick.map(v=>({label: bossPageTitle(v), act:{t:'screen', view:v}}))}, actions:[{label:'☰ Main Menu', act:{t:'menu'}}]});
+}
+/* Excel / CSV of the table in a turn, every row. */
+function riaDownloadTable(ti, fmt){
+  const t = ai.turns[ti]; const tb = t && t.table; if(!tb) return null;
+  const base = String(tb.title || 'RIA AI report').replace(/[^\w\d \-]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) + '_' + new Date().toISOString().slice(0, 10);
+  const rows = tb.rows.map(r=>r.map(v=>v==null ? '' : v));
+  if(fmt==='csv'){ aiDownload(aiCsvOf(rows.map(r=>Object.fromEntries(tb.cols.map((c, k)=>[c, r[k]]))), tb.cols), base + '.csv', 'text/csv'); return base + '.csv'; }
+  aiDownload(xlsxBuild([{name: (tb.title || 'Report').slice(0, 31), cols: tb.cols, rows}]), base + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  return base + '.xlsx';
 }
 
 /* ---------------------------------------------------------------------

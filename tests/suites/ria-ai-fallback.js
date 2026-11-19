@@ -47,7 +47,12 @@
        tax status is blank;
      - a long answer opens at its start: the question at the top of the
        panel, the first line of the answer in view — not the bottom of the
-       last chart — and a dashboard tab click does not move the panel. */
+       last chart — and a dashboard tab click does not move the panel;
+     - the guided desk: a greeting, six category tiles and a ☰ button;
+       Check Status → Mandate Status → PAN → the client's mandate, IIN, bank
+       and SIPs, with buttons for what next, no model call; a name two
+       clients share gives a list to click; "Varanasi" finds "Varanasi
+       Branch", and the DOB list comes with its charts and an Excel file. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -681,6 +686,111 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
           || !['banner', 'cards', 'panel', 'donutTable', 'donutPair', 'gbars', 'lines', 'bell', 'table', 'meter'].every((k) => info.kinds.includes(k)))
           throw new Error(JSON.stringify({ h1: f1.slice(0, 8).toString(), h2: f2.slice(0, 8).toString(), missing, kinds: info.kinds }));
         return r.charts.length + ' charts across ' + mods.size + ' modules; PDF ' + d1.suggestedFilename() + ' (' + f1.length + ' bytes, ' + info.blocks + ' blocks) on request and ' + f2.length + ' bytes from the button';
+      });
+
+      /* ---- the guided desk ---- */
+      const deskClients = clients.concat([
+        { id: 'CMS-D1', cmsName: 'ZZ Ravi Kumar', rmName: '', branch: 'Varanasi Branch', pan: 'ABCPK1234Q', mobile: '9876500001', canIinNo: 'IIN5001', mandateStatus: 'Approved',
+          mandateType: 'E-Mandate', bankName: 'HDFC Bank', ifsc: 'HDFC0001234', accNo: '123456789012', dob: '1960-03-15', kycStatus: 'Validated' },
+        { id: 'CMS-D2', cmsName: 'ZZ Amit Verma', rmName: '', branch: 'Mumbai', pan: 'ABCPV2222R', dob: '1990-07-02' },
+        { id: 'CMS-D3', cmsName: 'ZZ Amit Shah', rmName: '', branch: 'Pune', pan: 'ABCPS3333T', kycStatus: 'On Hold' },
+        { id: 'CMS-D4', cmsName: 'ZZ Varanasi One', rmName: '', branch: 'Varanasi Branch', dob: '1985-01-20' },
+        { id: 'CMS-D5', cmsName: 'ZZ Varanasi Two', rmName: '', branch: 'Varanasi Branch', dob: '1950-11-05' },
+        { id: 'CMS-D6', cmsName: 'ZZ Varanasi Three', rmName: '', branch: 'Varanasi' }]);
+      await admin.put('/api/storage/clients', { value: JSON.stringify(deskClients) });
+      await admin.put('/api/storage/platformSips', { value: JSON.stringify([{ id: 'PFS-I1', clientId: 'CMS-I1', schemeName: 'Parag Parikh Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000 },
+        { id: 'PFS-D1', clientId: 'CMS-D1', schemeName: 'HDFC Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000, sipDate: 10 }]) });
+      const pg3 = await (await browser.newContext({ acceptDownloads: true })).newPage();
+      await signIn(pg3, srv.base); await ready(pg3);
+      await pg3.evaluate(async () => { await aiRefreshStatus(true); ai.turns = []; ai.open = true; aiDrawPanel(); });
+      const click = (sel, text) => pg3.evaluate(async ({ sel, text }) => {
+        const el = [...document.querySelectorAll(sel)].reverse().find((b) => b.textContent.replace(/\s+/g, ' ').trim().includes(text));
+        if (!el) throw new Error('no button "' + text + '"');
+        const t0 = performance.now(); el.click(); await new Promise((r) => setTimeout(r, 30));
+        return Math.round(performance.now() - t0 - 30);
+      }, { sel, text });
+      const lastBot = () => pg3.evaluate(() => { const t = ai.turns[ai.turns.length - 1] || {}; return { role: t.role, text: String(t.content || ''), ui: t.ui ? { kind: t.ui.kind, items: (t.ui.items || []).map((i) => i.label) } : null,
+        actions: (t.actions || []).map((a) => a.label), table: t.table ? { title: t.table.title, cols: t.table.cols, rows: t.table.rows } : null, charts: (t.charts || []).map((c) => c.kind + ':' + c.title) }; });
+      const typeIn = (q) => pg3.evaluate(async (q) => { const el = document.getElementById('aiInput'); el.value = q; ai.draft = q; const t0 = performance.now(); await aiSend(); return Math.round(performance.now() - t0); }, q);
+
+      await step('the desk: "Hi <name>! Good Morning / Afternoon / Evening.", six category tiles, and a ☰ menu button beside the input', async () => {
+        const r = await pg3.evaluate(() => ({ greet: (document.querySelector('#aiTurns .ria-greet') || {}).textContent || '', tiles: [...document.querySelectorAll('#aiTurns .ria-tile .ria-tile-t')].map((x) => x.textContent),
+          menu: !!document.querySelector('.ai-compose .ria-menu-btn') }));
+        const want = ['Most Asked', 'Check Status', 'Statements & Reports', 'Portfolio & Advisory', 'Self Service & SOPs', 'Help & Support'];
+        if (!/^Hi .+! Good (Morning|Afternoon|Evening)\.$/.test(r.greet) || r.tiles.join() !== want.join() || !r.menu) throw new Error(JSON.stringify(r));
+        await click('.ai-compose .ria-menu-btn', '☰');
+        const b = await lastBot();
+        if (!b.ui || b.ui.kind !== 'menu') throw new Error('☰ did not draw the menu: ' + JSON.stringify(b));
+        return '"' + r.greet + '"; tiles: ' + r.tiles.join(' · ') + '; ☰ draws the menu again';
+      });
+
+      await step('Check Status → Mandate Status → 3. PAN Number → the PAN: mandate, IIN, bank and SIPs, with what-next buttons, no model call', async () => {
+        const n = seen.length;
+        await click('#aiTurns .ria-tile', 'Check Status');
+        const subs = await pg3.evaluate(() => [...[...document.querySelectorAll('#aiTurns .ria-desk')].pop().querySelectorAll('.ria-sub')].map((x) => x.textContent.trim()));
+        const ms = await click('#aiTurns .ria-sub', 'Mandate Status');
+        const pick = await lastBot();
+        if (!/Hi, I can instantly help you with \*\*Mandate Status\*\* of investors\. Click on any one to continue:/.test(pick.text) || pick.ui.items.length !== 6 || pick.ui.items[2] !== '3. PAN Number' || ms > 20)
+          throw new Error(JSON.stringify({ subs, pick, ms }));
+        await click('#aiTurns .ria-sub', '3. PAN Number');
+        const ask = await lastBot();
+        if (!/Please enter \*\*PAN No\.\*\* to continue/.test(ask.text)) throw new Error(ask.text);
+        const ms2 = await typeIn('ABCPK1234Q');
+        const a = await lastBot();
+        const need = [/\*\*ZZ Ravi Kumar\*\*/, /\*\*Mandate status:\*\* Mandate approved/, /\*\*Mandate type:\*\* E-Mandate/, /\*\*Bank:\*\* HDFC Bank · IFSC HDFC0001234 · A\/c ending 9012/,
+          /\*\*IIN \/ UCC:\*\* IIN5001/, /\*\*Active SIPs:\*\* 1 — ₹5,000 a month/];
+        const missing = need.filter((re) => !re.test(a.text)).map(String);
+        const acts = ['KYC & IIN Status', 'Mandate Status', 'Active SIPs', 'Transactions', 'Portfolio & Risk Charts', '⬇ Download PDF', '↗ Open Account', '☰ Main Menu'];
+        if (missing.length || acts.some((x) => !a.actions.includes(x)) || seen.length !== n || /ABCPK1234Q/.test(a.text)) throw new Error(JSON.stringify({ missing, a, calls: seen.length - n }));
+        await click('#aiTurns .ria-act', 'Active SIPs');
+        const sip = await lastBot();
+        if (!sip.table || sip.table.rows[0][0] !== 'HDFC Flexi Cap Reg Gr') throw new Error(JSON.stringify(sip));
+        return 'sub-options: ' + subs.length + '; options in ' + ms + ' ms; answer in ' + ms2 + ' ms, 0 model calls; PAN shown masked; Active SIPs → ' + sip.table.rows[0][0];
+      });
+
+      await step('1. Investor Name with a name two clients share → a list to click → the client picked', async () => {
+        await click('.ai-compose .ria-menu-btn', '☰');
+        await click('#aiTurns .ria-tile', 'Check Status');
+        await click('#aiTurns .ria-sub', 'KYC & Account Opening Status');
+        await click('#aiTurns .ria-sub', '1. Investor Name');
+        await typeIn('ZZ Amit');
+        const list = await lastBot();
+        if (!list.ui || list.ui.items.length !== 2 || !/2 clients match/.test(list.text) || !list.ui.items.every((x) => /ZZ Amit/.test(x))) throw new Error(JSON.stringify(list));
+        await click('#aiTurns .ria-sub', 'ZZ Amit Shah');
+        const a = await lastBot();
+        if (!/\*\*ZZ Amit Shah\*\*/.test(a.text) || !/\*\*KYC status:\*\* On hold \/ rejected — physical KYC needed/.test(a.text)) throw new Error(a.text);
+        return list.ui.items.join(' | ') + ' → ZZ Amit Shah: KYC on hold';
+      });
+
+      await step('"Varanasi branch ke clients ka date of birth wise data dikhao": "Varanasi" and "Varanasi Branch" alike, DOB table, age / birth-month charts, Excel', async () => {
+        const n = seen.length;
+        await typeIn('Varanasi branch ke clients ka date of birth wise data dikhao');
+        const a = await lastBot();
+        const names = a.table ? a.table.rows.map((r) => r[0]) : [];
+        const want = deskClients.filter((c) => /varanasi/i.test(c.branch || '')).length;          // "Varanasi" and "Varanasi Branch"
+        if (!a.table || a.table.rows.length !== want || names.slice(0, 3).join() !== 'ZZ Varanasi One,ZZ Ravi Kumar,ZZ Varanasi Two' || !a.table.cols.includes('Age group')
+          || !a.table.rows.slice(3).every((r) => r[4] === 'DOB not on file') || !a.table.rows.some((r) => r[6] === 'Varanasi') || !a.table.rows.some((r) => r[6] === 'Varanasi Branch')
+          || !a.charts.some((c) => /^donut:Age group/.test(c)) || !a.charts.some((c) => /^hbar:Birth month/.test(c)) || seen.length !== n) throw new Error(JSON.stringify(a));
+        const dl = pg3.waitForEvent('download', { timeout: 10000 });
+        await click('#aiTurns .ria-act', '⬇ Download Excel');
+        const f = fs.readFileSync(await (await dl).path());
+        const read = await pg3.evaluate(() => aiReadSource('clients', { where: [{ col: 'branch', op: 'eq', value: 'Varanasi' }], cols: ['name', 'branch', 'dob', 'ageGroup', 'birthMonth'] }));
+        if (f.slice(0, 2).toString() !== 'PK' || read.total !== want) throw new Error('excel ' + f.slice(0, 2) + ' / read ' + read.total);
+        return want + ' clients ("Varanasi" + "Varanasi Branch"), birthday order: ' + names.slice(0, 3).join(', ') + ', then no DOB; Excel ' + f.length + ' bytes; aiReadSource branch = "Varanasi" → ' + read.total;
+      });
+
+      await step('the same list the guided way: Statements & Reports → Branch-wise Client / DOB Report → 5. Branch / RM → the Varanasi chip', async () => {
+        await click('.ai-compose .ria-menu-btn', '☰');
+        await click('#aiTurns .ria-tile', 'Statements & Reports');
+        await click('#aiTurns .ria-sub', 'Branch-wise Client / DOB Report');
+        await click('#aiTurns .ria-sub', '5. Branch / RM Name');
+        const chips = await lastBot();
+        if (!chips.ui || !chips.ui.items.some((x) => /^Varanasi Branch \(3\)$/.test(x))) throw new Error(JSON.stringify(chips));
+        await click('#aiTurns .ria-sub', 'Varanasi Branch (3)');
+        const a = await lastBot();
+        const want = deskClients.filter((c) => /varanasi/i.test(c.branch || '')).length;
+        if (!a.table || a.table.rows.length !== want || !a.actions.includes('DOB & Age List') || !a.actions.includes('⬇ Download Excel')) throw new Error(JSON.stringify(a).slice(0, 400));
+        return 'chips: ' + chips.ui.items.slice(0, 4).join(', ') + ' → ' + a.table.rows.length + ' clients';
       });
     } finally { await browser.close(); }
     await step('no answer anywhere in this run said "The AI service is busy"', async () => {
