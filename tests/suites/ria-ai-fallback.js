@@ -707,11 +707,11 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         { id: 'CMS-D4', cmsName: 'ZZ Varanasi One', rmName: '', branch: 'Varanasi Branch', dob: '1985-01-20', createdAt: '2026-09-01T10:00:00.000Z' },
         { id: 'CMS-D5', cmsName: 'ZZ Varanasi Two', rmName: '', branch: 'Varanasi Branch', dob: '1950-11-05', createdAt: '2026-11-02T10:00:00.000Z' },
         { id: 'CMS-D6', cmsName: 'ZZ Varanasi Three', rmName: '', branch: 'Varanasi' },
-        { id: 'CMS-P1', cmsName: 'Mrs. Priya Sharma', rmName: '', branch: 'Mumbai', pan: 'ABCPS1111S', mobile: '9811100001', email: 'priya.s@example.test', dob: '1980-04-10' },
-        { id: 'CMS-P2', cmsName: 'Priya Verma', rmName: '', branch: 'Delhi', pan: 'ABCPV2222V', mobile: '9811100002', email: 'priya.v@example.test', dob: '1985-06-21', kycStatus: 'Validated' },
-        { id: 'CMS-P3', cmsName: 'Priya Nair', rmName: '', branch: 'Pune', pan: 'ABCPN4444N', mobile: '9811100003', email: 'priya.n@example.test', dob: '1992-02-02',
+        { id: 'CMS-PR1', cmsName: 'Mrs. Priya Sharma', rmName: '', branch: 'Mumbai', pan: 'ABCPS1111S', mobile: '9811100001', email: 'priya.s@example.test', dob: '1980-04-10' },
+        { id: 'CMS-PR2', cmsName: 'Priya Verma', rmName: '', branch: 'Delhi', pan: 'ABCPV2222V', mobile: '9811100002', email: 'priya.v@example.test', dob: '1985-06-21', kycStatus: 'Validated' },
+        { id: 'CMS-PR3', cmsName: 'Priya Nair', rmName: '', branch: 'Pune', pan: 'ABCPN4444N', mobile: '9811100003', email: 'priya.n@example.test', dob: '1992-02-02',
           kycStatus: 'Validated', mandateStatus: 'Approved', firstNomineeName: 'Ravi Nair', firstNomineeRelation: 'Spouse', mailingCity: 'Pune', mailingState: 'Maharashtra' },
-        { id: 'CMS-P4', cmsName: 'Priya Gupta', rmName: '', branch: 'Lucknow', pan: 'ABCPG5555G', mobile: '9811100004', email: 'priya.g@example.test', dob: '1975-12-30' }]);
+        { id: 'CMS-PR4', cmsName: 'Priya Gupta', rmName: '', branch: 'Lucknow', pan: 'ABCPG5555G', mobile: '9811100004', email: 'priya.g@example.test', dob: '1975-12-30' }]);
       await admin.put('/api/storage/clients', { value: JSON.stringify(deskClients) });
       await admin.put('/api/storage/platformSips', { value: JSON.stringify([{ id: 'PFS-I1', clientId: 'CMS-I1', schemeName: 'Parag Parikh Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000 },
         { id: 'PFS-D1', clientId: 'CMS-D1', schemeName: 'HDFC Flexi Cap Reg Gr', monthlyAmount: 5000, amount: 5000, sipDate: 10 }]) });
@@ -815,7 +815,7 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
         const list = await lastBot();
         const names = list.ui ? list.ui.items : [];
         if (!/Found \*\*4 clients\*\* matching ‘priya’\. Click the exact client \(by full name\) to continue:/.test(list.text) || names.length !== 4
-          || !names.some((x) => /^\d\. Mrs\. Priya Sharma · Mumbai · CMS-P1 · PAN: …111S · Mob: …0001$/.test(x)) || !names.some((x) => /Priya Nair · Pune/.test(x)))
+          || !names.some((x) => /^\d\. Mrs\. Priya Sharma · Mumbai · CMS-PR1 · PAN: …111S · Mob: …0001$/.test(x)) || !names.some((x) => /Priya Nair · Pune/.test(x)))
           throw new Error(JSON.stringify(list));
         await click('#aiTurns .ria-sub', 'Priya Nair');
         const a = await lastBot();
