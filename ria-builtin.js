@@ -90,10 +90,38 @@ function pickSource(q, sources) {
   }
   return null;
 }
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const MONTH_RE = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/g;
+/* The same period language the page reads: ranges, "last N days", months, years, FY. */
+function periodWide(q, d) {
+  const t = String(q || '').toLowerCase(), Y = d.getUTCFullYear(), M = d.getUTCMonth();
+  const day = (y, m, dd) => new Date(Date.UTC(y, m, dd)).toISOString().slice(0, 10);
+  let m;
+  if ((m = t.match(/(\d{4}-\d{2}-\d{2})\s*(?:to|se|-|till|tak|until)\s*(\d{4}-\d{2}-\d{2})/))) return { from: m[1], to: m[2] };
+  if ((m = t.match(/\b(\d{1,2})\s*([a-z]{3,9})\s*(?:to|se|-|till|tak|until)\s*(\d{1,2})\s*([a-z]{3,9})/)) && MONTHS.indexOf(m[2].slice(0, 3)) >= 0 && MONTHS.indexOf(m[4].slice(0, 3)) >= 0) {
+    const a = MONTHS.indexOf(m[2].slice(0, 3)), b = MONTHS.indexOf(m[4].slice(0, 3));
+    return { from: day(a > b ? Y - 1 : Y, a, Number(m[1])), to: day(Y, b, Number(m[3])) };
+  }
+  if ((m = t.match(/\b((?:19|20)\d{2})\s*(?:se|to|-|till|tak)\s*((?:19|20)\d{2})\b/))) return { from: m[1] + '-01-01', to: m[2] + '-12-31' };
+  if ((m = t.match(/\b(?:last|pichhle|pichle|past)\s+(\d{1,3})\s*(days?|din|months?|mahine)\b/))) {
+    const f = new Date(d); if (/day|din/.test(m[2])) f.setUTCDate(f.getUTCDate() - Number(m[1]) + 1); else f.setUTCMonth(f.getUTCMonth() - Number(m[1]));
+    return { from: f.toISOString().slice(0, 10), to: d.toISOString().slice(0, 10) };
+  }
+  if (/\b(fy|financial year)\b/.test(t)) { const fy = M >= 3 ? Y : Y - 1; return { from: fy + '-04-01', to: (fy + 1) + '-03-31' }; }
+  if (/\b(birth ?days?|dob|date of birth|janam)\b/.test(t)) return null;                      // a birthday month is not a period of records
+  const ms = []; let mm; MONTH_RE.lastIndex = 0;
+  while ((mm = MONTH_RE.exec(t))) { const k = MONTHS.indexOf(mm[1].slice(0, 3)); if (k >= 0 && ms.indexOf(k) < 0) ms.push(k); }
+  const yr = (t.match(/\b((?:19|20)\d{2})\b/) || [])[1];
+  if (ms.length) { const y = yr ? Number(yr) : Y; return { from: day(y, Math.min(...ms), 1), to: day(y, Math.max(...ms) + 1, 0) }; }
+  if (yr) return { from: yr + '-01-01', to: yr + '-12-31' };
+  return null;
+}
 function period(q, now) {
   const t = String(q || '').toLowerCase();
   const d = now || new Date();
   const iso = (x) => x.toISOString().slice(0, 10);
+  const wide = periodWide(q, d);
+  if (wide) return wide;
   if (/\b(today|aaj)\b/.test(t)) return { from: iso(d), to: iso(d) };
   if (/\b(yesterday|kal)\b/.test(t)) { const y = new Date(d); y.setUTCDate(y.getUTCDate() - 1); return { from: iso(y), to: iso(y) }; }
   if (/\b(this week|is hafte|hafte)\b/.test(t)) { const m = new Date(d); m.setUTCDate(m.getUTCDate() - ((m.getUTCDay() + 6) % 7)); return { from: iso(m), to: iso(d) }; }
@@ -142,6 +170,12 @@ function plan(q, system, now) {
   /* "Pending SIPs" as a list is filtered; a count of pending is grouped by
      status instead, so every status and its count is in the answer. */
   if (/\bpending\b/i.test(q) && !(read.groupBy && read.groupBy.length)) { const s = src.cols.find((c) => /status/i.test(c)); if (s) read.where = [{ col: s, op: 'contains', value: 'Pending' }]; }
+  /* "Varanasi branch ke …": that branch, matched as "contains". */
+  const br = (String(q || '').match(/\b([a-z][a-z]{2,})\s+branch\b/i) || String(q || '').match(/\bbranch\s+([a-z][a-z]{2,})\b/i) || [])[1];
+  if (br && !/^(each|every|which|har|sab|all|the|our|my|is|us)$/i.test(br) && src.cols.includes('branch')) read.where = (read.where || []).concat([{ col: 'branch', op: 'contains', value: br }]);
+  /* "November birthday wale": the birth month. */
+  const bm = (String(q || '').match(/\b(birth ?days?|dob|janam)\b/i) && (String(q || '').toLowerCase().match(MONTH_RE) || [])[0]);
+  if (bm && src.cols.includes('birthMonth')) read.where = (read.where || []).concat([{ col: 'birthMonth', op: 'eq', value: bm.charAt(0).toUpperCase() + bm.slice(1, 3) }]);
   return JSON.stringify({ reads: [read], client: null });
 }
 
@@ -299,8 +333,21 @@ function describeReads(reads) {
   });
   return lines;
 }
-function describeClient(c) {
+/* "Priya ka DOB aur PAN": the client's own fields, as the page sent them
+   (the PAN masked — it went to the provider). */
+const PERSONAL_RE = /\b(dob|date of birth|birth ?day|janam|age|pan|mobile|phone|e-?mail|address|nominee|iin|ucc|anniversary|occupation|profession|personal|profile|details?)\b/i;
+const PERSONAL_FIELDS = /^(date of birth|pan|mobile|email|e-?mail|mailing street|mailing city|mailing state|mailing zip|city|occupation|profession|anniversary date|gender|marital status|can \/ iin no\.?|iin|ucc no\.?|ucc|kyc status|mandate status|bank name|ifsc|nominee|first nominee name)/i;
+function describePersonal(c) {
+  const lines = ['**' + (c.client || c.name || 'Client') + '** — personal & KYC profile' + (c.code ? ' (' + c.code + ')' : '')];
+  if (c.dob) lines.push('- Date of birth: ' + c.dob + (c.age !== undefined && c.age !== null ? ' (age ' + c.age + ')' : ''));
+  Object.entries(c.fields || {}).filter(([k]) => PERSONAL_FIELDS.test(k) && !/^date of birth/i.test(k)).slice(0, 18).forEach(([k, v]) => lines.push('- ' + k + ': ' + v));
+  if (c.branch || c.rm) lines.push('- Branch: ' + (c.branch || '—') + (c.rm ? ', RM ' + c.rm : ''));
+  if (c.aum !== undefined && c.aum !== null && c.aum !== '') lines.push('- AUM ' + money(c.aum) + (c.monthlySip ? ', monthly SIP ' + money(c.monthlySip) : ''));
+  return lines;
+}
+function describeClient(c, q) {
   if (!c) return [];
+  if (q && PERSONAL_RE.test(q)) return describePersonal(c);
   const lines = [(c.client || c.name || 'Client') + (c.code ? ' (' + c.code + ')' : '') + (c.stage ? ' — ' + c.stage : '') + (c.rm ? ', RM ' + c.rm : '')];
   if (c.aum !== undefined && c.aum !== null && c.aum !== '') lines.push('AUM ' + money(c.aum) + (c.monthlySip ? ', monthly SIP ' + money(c.monthlySip) : '') + '.');
   (c.bossAlerts || []).slice(0, 5).forEach((a) => lines.push('- ' + a));
@@ -435,7 +482,7 @@ function chat(messages, opts) {
       out.push('', '**Suggested next actions:**');
       data.suggestedActions.forEach((x) => out.push('- ' + x.action + ': ' + Number(x.records).toLocaleString('en-IN')));
     }
-    (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c)); out.push(''); });
+    (data.clients || []).slice(0, 3).forEach((c) => { out.push(...describeClient(c, q)); out.push(''); });
     if (data.openLead) out.push('Lead on screen: ' + rowLine(data.openLead) + '.');
     if (data.chart) out.push(...describeChart(data.chart));
     if (data.reads) out.push(...describeReads(data.reads));

@@ -59550,6 +59550,7 @@ async function aiSend(){
             : riaTotalAumIntent(q) ? await riaTotalAumTurn()
             : aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
   ai.busy = false; ai.phase = '';
+  ai.forceClient = null;                         // a picked client answers one question, never the next
   if(out && out.error) ai.error = out.error;
   aiDrawPanel();
   ai.scrollAnchor = null;
@@ -59997,6 +59998,7 @@ function bossClientDossier(c){
   const goals = (typeof clientGoals==='function' ? clientGoals(c) : []).map(g=>bossScalars(g, ['id','clientId']));
   return {
     id: c.id, client: clientDisplayName(c), code: clientCode(c), stage: stateLabel('CMS', stateOf('CMS', c)),
+    dob: riaDob(c) || '', age: calcAge(riaDob(c)),
     rm: teamName(c.assignedTo), branch: c.branch || '',
     aum: clientBookAum(c), monthlySip: clientBookSip(c),
     portfolioSignals: lexiSignalsForAi(c),
@@ -60010,12 +60012,15 @@ function bossClientDossier(c){
 /* Clients this user can see whose name appears in the question. A name is
    only taken when all its words are there, so "Amit" alone does not pull
    every Amit in the book — it pulls them only if nothing longer matches. */
+const RIA_HONORIFICS = new Set(['mr','mrs','ms','miss','dr','shri','shree','smt','km','kumari','m s','ms.','mr.','mrs.','dr.']);
+/* A client's name as words, without "Mr", "Dr", "Smt" and the like. */
+function riaNameWords(c){ return riaNorm(clientDisplayName(c)).replace(/^m s\s+/, '').split(' ').filter(w=>w && !RIA_HONORIFICS.has(w)); }
 function bossClientsNamedIn(q){
   if(!can('CMS','view')) return [];
   const text = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g,' ') + ' ';
   const seen = visibleRecords((DB.clients||[]).slice(), r=>r.assignedTo, r=>r.branch);
   const hits = seen.map(c=>{
-    const words = String(clientDisplayName(c)||'').toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g,' ').trim().split(' ').filter(w=>w.length>1);
+    const words = riaNameWords(c).filter(w=>w.length>1);
     if(!words.length) return null;
     const all = words.every(w=>text.includes(' '+w+' '));
     const first = text.includes(' '+words[0]+' ') && words[0].length>=4;
@@ -60291,6 +60296,10 @@ async function bossRunChat(q){
   let sops = bossSopSearch(q, 4);
   const data = {};
   const people = [];
+  /* The client picked from "Found N clients matching…": this one, and no other the words might match. */
+  const forced = ai.forceClient ? (DB.clients||[]).find(x=>x.id===ai.forceClient) : null;
+  ai.forceClient = null;
+  if(forced && bossCanSeeClient(forced)) people.push(forced);
   /* The record open on screen comes first: "is client ka kya pending hai"
      means this one. */
   if(ctx.module==='CMS' && ctx.recordId){
@@ -60300,7 +60309,7 @@ async function bossRunChat(q){
     const got = aiReadSource('leads', {where:[{col:'id', op:'eq', value:ctx.recordId}]});
     if(!got.error && got.rows.length) data.openLead = got.rows[0];
   }
-  bossClientsNamedIn(q).forEach(c=>{ if(!people.includes(c)) people.push(c); });
+  if(!forced) bossClientsNamedIn(q).forEach(c=>{ if(!people.includes(c)) people.push(c); });
   /* About a client, the SOPs that matter are the ones for what is wrong on
      that account, ahead of whatever the words of the question matched. */
   if(people.length && !bossLooksLikeHowTo(q)){
@@ -62633,6 +62642,7 @@ const RIA_LOOKUP_TOPICS = {
   dob:      'Date of Birth (DOB) & Client Profile List',
   tasks:    'Open Tasks',
   profile:  'Client Profile',
+  personal: 'Personal Details (DOB, PAN, Mobile, Email)',
 };
 const RIA_MENU = [
   {id:'most', icon:'⭐', title:'Most Asked', blurb:'KYC, mandate, transactions, SIPs, redemptions',
@@ -62779,7 +62789,14 @@ async function riaRun(act, label){
     return riaDone();
   }
   if(act.t==='value'){ await riaResolve(act.value); return riaDone(); }
-  if(act.t==='client'){ ai.flow = null; const c = riaVisible().find(x=>x.id===act.id); if(c) riaAnswerClient(act.topic || 'profile', c); return riaDone(); }
+  if(act.t==='client'){
+    ai.flow = null;
+    const c = riaVisible().find(x=>x.id===act.id);
+    if(!c) return riaDone();
+    if(act.topic==='chat' && act.question) return riaResumeChat(act.question, c);
+    riaAnswerClient(act.topic || 'personal', c, act.fields);
+    return riaDone();
+  }
   if(act.t==='topic'){
     if(act.clientId){ const c = riaVisible().find(x=>x.id===act.clientId); if(c) riaAnswerClient(act.topic, c); }
     else await riaAnswerGroup(act.topic, act.group);
@@ -62787,6 +62804,15 @@ async function riaRun(act, label){
   }
 }
 
+/* The question that waited for "which client": asked again, for this one. */
+async function riaResumeChat(q, c){
+  ai.forceClient = c.id;
+  ai.busy = true; ai.phase = ''; aiDrawPanel();
+  let out = null;
+  try{ out = await bossRunChat(q); }finally{ ai.busy = false; ai.phase = ''; }
+  if(out && out.error) ai.error = out.error;
+  riaDone();
+}
 /* ---- finding investors in what this user may see ---- */
 const riaVisible = () => (typeof analyticsRecords==='function' ? analyticsRecords('clients') : null) || [];
 const riaNorm = s => String(s==null ? '' : s).toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -62829,7 +62855,7 @@ async function riaFind(by, value){
   if(by==='mobile'){ const m = v.replace(/\D/g, '').slice(-10); return {hits: m.length===10 ? cs.filter(c=>String(c.mobile||'').replace(/\D/g, '').slice(-10)===m) : []}; }
   if(by==='name'){
     const ws = n.split(' ').filter(Boolean);
-    return {hits: ws.length ? cs.filter(c=>{ const d = riaNorm(clientDisplayName(c)); return d.includes(n) || ws.every(w=>d.split(' ').some(x=>x.indexOf(w)===0)); }) : []};
+    return {hits: ws.length ? cs.filter(c=>{ const nw = riaNameWords(c), d = nw.join(' '); return d.includes(n) || ws.every(w=>nw.some(x=>x.indexOf(w)===0)); }) : []};
   }
   if(by==='branch'){
     let group = cs.filter(c=>riaBranchHit(c, n)), what = 'branch';
@@ -62873,16 +62899,71 @@ function riaDobIntent(q){
 /* The desk's turn at a message, before anything else answers it. */
 async function riaDeskHandle(q){
   if(/^\s*(☰|menu|main menu|start|help|hi|hello|namaste)\s*[.!]?\s*$/i.test(q)){ ai.flow = null; riaPushBot({ui:{kind:'menu', open:null}}); return {}; }
+  if(ai.flow && ai.flow.step==='disambiguate_client'){
+    const f = ai.flow, cands = f.candidates.map(id=>riaVisible().find(x=>x.id===id)).filter(Boolean);
+    const num = /^\s*(\d{1,3})\s*\.?\s*$/.exec(q), n = riaNorm(q);
+    const c = num ? cands[Number(num[1]) - 1] : cands.find(x=>riaNameWords(x).join(' ')===n.split(' ').filter(w=>!RIA_HONORIFICS.has(w)).join(' '));
+    if(c){ ai.flow = null;
+      /* The waiting question, asked again for the client picked — not the number typed. */
+      if(f.topic==='chat' && f.pendingQuestion){ ai.forceClient = c.id; return (await bossRunChat(f.pendingQuestion)) || {}; }
+      riaAnswerClient(f.topic || 'personal', c, f.fields); return {}; }
+    ai.flow = null;
+  }
   if(ai.flow && ai.flow.step==='await_value'){
     const r = await riaResolve(q, true);
     if(r) return {};
   }
   const kind = riaBareKind(q);
-  if(kind){ ai.flow = {topic:'profile', step:'await_value', lookupBy: kind}; await riaResolve(q); return {}; }
-  const dob = riaDobIntent(q);
+  if(kind){ ai.flow = {topic:'personal', step:'await_value', lookupBy: kind}; await riaResolve(q); return {}; }
+  /* "Pune branch ke pending KYC clients date wise", "November birthday wale", "AUM above 10 lakh". */
+  const slice = riaQueryFilterEngine(q);
+  const plainDobList = slice && slice.source==='clients' && slice.dobMode && !slice.period && !slice.age && !slice.amounts.length && !slice.status.length && !slice.cityWord;
+  if(slice && !plainDobList){ ai.flow = null; riaAnswerFilter(slice); return {}; }
+  /* A list of people ("Varanasi branch ke clients ka DOB wise data") before one person. */
+  const group = /\b(clients|customers|investors|branch|branches|sabhi|saare|sab|all|list|wise|report)\b/i.test(q);
+  const dob = group ? riaDobIntent(q) : null;
   if(dob){ ai.flow = null; await riaAnswerGroup('dob', dob.by==='all' ? {by:'all'} : {by:'branch', value: dob.value}); return {}; }
-  if(riaBareName(q) && !(typeof bossPageOpenIntent==='function' && bossPageOpenIntent(q))){ ai.flow = {topic:'profile', step:'await_value', lookupBy:'name'}; await riaResolve(q); return {}; }
+  if(riaBareName(q) && !(typeof bossPageOpenIntent==='function' && bossPageOpenIntent(q))){ ai.flow = {topic:'personal', step:'await_value', lookupBy:'name'}; await riaResolve(q); return {}; }
+  /* A question about someone by name. One client: a personal question is
+     answered here, anything else goes on with that client. Several: the
+     list, by full name, and the question waits for the pick. */
+  const who = group ? null : riaNameHits(q);
+  if(who){
+    const fields = riaAskedFields(q), personal = fields.length > 0 || RIA_PERSONAL_RE.test(q);
+    const topic = personal ? 'personal' : /\bkyc\b/i.test(q) ? 'kyc' : /\bmandate/i.test(q) ? 'mandate' : /\bsips?\b/i.test(q) ? 'sip' : /\b(transactions?|txns?)\b/i.test(q) ? 'txn' : 'chat';
+    if(who.list.length === 1){
+      /* One client: personal data is answered here; any other question goes on
+         to the usual answer with that client's records, and no other's. */
+      if(topic!=='personal'){ ai.forceClient = who.list[0].id; return null; }
+      ai.flow = null; riaAnswerClient(topic, who.list[0], fields); return {};
+    }
+    riaAskWhich(who.list, who.said, {topic, fields, pendingQuestion: q});
+    return {};
+  }
   return null;
+}
+/* Clients a question names. Every word of a name in the question picks
+   that client outright; otherwise any name word of three letters or more
+   that the question uses. Common words, field words and branch names are
+   never taken for a name. */
+const RIA_NOT_NAMES = new Set(('the and for what how can are was with this that show give tell please batao bataiye bataye dikhao dikha dikhaiye kya hai hain karo kar '
+  + 'aur mera meri mere uska uski unka unki iska iski client clients customer investor details detail personal profile data date birth dob pan card number mobile phone '
+  + 'email mail address nominee status kyc mandate sip sips portfolio holdings holding transaction transactions report pdf summary list all branch chart analysis risk tax '
+  + 'fund funds scheme schemes value total aum account bank iin ucc janam age anniversary occupation about info information jankari wala wali sab sabhi from need want '
+  + 'which who whose when where why does did has have just also only send open check find get see view latest today new old more less than market zone policy plan '
+  + 'goal goals review reviews meeting meetings task tasks lead leads query queries ticket tickets switch buy sell hold safe risky bucket gab huf trust legacy projection future').split(' '));
+function riaNameHits(q){
+  const qn = riaNorm(q), qw = qn.split(' ').filter(Boolean);
+  const branches = new Set(riaVisible().flatMap(c=>riaNorm(c.branch).split(' ')));
+  const keys = qw.filter(w=>w.length >= 3 && !RIA_NOT_NAMES.has(w) && !RIA_HONORIFICS.has(w) && !branches.has(w) && !/^\d+$/.test(w));
+  if(!keys.length) return null;
+  const cs = riaVisible();
+  const exact = cs.filter(c=>{ const nw = riaNameWords(c).filter(w=>w.length > 1); return nw.length >= 2 && nw.every(w=>qw.includes(w)); });
+  if(exact.length) return {list: exact, said: riaNameWords(exact[0]).join(' ')};
+  const hits = cs.filter(c=>riaNameWords(c).some(w=>w.length >= 3 && keys.includes(w)));
+  if(!hits.length) return null;
+  const said = keys.filter(k=>hits.some(c=>riaNameWords(c).includes(k))).join(' ');
+  return {list: hits, said};
 }
 /* A value for the lookup in hand: one client, a choice of several, or a group. */
 async function riaResolve(value, soft){
@@ -62905,18 +62986,27 @@ async function riaResolve(value, soft){
     return true;
   }
   ai.flow = null;
-  if(hits.length === 1){ riaAnswerClient(topic, hits[0]); return true; }
-  const list = hits.slice(0, 10);
-  riaPushBot({content: riaN(hits.length) + ' clients match. Click the one you mean:' + (hits.length > 10 ? ' (the first 10; type more of the ' + RIA_ASK_FOR[by].toLowerCase() + ' to narrow it)' : ''),
-    ui:{kind:'list', items: list.map((c, i)=>({label: (i + 1) + '. ' + riaClientLine(c), act:{t:'client', id: c.id, topic}}))},
-    actions:[{label:'☰ Main Menu', act:{t:'menu'}}]});
+  if(hits.length === 1){ riaAnswerClient(topic, hits[0], f.fields); return true; }
+  riaAskWhich(hits, String(value), {topic, fields: f.fields});
   return true;
+}
+/* "Found 4 clients matching 'Priya'": every one, by full name, to click —
+   or to answer with its number. The question waits until one is picked. */
+const RIA_PICK_MAX = 40;
+function riaAskWhich(hits, said, pending){
+  const list = hits.slice(0, RIA_PICK_MAX);
+  ai.flow = Object.assign({step:'disambiguate_client', candidates: list.map(c=>c.id)}, pending);
+  riaPushBot({content:'Found **' + riaN(hits.length) + ' clients** matching \u2018' + said + '\u2019. Click the exact client (by full name) to continue:'
+      + (hits.length > list.length ? ' (the first ' + list.length + '; type more of the name to narrow it)' : ''),
+    ui:{kind:'list', items: list.map((c, i)=>({label: (i + 1) + '. ' + riaClientLine(c), act:{t:'client', id: c.id, topic: pending.topic, fields: pending.fields, question: pending.pendingQuestion}}))},
+    actions:[{label:'☰ Main Menu', act:{t:'menu'}}]});
 }
 function riaClientLine(c){
   const code = c.uccNo || c.canIinNo || (typeof clientCode==='function' ? clientCode(c) : '') || c.id;
-  const pan = c.pan ? 'PAN ' + bossMask(c.pan, 4) : '';
+  const pan = c.pan ? 'PAN: …' + String(c.pan).slice(-4) : '';
+  const mob = c.mobile ? 'Mob: …' + String(c.mobile).replace(/\D/g, '').slice(-4) : '';
   const aum = numVal(clientBookAum(c));
-  return [clientDisplayName(c), c.branch || '', code, pan, aum ? 'AUM ' + riaCompact2(aum) : ''].filter(Boolean).join(' · ');
+  return [clientDisplayName(c), c.branch || '', code, pan, mob, aum ? 'AUM ' + riaCompact2(aum) : ''].filter(Boolean).join(' · ');
 }
 
 /* ---- the answers ---- */
@@ -62926,9 +63016,10 @@ const RIA_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct',
 function riaBirthMonth(c){ const d = new Date(riaDob(c)); return isNaN(d.getTime()) ? 'DOB not on file' : RIA_MONTHS[d.getMonth()]; }
 const riaDate = d => { if(!d) return ''; try{ return fmtDate(String(d).slice(0, 10)); }catch(e){ return String(d); } };
 function riaClientActions(c){
-  return [{label:'KYC & IIN Status', act:{t:'topic', topic:'kyc', clientId:c.id}}, {label:'Mandate Status', act:{t:'topic', topic:'mandate', clientId:c.id}},
+  return [{label:'Personal Profile & DOB / PAN', act:{t:'topic', topic:'personal', clientId:c.id}},
+    {label:'KYC & IIN Status', act:{t:'topic', topic:'kyc', clientId:c.id}}, {label:'Mandate Status', act:{t:'topic', topic:'mandate', clientId:c.id}},
     {label:'Active SIPs', act:{t:'topic', topic:'sip', clientId:c.id}}, {label:'Transactions', act:{t:'topic', topic:'txn', clientId:c.id}},
-    {label:'Portfolio & Risk Charts', act:{t:'topic', topic:'holdings', clientId:c.id}}, {label:'DOB & Profile', act:{t:'topic', topic:'dob', clientId:c.id}},
+    {label:'Portfolio & Risk Charts', act:{t:'topic', topic:'holdings', clientId:c.id}},
     {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'↗ Open Account', act:{t:'open', id:c.id}}, {label:'☰ Main Menu', act:{t:'menu'}}];
 }
 function riaClientTxns(c, re){
@@ -62936,7 +63027,54 @@ function riaClientTxns(c, re){
     .sort((a,b)=>String(b.initiatedDate||b.createdAt||'').localeCompare(String(a.initiatedDate||a.createdAt||'')));
 }
 const riaTxnRow = t => [riaDate(t.initiatedDate || t.createdAt), t.transactionType || '', t.schemeId ? schemeName(t.schemeId) : (t.schemeName || ''), money(numVal(t.amount)), t.status || ''];
-function riaAnswerClient(topic, c){
+/* Which personal fields a question asks for: "Priya ka DOB aur PAN card no". */
+const RIA_FIELD_WORDS = [
+  ['dob', /\b(dob|d\.o\.b|date of birth|birth ?day|birth ?date|janam|janm|age|umar|umra)\b/i],
+  ['pan', /\bpan\b/i], ['mobile', /\b(mobile|phone|contact|mob|cell)\b/i], ['email', /\b(e-?mail|mail ?id)\b/i],
+  ['address', /\b(address|pata|city|state|pincode|pin code)\b/i], ['nominee', /\bnominee/i], ['iin', /\b(iin|ucc)\b/i],
+  ['anniversary', /\b(anniversary|shaadi)\b/i], ['occupation', /\b(occupation|profession|job)\b/i], ['bank', /\b(bank|ifsc)\b/i]];
+const RIA_PERSONAL_RE = /\b(personal|profile|details?|jankari|information|info|bio ?data)\b/i;
+function riaAskedFields(q){ return RIA_FIELD_WORDS.filter(([, re])=>re.test(q)).map(([k])=>k); }
+const riaNomineeOf = c => c.firstNomineeName || ((c.cif_nominees||[])[0]||{}).name || '';
+const riaNomineeRelOf = c => c.firstNomineeRelation || c.nomineeRelation || ((c.cif_nominees||[])[0]||{}).relation || '';
+function riaAddressOf(c){ return [c.mailingStreet || c.street || c.address, recCity(c), c.mailingState || c.state, c.mailingZip || c.pincode].filter(Boolean).join(', '); }
+/* The exact field asked for, first: "**NAME — Date of Birth:** 14 May 1988 (Age: 38 yrs) · **PAN:** …". */
+function riaLeadLine(c, fields){
+  const dob = riaDob(c), age = calcAge(dob), out = [];
+  const say = {dob: ['Date of Birth', dob ? riaDate(dob) + (age!==null ? ' (Age: ' + age + ' yrs)' : '') : 'not on file'], pan: ['PAN', c.pan || 'not on file'],
+    mobile: ['Mobile', c.mobile || 'not on file'], email: ['Email', c.email || 'not on file'], address: ['Address', riaAddressOf(c) || 'not on file'],
+    nominee: ['Nominee', riaNomineeOf(c) ? riaNomineeOf(c) + (riaNomineeRelOf(c) ? ' (' + riaNomineeRelOf(c) + ')' : '') : 'none registered'],
+    iin: ['IIN / UCC', [c.canIinNo, c.uccNo].filter(Boolean).join(' / ') || 'not on file'], anniversary: ['Anniversary', riaDate(c.anniversaryDate || c.anniversary) || 'not on file'],
+    occupation: ['Occupation', c.profession || c.occupation || 'not on file'], bank: ['Bank', [c.bankName, c.ifsc || c.ifscCode].filter(Boolean).join(' · ') || 'not on file']};
+  (fields||[]).forEach((k, i)=>{ const v = say[k]; if(v) out.push(i===0 ? '**' + clientDisplayName(c) + ' — ' + v[0] + ':** ' + v[1] : '**' + v[0] + ':** ' + v[1]); });
+  return out.join(' · ');
+}
+function riaPersonalCard(c){
+  const dob = riaDob(c), age = calcAge(dob), code = c.uccNo || c.canIinNo || (typeof clientCode==='function' ? clientCode(c) : '') || c.id;
+  const rel = riaNomineeRelOf(c), nom = riaNomineeOf(c);
+  return [
+    ['Full name', clientDisplayName(c)], ['Client ID / Code', code],
+    ['Date of birth', dob ? riaDate(dob) + (age!==null ? ' (Age: ' + age + ' yrs)' : '') : ''], ['Anniversary', riaDate(c.anniversaryDate || c.anniversary)],
+    ['PAN card no.', c.pan || ''], ['Tax status', RIA_SEGMENTS.tax.of(c)],
+    ['Mobile no.', c.mobile || ''], ['Email ID', c.email || ''],
+    ['Address', riaAddressOf(c)], ['Occupation', c.profession || c.occupation || ''],
+    ['Gender / Marital status', [c.gender, c.maritalStatus].filter(Boolean).join(' / ')],
+    ['IIN / UCC no.', [c.canIinNo, c.uccNo].filter(Boolean).join(' / ') + (c.accountActivated ? ' (activated: ' + c.accountActivated + ')' : '')],
+    ['KYC status', RIA_SEGMENTS.kyc.of(c)], ['Mandate status', RIA_SEGMENTS.mandate.of(c)],
+    ['Bank', [c.bankName, c.ifsc || c.ifscCode ? 'IFSC ' + (c.ifsc || c.ifscCode) : '', c.accNo ? 'A/c ending ' + String(c.accNo).slice(-4) : ''].filter(Boolean).join(' · ')],
+    ['Nominee', nom ? nom + (rel ? ' (' + rel + ')' : '') : 'No nominee registered'],
+    ['Risk profile', c.riskProfile || c.iseqCategory || ''],
+    ['Branch', c.branch || ''], ['Relationship manager', riaRmOf(c)[0] || ''],
+    ['Total AUM', money(numVal(clientBookAum(c)))], ['Monthly SIP', money(numVal(clientBookSip(c)))]];
+}
+function riaAnswerClient(topic, c, fields){
+  if(topic==='personal' || topic==='dob'){
+    const rows = riaPersonalCard(c), lead = riaLeadLine(c, fields);
+    const turn = {actions: riaClientActions(c), deskClient: c.id,
+      content: (lead ? lead + '\n\n' : '') + '**Client Personal & KYC Profile**\n' + rows.map(([k, v])=>'**' + k + ':** ' + (v==null || v==='' ? 'not recorded' : v)).join('\n'),
+      table: {title:'Personal & KYC profile — ' + clientDisplayName(c), cols:['Field', 'Value'], rows: rows.map(([k, v])=>[k, v==null || v==='' ? 'not recorded' : v]), show: 40}};
+    return riaPushBot(turn);
+  }
   const name = clientDisplayName(c), head = '**' + name + '** · ' + [c.uccNo || c.canIinNo || c.id, c.branch, riaRmOf(c)[0] ? 'RM ' + riaRmOf(c)[0] : ''].filter(Boolean).join(' · ');
   const L = [head, ''], turn = {actions: riaClientActions(c), deskClient: c.id};       // "↗ Open Account" is among the actions
   const kv = (k, v) => L.push('**' + k + ':** ' + (v==null || v==='' ? 'not recorded' : v));
@@ -62946,7 +63084,7 @@ function riaAnswerClient(topic, c){
     kv('KYC status', RIA_SEGMENTS.kyc.of(c));
     kv('IIN / UCC', [c.canIinNo, c.uccNo].filter(Boolean).join(' / '));
     kv('Account activated', c.accountActivated);
-    kv('PAN', c.pan ? bossMask(c.pan, 4) : '');
+    kv('PAN', c.pan || '');
     kv('Tax status', RIA_SEGMENTS.tax.of(c));
     kv('Nominee', c.firstNomineeName ? 'Registered (' + c.firstNomineeName + ')' : 'No nominee registered');
     const next = RIA_SEGMENTS.kyc.actions[RIA_SEGMENTS.kyc.of(c)]; if(next) kv('Next step', next);
@@ -62980,7 +63118,7 @@ function riaAnswerClient(topic, c){
     L.push(list.length ? riaN(list.length) + ' open task' + (list.length===1 ? '' : 's') + '.' : 'No open tasks.');
     if(list.length) turn.table = {title:'Open tasks', cols:['Task', 'Type', 'Due', 'Status', 'Owner'], rows: list.map(t=>[t.title || '', t.taskType || '', riaDate(t.dueDate), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo)])};
   }
-  if(topic==='dob'){
+  if(topic==='dob-old'){
     const dob = riaDob(c);
     kv('Date of birth', dob ? riaDate(dob) : ''); kv('Age', dob ? calcAge(dob) + ' years (' + riaAgeGroup(c) + ')' : '');
     kv('Anniversary', riaDate(c.anniversaryDate || c.anniversary)); kv('Gender', c.gender); kv('Occupation', c.occupation);
@@ -62998,7 +63136,8 @@ function riaAnswerClient(topic, c){
   riaPushBot(turn);
 }
 function riaGroupActions(g){
-  return [{label:'DOB & Age List', act:{t:'topic', topic:'dob', group:g}}, {label:'KYC Breakdown', act:{t:'topic', topic:'kyc', group:g}},
+  return [{label:'DOB & Age List', act:{t:'topic', topic:'dob', group:g}}, {label:'Date-wise (created date)', act:{t:'topic', topic:'datewise', group:g}},
+    {label:'KYC Breakdown', act:{t:'topic', topic:'kyc', group:g}},
     {label:'Mandate Breakdown', act:{t:'topic', topic:'mandate', group:g}}, {label:'SIP & AUM Summary', act:{t:'topic', topic:'sip', group:g}},
     {label:'⬇ Download Excel', act:{t:'dl', fmt:'xlsx'}}, {label:'⬇ Download CSV', act:{t:'dl', fmt:'csv'}}, {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'☰ Main Menu', act:{t:'menu'}}];
 }
@@ -63008,6 +63147,7 @@ async function riaAnswerGroup(topic, g){
   const turn = {actions: riaGroupActions(g || {by:'all'})};
   const L = ['**' + label + '** — ' + riaN(clients.length) + ' client' + (clients.length===1 ? '' : 's') + '.', ''];
   if(!clients.length){ turn.content = L[0] + ' No clients to show.'; return riaPushBot(turn); }
+  if(topic==='datewise') return riaAnswerFilter({source:'clients', rows: clients, scopeLabel: label, dateWise: true, status: [], amounts: []});
   if(topic==='dob' || topic==='profile'){
     const key = c => { const d = new Date(riaDob(c)); return isNaN(d.getTime()) ? 9999 : d.getMonth() * 100 + d.getDate(); };
     const rows = clients.slice().sort((a,b)=>key(a) - key(b) || String(clientDisplayName(a)).localeCompare(String(clientDisplayName(b))));
@@ -63087,6 +63227,221 @@ function riaDownloadTable(ti, fmt){
   if(fmt==='csv'){ aiDownload(aiCsvOf(rows.map(r=>Object.fromEntries(tb.cols.map((c, k)=>[c, r[k]]))), tb.cols), base + '.csv', 'text/csv'); return base + '.csv'; }
   aiDownload(xlsxBuild([{name: (tb.title || 'Report').slice(0, 31), cols: tb.cols, rows}]), base + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   return base + '.xlsx';
+}
+
+/* =====================================================================
+   RIA AI — ANY SLICE OF THE BOOK: BRANCH × DATE × DOB × STATUS × AMOUNT
+
+   "Varanasi branch ke clients date wise", "Varanasi branch ke November
+   birthday wale clients", "Mumbai branch mein October 2026 ke leads date
+   wise", "Pune branch ke pending KYC clients", "Varanasi branch ke 60+ age
+   wale", "1 Oct se 18 Nov tak Varanasi branch ke transactions", "AUM above
+   10 lakh". Read off the question here, run on the records this user may
+   see, and answered with the matched rows in date order, a dashboard of
+   that exact slice, and Excel / CSV / PDF — no model call.
+   ===================================================================== */
+const RIA_MONTH_RE = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/gi;
+const riaMonthIdx = m => ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(String(m).toLowerCase().slice(0, 3));
+const riaIso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const riaDay = (y, m, d) => riaIso(new Date(y, m, d));
+const RIA_DOB_WORDS = /\b(dob|d\.o\.b|date of birth|birth ?days?|birth ?dates?|janam ?din|janamdin|janm|janam|born|age|aged|umar|umra|senior|seniors)\b/i;
+const RIA_DATEWISE = /\b(date|tarikh|tareekh|month|year|mahine|saal|din)[- ]?wise\b|\bdate ?wise\b|\bby date\b|\bchronolog/i;
+/* The period a question names, as dates [from, to] (inclusive). */
+function riaParsePeriod(q, now){
+  now = now || new Date();
+  const t = String(q||'').toLowerCase(), Y = now.getFullYear(), M = now.getMonth(), D = now.getDate();
+  const mon = s => riaMonthIdx(s);
+  let m;
+  if((m = t.match(/(\d{4}-\d{2}-\d{2})\s*(?:to|se|-|till|tak|until|and)\s*(\d{4}-\d{2}-\d{2})/))) return {from: m[1], to: m[2], label: m[1] + ' to ' + m[2], explicit: true};
+  if((m = t.match(/\b(\d{1,2})\s*([a-z]{3,9})\s*(\d{4})?\s*(?:to|se|-|till|tak|until)\s*(\d{1,2})\s*([a-z]{3,9})\s*(\d{4})?/)) && mon(m[2]) >= 0 && mon(m[5]) >= 0){
+    const y2 = m[6] ? Number(m[6]) : Y, y1 = m[3] ? Number(m[3]) : (mon(m[2]) > mon(m[5]) && !m[6] ? y2 - 1 : y2);
+    return {from: riaDay(y1, mon(m[2]), Number(m[1])), to: riaDay(y2, mon(m[5]), Number(m[4])), label: m[1] + ' ' + m[2] + ' to ' + m[4] + ' ' + m[5], explicit: true};
+  }
+  if((m = t.match(/\b((?:19|20)\d{2})\s*(?:se|to|-|till|tak|until)\s*((?:19|20)\d{2})\b/))) return {from: m[1] + '-01-01', to: m[2] + '-12-31', label: m[1] + '–' + m[2], explicit: true, years: [Number(m[1]), Number(m[2])]};
+  if((m = t.match(/\b(?:before|pehle|se pehle)\s+((?:19|20)\d{2})\b|\b((?:19|20)\d{2})\s+(?:se pehle|ke pehle|before)\b/))){ const y = Number(m[1] || m[2]); return {from: '1900-01-01', to: (y - 1) + '-12-31', label: 'before ' + y, explicit: true, years: [1900, y - 1]}; }
+  if((m = t.match(/\b(?:after|ke baad|se baad)\s+((?:19|20)\d{2})\b|\b((?:19|20)\d{2})\s+(?:ke baad|se baad|after)\b/))){ const y = Number(m[1] || m[2]); return {from: (y + 1) + '-01-01', to: '2999-12-31', label: 'after ' + y, explicit: true, years: [y + 1, 2999]}; }
+  if(/\b(today|aaj)\b/.test(t)) return {from: riaDay(Y, M, D), to: riaDay(Y, M, D), label: 'today', rel: 'today'};
+  if(/\b(yesterday|kal)\b/.test(t)) return {from: riaDay(Y, M, D - 1), to: riaDay(Y, M, D - 1), label: 'yesterday'};
+  if((m = t.match(/\b(?:last|pichhle|pichle|past)\s+(\d{1,3})\s*(days?|din|months?|mahine|weeks?|hafte)\b/))){
+    const n = Number(m[1]), unit = m[2], from = new Date(now);
+    if(/day|din/.test(unit)) from.setDate(D - n + 1); else if(/week|hafte/.test(unit)) from.setDate(D - n * 7 + 1); else from.setMonth(M - n);
+    return {from: riaIso(from), to: riaIso(now), label: 'last ' + n + ' ' + unit};
+  }
+  if(/\b(last week|pichhle hafte|pichle hafte)\b/.test(t)){ const s = new Date(Y, M, D - ((now.getDay() + 6) % 7) - 7); return {from: riaIso(s), to: riaIso(new Date(s.getFullYear(), s.getMonth(), s.getDate() + 6)), label: 'last week'}; }
+  if(/\b(this week|is hafte|iss hafte)\b/.test(t)){ const s = new Date(Y, M, D - ((now.getDay() + 6) % 7)); return {from: riaIso(s), to: riaIso(new Date(s.getFullYear(), s.getMonth(), s.getDate() + 6)), label: 'this week', rel: 'week'}; }
+  if(/\b(last month|pichhle mahine|pichle mahine)\b/.test(t)) return {from: riaDay(Y, M - 1, 1), to: riaDay(Y, M, 0), label: 'last month', month: (M + 11) % 12};
+  if(/\b(this month|is mahine|iss mahine)\b/.test(t)) return {from: riaDay(Y, M, 1), to: riaDay(Y, M + 1, 0), label: 'this month', month: M, rel: 'month'};
+  if(/\b(fy|financial year)\b/.test(t)){ const fy = M >= 3 ? Y : Y - 1; return {from: fy + '-04-01', to: (fy + 1) + '-03-31', label: 'FY ' + fy + '–' + String(fy + 1).slice(2)}; }
+  if(/\b(this year|is saal|iss saal)\b/.test(t)) return {from: Y + '-01-01', to: Y + '-12-31', label: 'this year'};
+  const months = []; let mm; RIA_MONTH_RE.lastIndex = 0;
+  while((mm = RIA_MONTH_RE.exec(t))){ const k = mon(mm[1]); if(k >= 0 && !months.includes(k)) months.push(k); }
+  const year = (t.match(/\b((?:19|20)\d{2})\b/) || [])[1];
+  if(months.length){
+    const y = year ? Number(year) : Y, a = Math.min(...months), b = Math.max(...months);
+    return {from: riaDay(y, a, 1), to: riaDay(y, b + 1, 0), label: months.map(k=>RIA_MONTHS[k]).join(', ') + (year ? ' ' + year : ''), months, explicit: !!year, year: year ? Number(year) : null};
+  }
+  if(year) return {from: year + '-01-01', to: year + '-12-31', label: year, explicit: true, years: [Number(year), Number(year)]};
+  return null;
+}
+/* Age asked for: "60+", "above 60", "30 to 45 age", "below 30", "senior". */
+function riaParseAge(q){
+  const t = String(q||'').toLowerCase(); let m;
+  if((m = t.match(/\b(\d{2})\s*(?:to|se|-)\s*(\d{2})\s*(?:age|saal|years?|yrs|ke|wale|umar)?\b/)) && /age|saal|years?|yrs|umar|aged/.test(t) && Number(m[2]) < 120) return {min: Number(m[1]), max: Number(m[2])};
+  if((m = t.match(/\b(\d{2})\s*\+/)) || (m = t.match(/\b(?:above|over|more than|greater than|older than)\s*(\d{2})\b/)) || (m = t.match(/>\s*(\d{2})\b/)) || (m = t.match(/\b(\d{2})\s*(?:se zyada|se upar|ke upar)\b/))) return {min: Number(m[1]) + (/\+/.test(m[0]) ? 0 : /above|over|more|greater|older|>|zyada|upar/.test(m[0]) ? 1 : 0)};
+  if((m = t.match(/\b(?:below|under|less than|younger than)\s*(\d{2})\b/)) || (m = t.match(/<\s*(\d{2})\b/)) || (m = t.match(/\b(\d{2})\s*(?:se kam|ke neeche)\b/))) return {max: Number(m[1]) - 1};
+  if(/\bseniors?\b|senior citizen/.test(t)) return {min: 60};
+  return null;
+}
+/* "AUM above 10 lakh", "SIP > 5000", "zero SIP". */
+function riaParseAmounts(q){
+  const t = String(q||'').toLowerCase().replace(/,/g, ''), out = [];
+  const re = /\b(aum|sip|amount|value)\b[^0-9<>]{0,24}?(above|over|more than|greater than|>=?|se zyada|below|under|less than|<=?|se kam)\s*(?:rs\.?|₹|inr)?\s*([\d.]+)\s*(lakhs?|lacs?|l|crores?|cr|k|thousand)?/g;
+  let m;
+  while((m = re.exec(t))){
+    const unit = m[4] || '', n = Number(m[3]) * (/^l/.test(unit) ? 1e5 : /^c/.test(unit) ? 1e7 : /^(k|thousand)/.test(unit) ? 1e3 : 1);
+    out.push({field: m[1]==='sip' ? 'sip' : m[1]==='aum' || m[1]==='value' ? 'aum' : 'amount', op: /above|over|more|greater|>|zyada/.test(m[2]) ? 'gt' : 'lt', value: n,
+      label: m[1].toUpperCase() + (/above|over|more|greater|>|zyada/.test(m[2]) ? ' above ' : ' below ') + (unit ? m[3] + ' ' + unit : money(n))});
+  }
+  if(/\b(zero|no|without|bina)\s+sips?\b|\bsip\s*(?:=\s*0|zero|nahi)\b/.test(t)) out.push({field:'sip', op:'zero', value:0, label:'no SIP'});
+  if(/\bactive\s+sips?\b|\bsip\s+(?:wale|running|chal)/.test(t)) out.push({field:'sip', op:'gt', value:0, label:'active SIP'});
+  return out;
+}
+/* Status words, as tests on a client record. */
+function riaParseStatus(q){
+  const t = String(q||'').toLowerCase(), out = [];
+  if(/\bkyc\b/.test(t)){
+    if(/\b(pending|baaki|incomplete|not validated|non[- ]validated)\b/.test(t)) out.push({label:'pending KYC', test: c=>!RIA_SEGMENTS.kyc.done.test(RIA_SEGMENTS.kyc.of(c))});
+    else if(/\b(on hold|hold|reject)/.test(t)) out.push({label:'KYC on hold / rejected', test: c=>/hold|reject/i.test(RIA_SEGMENTS.kyc.of(c))});
+    else if(/\b(validated|done|complete|verified)\b/.test(t)) out.push({label:'KYC validated', test: c=>RIA_SEGMENTS.kyc.done.test(RIA_SEGMENTS.kyc.of(c))});
+  }
+  if(/\bmandates?\b/.test(t)){
+    if(/\b(pending|baaki|not approved|needed|missing)\b/.test(t)) out.push({label:'mandate pending', test: c=>!RIA_SEGMENTS.mandate.done.test(RIA_SEGMENTS.mandate.of(c))});
+    else if(/\b(approved|active|done)\b/.test(t)) out.push({label:'mandate approved', test: c=>RIA_SEGMENTS.mandate.done.test(RIA_SEGMENTS.mandate.of(c))});
+  }
+  if(/\b(iin|ucc)\b/.test(t)){
+    if(/\b(inactive|not active|no iin|missing)\b/.test(t)) out.push({label:'IIN not active', test: c=>!/^IIN active$/i.test(ANALYTICS_SOURCES.clients.dims.find(d=>d.id==='iin').value(c))});
+    else if(/\bactive\b/.test(t)) out.push({label:'IIN active', test: c=>/^IIN active$/i.test(ANALYTICS_SOURCES.clients.dims.find(d=>d.id==='iin').value(c))});
+  }
+  if(/\b(no|missing|without|bina)\s+nominee|nominee\s+(missing|nahi|pending|not)/.test(t)) out.push({label:'no nominee', test: c=>!riaNomineeOf(c)});
+  const risk = (t.match(/\b(moderately aggressive|moderately conservative|aggressive|moderate|conservative)\b/) || [])[1];
+  if(risk && /\b(risk|profile|iseq|investor|clients?)\b/.test(t)) out.push({label: risk + ' risk profile', test: c=>RIA_SEGMENTS.risk.of(c).toLowerCase().indexOf(risk)===0});
+  const tax = (t.match(/\b(huf|nri|individual|company|trust|firm)\b/) || [])[1];
+  if(tax) out.push({label: tax.toUpperCase() + ' tax status', test: c=>RIA_SEGMENTS.tax.of(c).toLowerCase().includes(tax)});
+  return out;
+}
+const RIA_FILTER_SOURCES = {
+  clients:      {label:'Clients', rows: ()=>riaVisible(), date: r=>r.createdAt, branch: r=>r.branch},
+  leads:        {label:'Leads', rows: ()=>analyticsRecords('leads') || [], date: r=>r.createdAt, branch: r=>r.branch},
+  transactions: {label:'Transactions', rows: ()=>{ const ids = new Map(riaVisible().map(c=>[c.id, c])); return (DB.transactions||[]).filter(t=>!t.deletedAt && ids.has(t.clientId)); },
+                 date: r=>r.initiatedDate || r.createdAt, branch: r=>{ const c = (DB.clients||[]).find(x=>x.id===r.clientId); return (c && c.branch) || r.branch; }},
+  sips:         {label:'SIP registrations', rows: ()=>{ const ids = new Set(riaVisible().map(c=>c.id)); return (DB.platformSips||[]).filter(s=>!s.deletedAt && ids.has(s.clientId)); },
+                 date: r=>r.startDate || r.regDate || r.firstSeenAt, branch: r=>{ const c = (DB.clients||[]).find(x=>x.id===r.clientId); return (c && c.branch) || ''; }},
+  tasks:        {label:'Tasks', rows: ()=>(typeof analyticsTaskRows==='function' ? analyticsTaskRows() : null) || [], date: r=>r.dueDate, branch: r=>r.branch},
+  meetings:     {label:'Meetings', rows: ()=>can('Meetings','view') ? visibleRecords((DB.meetings||[]).filter(m=>!m.deletedAt), r=>r.assignTo, r=>r.branch) : [], date: r=>r.scheduledDate, branch: r=>r.branch},
+};
+/* The question as filters, or null when it is not a request for a slice. */
+function riaQueryFilterEngine(q){
+  const t = String(q||'').toLowerCase();
+  if(typeof riaIntelModules==='function' && riaIntelModules(q).length) return null;
+  const source = /\btransactions?\b|\btxns?\b/.test(t) ? 'transactions' : /\bleads?\b/.test(t) ? 'leads' : /\bmeetings?\b/.test(t) ? 'meetings'
+    : /\btasks?\b|\boverdue\b/.test(t) ? 'tasks' : /\bsips\b|\bsip (?:registrations?|book|list)\b/.test(t) && !/\b(active|zero|no|without)\s+sips?\b/.test(t) ? 'sips' : 'clients';
+  const src = RIA_FILTER_SOURCES[source], all = src.rows();
+  /* Branch, city or RM, as the records spell it. */
+  const n = ' ' + riaNorm(q) + ' ';
+  const branches = [...new Set(all.map(r=>String(src.branch(r)||'').trim()).filter(Boolean))];
+  const bHit = branches.map(b=>({b, core: riaNorm(b).replace(/\bbranch\b/g, '').trim()})).filter(x=>x.core && n.includes(' ' + x.core + ' '));
+  const branchWord = bHit.length ? bHit.sort((a,b)=>b.core.length - a.core.length)[0].core : '';
+  const cityWord = !branchWord && source==='clients' ? ([...new Set(all.map(r=>riaNorm(recCity(r))).filter(Boolean))].find(c=>n.includes(' ' + c + ' ')) || '') : '';
+  const dobMode = source==='clients' && RIA_DOB_WORDS.test(q);
+  const period = riaParsePeriod(q), age = dobMode ? riaParseAge(q) : null, amounts = riaParseAmounts(q), status = source==='clients' ? riaParseStatus(q) : [];
+  const dateWise = RIA_DATEWISE.test(q);
+  const overdue = source==='tasks' && /\boverdue\b/.test(t);
+  /* A slice needs a branch, a DOB filter, an amount, "date wise", or an explicit date range. */
+  const dobFilter = dobMode && (period || age);
+  if(!(branchWord || cityWord || dobFilter || amounts.length || dateWise || (period && period.explicit) || overdue)) return null;
+  return {source, branchWord, cityWord, dobMode, period, age, amounts, status, dateWise, overdue};
+}
+/* Run the filters; the rows in date order. */
+function riaRunFilter(f){
+  const src = RIA_FILTER_SOURCES[f.source], today = riaIso(new Date());
+  let rows = f.rows || src.rows();
+  const applied = f.scopeLabel ? [f.scopeLabel] : [];
+  if(f.branchWord){ rows = rows.filter(r=>riaNorm(src.branch(r)).includes(f.branchWord)); applied.push(f.branchWord.replace(/\b\w/g, x=>x.toUpperCase()) + ' branch'); }
+  if(f.cityWord){ rows = rows.filter(r=>riaNorm(recCity(r))===f.cityWord); applied.push('city ' + f.cityWord); }
+  if(f.dobMode){
+    const p = f.period;
+    if(p){
+      rows = rows.filter(c=>{ const d = new Date(riaDob(c)); if(isNaN(d.getTime())) return false;
+        if(p.rel==='today') return d.getMonth()===new Date().getMonth() && d.getDate()===new Date().getDate();
+        if(p.rel==='week'){ const md = (d.getMonth() + 1) * 100 + d.getDate(), a = new Date(p.from), b = new Date(p.to); const ma = (a.getMonth() + 1) * 100 + a.getDate(), mb = (b.getMonth() + 1) * 100 + b.getDate(); return ma <= mb ? md >= ma && md <= mb : md >= ma || md <= mb; }
+        if(p.years) return d.getFullYear() >= p.years[0] && d.getFullYear() <= p.years[1];
+        if(p.months) return p.months.includes(d.getMonth()) && (!p.year || d.getFullYear()===p.year);
+        if(p.month !== undefined) return d.getMonth()===p.month;
+        return riaIso(d) >= p.from && riaIso(d) <= p.to; });
+      applied.push((p.years ? 'born ' : 'birthday ') + p.label);
+    }
+    if(f.age){ rows = rows.filter(c=>{ const a = calcAge(riaDob(c)); return a!==null && (f.age.min==null || a >= f.age.min) && (f.age.max==null || a <= f.age.max); });
+      applied.push('age ' + (f.age.min!=null && f.age.max!=null ? f.age.min + '–' + f.age.max : f.age.min!=null ? f.age.min + '+' : 'under ' + (f.age.max + 1))); }
+  } else if(f.period){
+    rows = rows.filter(r=>{ const d = String(src.date(r)||'').slice(0, 10); return d && d >= f.period.from && d <= f.period.to; });
+    applied.push(f.period.label);
+  }
+  if(f.overdue){ rows = rows.filter(t=>t.dueDate && t.dueDate < today && !/complete|done|closed|cancel/i.test(String(t.overallStatus||t.status||''))); applied.push('overdue'); }
+  (f.status||[]).forEach(s=>{ rows = rows.filter(s.test); applied.push(s.label); });
+  (f.amounts||[]).forEach(a=>{
+    const get = f.source==='clients' ? (a.field==='sip' ? c=>numVal(clientBookSip(c)) : c=>numVal(clientBookAum(c))) : (r=>numVal(r.amount || r.monthlyAmount));
+    rows = rows.filter(r=>a.op==='gt' ? get(r) > a.value : a.op==='lt' ? get(r) < a.value : get(r)===0); applied.push(a.label);
+  });
+  const key = f.dobMode && !(f.period && f.period.years) && !f.age
+    ? (c=>{ const d = new Date(riaDob(c)); return isNaN(d.getTime()) ? '9999' : String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); })
+    : f.dobMode ? (c=>riaDob(c) || '9999') : (r=>String(src.date(r)||'') || '9999');
+  rows = rows.slice().sort((a,b)=>key(a).localeCompare(key(b)));
+  return {rows, applied, src};
+}
+const riaMob = m => m ? String(m) : '';
+function riaFilterTable(f, rows){
+  const D = r=>riaDate(String(RIA_FILTER_SOURCES[f.source].date(r)||'').slice(0, 10));
+  if(f.source==='clients') return {cols:['Name', f.dobMode ? 'Date of birth' : 'Date added', 'Age', 'Branch', 'RM', 'Stage', 'KYC', 'Mandate', 'AUM', 'SIP', 'Mobile'],
+    rows: rows.map(c=>{ const a = calcAge(riaDob(c)); return [clientDisplayName(c), f.dobMode ? riaDate(riaDob(c)) : D(c), a===null ? '' : a, c.branch || '', riaRmOf(c)[0] || '',
+      stateLabel('CMS', stateOf('CMS', c)), RIA_SEGMENTS.kyc.of(c), RIA_SEGMENTS.mandate.of(c), money(numVal(clientBookAum(c))), money(numVal(clientBookSip(c))), riaMob(c.mobile)]; })};
+  if(f.source==='leads') return {cols:['Name', 'Date added', 'Stage', 'Source', 'Branch', 'RM', 'Mobile'],
+    rows: rows.map(l=>[leadName(l.id), D(l), stateLabel('LMS', stateOf('LMS', l)), l.source || '', l.branch || '', teamName(l.assignedTo), riaMob(l.mobile)])};
+  if(f.source==='transactions') return {cols:['Client', 'Date', 'Type', 'Scheme', 'Amount', 'Status', 'Branch'],
+    rows: rows.map(t=>[clientName(t.clientId), D(t), t.transactionType || '', t.schemeId ? schemeName(t.schemeId) : (t.schemeName || ''), money(numVal(t.amount)), t.status || '', RIA_FILTER_SOURCES.transactions.branch(t)])};
+  if(f.source==='sips') return {cols:['Client', 'Start', 'Scheme', 'Monthly', 'SIP date', 'Branch'],
+    rows: rows.map(s=>[clientName(s.clientId), D(s), s.schemeName || '', money(numVal(s.monthlyAmount || s.amount)), s.sipDate || '', RIA_FILTER_SOURCES.sips.branch(s)])};
+  if(f.source==='tasks') return {cols:['Task', 'Client', 'Due', 'Status', 'Owner', 'Branch'],
+    rows: rows.map(t=>[t.title || '', t.clientId ? clientName(t.clientId) : '', D(t), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo), t.branch || ''])};
+  return {cols:['Subject', 'With', 'Date', 'Status', 'Owner', 'Branch'],
+    rows: rows.map(m=>[m.subject || '', m.clientId ? clientName(m.clientId) : (m.leadId ? leadName(m.leadId) : ''), D(m), m.status || '', teamName(m.assignTo), m.branch || ''])};
+}
+/* The answer to a filtered question: header, the rows in date order, a dashboard, downloads. */
+function riaAnswerFilter(f){
+  const {rows, applied, src} = riaRunFilter(f);
+  const what = (f.dobMode ? 'Clients by date of birth' : (f.dateWise || f.period ? 'Date-wise ' : '') + src.label).replace(/^Date-wise ([A-Z])/, (m, x)=>'Date-wise ' + x.toLowerCase());
+  const title = (applied.length ? applied.map(a=>a.charAt(0).toUpperCase() + a.slice(1)).join(' · ') + ' — ' : '') + what;
+  const tb = riaFilterTable(f, rows);
+  const turn = {content:'**' + title + ' (' + riaN(rows.length) + ' record' + (rows.length===1 ? '' : 's') + '):**\n'
+      + (rows.length ? (f.dobMode && !(f.period && f.period.years) && !f.age ? 'In birthday order (January to December).' : 'In date order, oldest first.') + ' The first ' + Math.min(25, rows.length) + ' are below; every row is in the downloads.'
+        : 'Nothing in your visible records matches all of these filters.'),
+    table: Object.assign({title}, tb), actions:[{label:'⬇ Download Excel', act:{t:'dl', fmt:'xlsx'}}, {label:'⬇ Download CSV', act:{t:'dl', fmt:'csv'}}, {label:'⬇ Download PDF', act:{t:'pdf'}}, {label:'☰ Main Menu', act:{t:'menu'}}]};
+  if(rows.length){
+    const monthOf = r=>{ const d = new Date(f.dobMode ? riaDob(r) : String(src.date(r)||'').slice(0, 10)); return isNaN(d.getTime()) ? 'No date' : f.dobMode ? RIA_MONTHS[d.getMonth()] : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
+    const bm = {}; rows.forEach(r=>{ const k = monthOf(r); bm[k] = (bm[k]||0) + 1; });
+    const order = f.dobMode ? RIA_MONTHS.concat(['No date']) : Object.keys(bm).sort();
+    const charts = [{kind:'kpis', module:'analytics', title: title + ' — at a glance', items:[{label:'Records', value: riaN(rows.length)}, {label:'Filters', value: String(applied.length || 0), note: applied.join(' · ')},
+      {label: f.dobMode ? 'Birth months' : 'Months covered', value: String(Object.keys(bm).filter(k=>k!=='No date').length)}]}];
+    if(f.source==='clients'){
+      const g = f.dobMode ? analyticsGroup(rows, riaAgeGroup) : analyticsGroup(rows, c=>RIA_SEGMENTS.kyc.of(c));
+      charts.push({kind:'donut', module:'analytics', fmt:'count', title:(f.dobMode ? 'Age group' : 'KYC status') + ' — ' + title, items: g.map(x=>({label:x.label, value:x.count})), centre: riaN(rows.length), centreNote:'clients'});
+    } else {
+      const sk = {}; rows.forEach(r=>{ const k = (f.source==='leads' ? stateLabel('LMS', stateOf('LMS', r)) : r.status || r.overallStatus) || 'Not recorded'; sk[k] = (sk[k]||0) + 1; });
+      charts.push({kind:'donut', module:'analytics', fmt:'count', title:'Status — ' + title, items: Object.keys(sk).map(k=>({label:k, value:sk[k]})), centre: riaN(rows.length), centreNote:'records'});
+    }
+    charts.push({kind:'hbar', module:'analytics', fmt:'count', title:(f.dobMode ? 'Birth month' : 'Month-wise') + ' — ' + title, series:['records'], rows: order.filter(k=>bm[k]).map(k=>({label:k, values:[bm[k]]}))});
+    turn.charts = charts;
+  }
+  riaPushBot(turn);
 }
 
 /* ---------------------------------------------------------------------
