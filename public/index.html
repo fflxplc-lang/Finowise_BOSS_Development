@@ -63338,12 +63338,17 @@ const RIA_FILTER_SOURCES = {
                  date: r=>r.startDate || r.regDate || r.firstSeenAt, branch: r=>{ const c = (DB.clients||[]).find(x=>x.id===r.clientId); return (c && c.branch) || ''; }},
   tasks:        {label:'Tasks', rows: ()=>(typeof analyticsTaskRows==='function' ? analyticsTaskRows() : null) || [], date: r=>r.dueDate, branch: r=>r.branch},
   meetings:     {label:'Meetings', rows: ()=>can('Meetings','view') ? visibleRecords((DB.meetings||[]).filter(m=>!m.deletedAt), r=>r.assignTo, r=>r.branch) : [], date: r=>r.scheduledDate, branch: r=>r.branch},
+  business:     {label:'Business entries (DBT)', rows: ()=>can('Business','view') ? visibleRecords((DB.businessEntries||[]).filter(x=>!x.deletedAt), r=>r.assignedTo||r.createdBy, r=>r.branch) : [],
+                 date: r=>r.entryDate || r.createdAt, branch: r=>r.branch},
+  calls:        {label:'Call logs', rows: ()=>can('Calls','view') ? visibleRecords((DB.callEntries||[]).filter(x=>!x.deletedAt), r=>r.loggedBy||r.assignedTo, r=>r.branch) : [],
+                 date: r=>r.callDate || r.createdAt, branch: r=>r.branch},
 };
 /* The question as filters, or null when it is not a request for a slice. */
 function riaQueryFilterEngine(q){
   const t = String(q||'').toLowerCase();
   if(typeof riaIntelModules==='function' && riaIntelModules(q).length) return null;
   const source = /\btransactions?\b|\btxns?\b/.test(t) ? 'transactions' : /\bleads?\b/.test(t) ? 'leads' : /\bmeetings?\b/.test(t) ? 'meetings'
+    : /\b(business entr\w*|dbt|business)\b/.test(t) ? 'business' : /\bcalls?\b|\bcall logs?\b/.test(t) ? 'calls'
     : /\btasks?\b|\boverdue\b/.test(t) ? 'tasks' : /\bsips\b|\bsip (?:registrations?|book|list)\b/.test(t) && !/\b(active|zero|no|without)\s+sips?\b/.test(t) ? 'sips' : 'clients';
   const src = RIA_FILTER_SOURCES[source], all = src.rows();
   /* Branch, city or RM, as the records spell it. */
@@ -63412,6 +63417,10 @@ function riaFilterTable(f, rows){
     rows: rows.map(s=>[clientName(s.clientId), D(s), s.schemeName || '', money(numVal(s.monthlyAmount || s.amount)), s.sipDate || '', RIA_FILTER_SOURCES.sips.branch(s)])};
   if(f.source==='tasks') return {cols:['Task', 'Client', 'Due', 'Status', 'Owner', 'Branch'],
     rows: rows.map(t=>[t.title || '', t.clientId ? clientName(t.clientId) : '', D(t), t.overallStatus || t.status || '', teamName(t.assignTo || t.assignedTo), t.branch || ''])};
+  if(f.source==='business') return {cols:['Date', 'Product', 'Mode', 'Amount', 'With', 'RM', 'Branch'],
+    rows: rows.map(x=>[D(x), x.product || '', x.transactionType || '', money(numVal(x.amount)), x.clientId ? clientName(x.clientId) : (x.leadId ? leadName(x.leadId) : ''), teamName(x.assignedTo || x.createdBy), x.branch || ''])};
+  if(f.source==='calls') return {cols:['Date', 'Type', 'Outcome', 'With', 'By', 'Branch'],
+    rows: rows.map(x=>[D(x), x.callType || '', x.outcome || '', x.clientId ? clientName(x.clientId) : (x.leadId ? leadName(x.leadId) : ''), teamName(x.loggedBy || x.assignedTo), x.branch || ''])};
   return {cols:['Subject', 'With', 'Date', 'Status', 'Owner', 'Branch'],
     rows: rows.map(m=>[m.subject || '', m.clientId ? clientName(m.clientId) : (m.leadId ? leadName(m.leadId) : ''), D(m), m.status || '', teamName(m.assignTo), m.branch || ''])};
 }
