@@ -59702,9 +59702,13 @@ function bossAskAbout(clientId){
 }
 
 /* ---- reading the records a question needs ---- */
+/* Whose client it is, as every CMS screen and the record door read it: the RM.
+   RIA AI used assignedTo here, which imported clients leave blank, so an RM on
+   "own" or "team" scope could open a client's page and RIA AI could not see it. */
+const CMS_CLIENT_OWNER = c => c.rmName;
 function bossCanSeeClient(c){
   if(!c || c.deletedAt || !can('CMS','view')) return false;
-  return visibleRecords([c], r=>r.assignedTo, r=>r.branch).length === 1;
+  return visibleRecords([c], CMS_CLIENT_OWNER, r=>r.branch).length === 1;
 }
 function bossMask(v, keep){
   const s = String(v||''); if(!s) return '';
@@ -59778,7 +59782,7 @@ function riaNameWords(c){ return riaNorm(cleanClientName(clientDisplayName(c))).
 function bossClientsNamedIn(q){
   if(!can('CMS','view')) return [];
   const text = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g,' ') + ' ';
-  const seen = riaConsolidate(visibleRecords((DB.clients||[]).slice(), r=>r.assignedTo, r=>r.branch));
+  const seen = riaConsolidate(visibleRecords((DB.clients||[]).slice(), CMS_CLIENT_OWNER, r=>r.branch));
   const hits = seen.map(c=>{
     const words = riaNameWords(c).filter(w=>w.length>1);
     if(!words.length) return null;
@@ -60265,7 +60269,7 @@ function bossTurnFoot(t){
 const ANALYTICS_BLANK = 'Not recorded';
 function analyticsYesNo(v, yes, no){ return String(v||'').trim() ? yes : no; }
 const ANALYTICS_SOURCES = {
-  clients: {label:'Clients', perm:'CMS', list:()=>DB.clients||[], owner:r=>r.assignedTo, branch:r=>r.branch, dims:[
+  clients: {label:'Clients', perm:'CMS', list:()=>DB.clients||[], owner:r=>CMS_CLIENT_OWNER(r), branch:r=>r.branch, dims:[
     {id:'kyc', label:'KYC Status', words:['kyc'], value:r=>r.kycStatus},
     {id:'risk', label:'Risk Profile', words:['risk','iseq'], value:r=>r.riskProfile || r.iseqCategory},
     {id:'goals', label:'Goal Investment', words:['goal','goals','planning'], value:r=>(typeof clientGoals==='function' && clientGoals(r).length) ? 'Goals mapped' : 'No goals mapped'},
@@ -62768,7 +62772,10 @@ async function riaFind(by, value){
   if(by==='mobile'){ const m = v.replace(/\D/g, '').slice(-10); return {hits: m.length===10 ? cs.filter(c=>String(c.mobile||'').replace(/\D/g, '').slice(-10)===m) : []}; }
   if(by==='name'){
     const ws = n.split(' ').filter(Boolean);
-    return {hits: ws.length ? cs.filter(c=>{ const nw = riaNameWords(c), d = nw.join(' '); return d.includes(n) || ws.every(w=>nw.some(x=>x.indexOf(w)===0)); }) : []};
+    const hits = ws.length ? cs.filter(c=>{ const nw = riaNameWords(c), d = nw.join(' '); return d.includes(n) || ws.every(w=>nw.some(x=>x.indexOf(w)===0)); }) : [];
+    if(hits.length || !ws.length) return {hits};
+    const near = riaNameHits(v);                                       // a near-miss spelling: "aardhya maurya"
+    return {hits: near ? near.list : []};
   }
   if(by==='branch'){
     let group = cs.filter(c=>riaBranchHit(c, n)), what = 'branch';
@@ -63129,10 +63136,25 @@ function riaNameHits(q){
   const cs = riaVisible();
   const exact = cs.filter(c=>{ const nw = riaNameWords(c).filter(w=>w.length > 1); return nw.length >= 2 && nw.every(w=>qw.includes(w)); });
   if(exact.length) return {list: exact, said: riaNameWords(exact[0]).join(' ')};
-  const hits = cs.filter(c=>riaNameWords(c).some(w=>w.length >= 3 && keys.includes(w)));
-  if(!hits.length) return null;
-  const said = keys.filter(k=>hits.some(c=>riaNameWords(c).includes(k))).join(' ');
+  /* Each client scored by how many of the question's words name it — the word
+     itself, or a near miss ("aardhya" for "aaradhya") — and the best kept, so
+     "aardhya maurya" is Aaradhya Maurya, not every Maurya. */
+  const near = (k, w) => k===w || (k.length >= 5 && w.length >= 5 && k[0]===w[0] && riaEditDistance(k, w) <= (Math.max(k.length, w.length) >= 8 ? 2 : 1));
+  const scored = cs.map(c=>{ const nw = riaNameWords(c).filter(w=>w.length >= 3); return {c, n: keys.filter(k=>nw.some(w=>near(k, w))).length}; }).filter(x=>x.n > 0);
+  if(!scored.length) return null;
+  const best = Math.max(...scored.map(x=>x.n)), hits = scored.filter(x=>x.n===best).map(x=>x.c);
+  const said = keys.filter(k=>hits.some(c=>riaNameWords(c).some(w=>near(k, w)))).join(' ');
   return {list: hits, said};
+}
+function riaEditDistance(a, b){
+  if(Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({length: b.length + 1}, (_, j)=>j);
+  for(let i = 1; i <= a.length; i++){
+    const cur = [i];
+    for(let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1]===b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
 }
 /* A value for the lookup in hand: one client, a choice of several, or a group. */
 async function riaResolve(value, soft){
