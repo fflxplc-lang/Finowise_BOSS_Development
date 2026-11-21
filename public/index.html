@@ -35396,12 +35396,39 @@ function diffFields(before, after, fields){
    signed in with for accounts that pre-date the link. Without this the app
    would work as whoever happens to be first in the team list. */
 function bindSignedInMember(){
-  const byId = window.CRM_MEMBER_ID && DB.team.find(t=>t.id===window.CRM_MEMBER_ID);
-  const byEmail = !byId && window.CRM_USER_EMAIL
-    && DB.team.find(t=>(t.email||'').toLowerCase()===String(window.CRM_USER_EMAIL).toLowerCase());
+  const byId = window.CRM_MEMBER_ID && DB.team.find(t=>t.id===window.CRM_MEMBER_ID && !t.deletedAt);
+  const want = String(window.CRM_USER_EMAIL || '').trim().toLowerCase();
+  const live = DB.team.filter(t=>!t.deletedAt);
+  /* The official (sign-in) address first; a personal address only when it is one person's. */
+  const byEmail = !byId && want && (live.find(t=>String(t.email || '').trim().toLowerCase()===want)
+    || (()=>{ const p = live.filter(t=>String(t.personalEmail || '').trim().toLowerCase()===want); return p.length===1 ? p[0] : null; })());
   const member = byId || byEmail;
   if(member){ currentUser = member.id; return member; }
   return null;
+}
+/* A sign-in that belongs to no team member. Before, the page carried on as
+   whoever was first in the team list — the Admin — so a senior or an RM whose
+   account was not linked to their member record opened BOSS as the Admin,
+   with the Admin's profile, access and every client. Now a non-admin account
+   that matches no member gets this screen and nothing else; only an admin
+   account (or a server with no sign-in at all) keeps the first-member start. */
+function signedInWithoutMember(){
+  return !!String(window.CRM_USER_EMAIL || '').trim() && !window.CRM_IS_ADMIN;
+}
+function renderUnlinkedSignIn(){
+  currentUser = null;
+  window.__unlinkedSignIn = true;
+  const who = esc(String(window.CRM_USER_EMAIL || ''));
+  document.body.innerHTML = `<div id="unlinkedSignIn" style="max-width:560px;margin:80px auto;padding:28px;border:1px solid var(--line,#ddd);border-radius:12px;background:var(--card,#fff);font-family:inherit;line-height:1.55">
+    <div style="font-size:18px;font-weight:700;margin-bottom:8px">This sign-in is not linked to a team member</div>
+    <div style="color:var(--muted,#666);font-size:14px">You are signed in as <b>${who}</b>, but no team member in BOSS has this sign-in, so BOSS cannot tell
+      which role, access and records are yours — and it will not open as anyone else.</div>
+    <div style="margin-top:14px;font-size:14px"><b>To fix it, an administrator:</b>
+      <ol style="margin:6px 0 0 18px;padding:0">
+        <li>opens <b>Setup → Team &amp; Access</b> and the team member this is (for example Shubham Seth);</li>
+        <li>sets their <b>Official Email (sign-in identity)</b> to <b>${who}</b>, or gives them a sign-in with this address from there;</li>
+        <li>asks them to sign in again.</li></ol></div>
+    <button class="btn" style="margin-top:18px" onclick="signOut()">Sign out</button></div>`;
 }
 
 async function seedIfEmpty(){
@@ -35475,7 +35502,9 @@ function fullAdminFlags(all){
   // with everything gets them and one set up with nothing starts without.
   const f={}; ADMIN_FLAGS.concat(USER_FLAGS).forEach(a=>f[a]=all?1:0); return f;
 }
-function me(){ return DB.team.find(t=>t.id===currentUser) || DB.team[0]; }
+/* The member working the page. A sign-in that belongs to no member is nobody —
+   not the first member in the list, who is the Admin (renderUnlinkedSignIn). */
+function me(){ if(window.__unlinkedSignIn) return null; return DB.team.find(t=>t.id===currentUser) || DB.team[0]; }
 /* THE NAME A PERMISSION IS FILED UNDER.
 
    Three of the keys the record helpers are handed are not permission
@@ -36084,7 +36113,7 @@ async function boot(){
   await alignPlatformsOnce();
   await alignRolesOnce();
   await migrateQueryPermissions();
-  bindSignedInMember();
+  if(!bindSignedInMember() && signedInWithoutMember()){ renderUnlinkedSignIn(); return; }
   desktopNotifySweep();
   /* Now that the page is the person who signed in: a session left open
      yesterday is reconciled, and the punch reminder is worked out from
