@@ -35415,6 +35415,24 @@ function bindSignedInMember(){
 function signedInWithoutMember(){
   return !!String(window.CRM_USER_EMAIL || '').trim() && !window.CRM_IS_ADMIN;
 }
+/* Off for now: on TEST the Admin's own login is itself a non-admin account
+   linked to no member, so blocking locked the Admin out with everyone else.
+   Until every login is linked (Team & Access → Official Email), an unlinked
+   login starts as before and the page says so in red at the top. Turn this on
+   once they are, and an unlinked login gets the screen instead. */
+const UNLINKED_SIGNIN_BLOCKS = false;
+function showUnlinkedBanner(){
+  if(document.getElementById('unlinkedBanner')) return;
+  const who = esc(String(window.CRM_USER_EMAIL || '')), as = esc((me() || {}).name || 'the first team member');
+  const bar = document.createElement('div');
+  bar.id = 'unlinkedBanner';
+  bar.setAttribute('role', 'alert');
+  bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#b42318;color:#fff;padding:8px 14px;font-size:13px;line-height:1.45;text-align:center';
+  bar.innerHTML = '<b>This sign-in (' + who + ') is not linked to a team member</b>, so BOSS is running as <b>' + as + '</b> — with their access. '
+    + 'An administrator links it in <b>Setup → Team &amp; Access</b>: set the right member’s <b>Official Email (sign-in identity)</b> to ' + who + ', then sign in again. '
+    + '<a href="javascript:void(0)" style="color:#fff;text-decoration:underline;margin-left:6px" onclick="this.parentNode.remove()">Hide</a>';
+  document.body.appendChild(bar);
+}
 function renderUnlinkedSignIn(){
   currentUser = null;
   window.__unlinkedSignIn = true;
@@ -36113,7 +36131,10 @@ async function boot(){
   await alignPlatformsOnce();
   await alignRolesOnce();
   await migrateQueryPermissions();
-  if(!bindSignedInMember() && signedInWithoutMember()){ renderUnlinkedSignIn(); return; }
+  if(!bindSignedInMember() && signedInWithoutMember()){
+    if(UNLINKED_SIGNIN_BLOCKS){ renderUnlinkedSignIn(); return; }
+    setTimeout(showUnlinkedBanner, 0);
+  }
   desktopNotifySweep();
   /* Now that the page is the person who signed in: a session left open
      yesterday is reconciled, and the punch reminder is worked out from

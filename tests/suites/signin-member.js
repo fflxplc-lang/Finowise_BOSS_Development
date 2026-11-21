@@ -36,7 +36,11 @@ suite(async t => {
     await pg.waitForTimeout(400);
     const r = await pg.evaluate(() => ({unlinked: !!document.getElementById('unlinkedSignIn'), text: (document.getElementById('unlinkedSignIn') || {}).textContent || '',
       user: typeof currentUser !== 'undefined' ? currentUser : null, me: typeof me === 'function' && me() ? {name: me().name, role: me().role, scope: me().scope, admin: isAdmin(me())} : null,
-      app: !!document.querySelector('#content'), adminSeen: /Administrator/.test((document.querySelector('.topbar, header, #topbar') || {}).textContent || '')}));
+      app: !!document.querySelector('#content'), adminSeen: /Administrator/.test((document.querySelector('.topbar, header, #topbar') || {}).textContent || ''),
+      banner: (document.getElementById('unlinkedBanner') || {}).textContent || ''}));
+    /* the screen an unlinked sign-in gets once UNLINKED_SIGNIN_BLOCKS is on */
+    if(r.banner) r.blockScreen = await pg.evaluate(() => { renderUnlinkedSignIn(); const el = document.getElementById('unlinkedSignIn');
+      return {screen: !!el, text: el ? el.textContent : '', me: me(), user: currentUser}; });
     await ctx.close();
     return r;
   };
@@ -52,10 +56,12 @@ suite(async t => {
     return 'member ' + senior.id + ' (' + senior.role + ', team scope); account zz.shubham@zz.test, linked to nobody';
   });
 
-  await t.step('1. signed in as an account no member has: a screen that says so — not the Admin, and no app behind it', async () => {
+  await t.step('1. signed in as an account no member has: BOSS opens, and says in red at the top that this sign-in is not linked and how to link it (the blocking screen is ready, switched off)', async () => {
     const r = await signInAs('zz.shubham@zz.test', 'zzpassword1');
-    if(!r.unlinked || r.user || r.me || r.app || !/zz\.shubham@zz\.test/.test(r.text) || !/Team & Access/.test(r.text) || !/Official Email/.test(r.text)) throw new Error(JSON.stringify(Object.assign({}, r, {text: r.text.length})));
-    return '"This sign-in is not linked to a team member" for zz.shubham@zz.test; no current user, no app';
+    const b = r.blockScreen || {};
+    if(r.unlinked || !r.app || !/This sign-in \(zz\.shubham@zz\.test\) is not linked to a team member/.test(r.banner) || !/Team & Access/.test(r.banner) || !/Official Email/.test(r.banner)
+      || !b.screen || b.me || b.user || !/zz\.shubham@zz\.test/.test(b.text)) throw new Error(JSON.stringify(r).slice(0, 700));
+    return 'banner: "' + r.banner.slice(0, 90) + '…"; with blocking on, the screen and nobody signed in';
   });
 
   await t.step('2. the member’s Official Email set to that address: the same sign-in is ZZ Shubham Seth — his role and scope, not an admin', async () => {
