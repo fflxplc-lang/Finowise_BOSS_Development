@@ -36407,6 +36407,7 @@ async function liveReportBuild(){
     const d = await res.json();
     const was = window.CRM_BUILD;
     window.CRM_BUILD = d.build || '';
+    if(!window.CRM_PAGE_BUILD && !was) window.CRM_PAGE_BUILD = window.CRM_BUILD;   // the build this page was loaded from
     live.version = typeof d.version === 'number' ? d.version : live.version;
     if(!live.applied) live.applied = live.version;
     if(!was) console.info('BOSS build ' + window.CRM_BUILD + ' · store version ' + live.version);
@@ -59284,6 +59285,21 @@ function riaAumText(b){
 function aiLooksLikeReport(q){
   return /\breport\b|\bmis\b|\bexcel\b|\bxlsx\b|\bcsv\b|\bspreadsheet\b|\bbranch[- ]wise\b|\brm[- ]wise\b|\bdownload\b/i.test(q);
 }
+/* Whether the server now serves a newer BOSS than this page was loaded from.
+   A tab left open across a deploy keeps running the old code until it is
+   reloaded, and a fix tested in it looks as though it did not work. */
+async function aiPageOutdated(){
+  if(!window.CRM_PAGE_BUILD) return false;
+  try{
+    const ctl = typeof AbortController==='function' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(()=>ctl.abort(), 1500) : null;
+    const res = await fetch('/api/health', {headers: apiHeaders(), cache:'no-store', signal: ctl ? ctl.signal : undefined});
+    if(timer) clearTimeout(timer);
+    if(!res.ok) return false;
+    const d = await res.json();
+    return !!(d.build && d.build !== window.CRM_PAGE_BUILD);
+  }catch(e){ return false; }
+}
 async function aiSend(){
   const el = document.getElementById('aiInput');
   const q = (el ? el.value : ai.draft || '').trim();
@@ -59294,6 +59310,11 @@ async function aiSend(){
   aiAnchorTurn(ai.turns.length - 1);
   ai.busy = true; aiDrawPanel();
   const conv = ai.conv || 0;
+  if(!ai.outdatedSaid && await aiPageOutdated()){
+    ai.outdatedSaid = true;
+    if(typeof liveNewBuildNotice==='function') liveNewBuildNotice();
+    ai.turns.push({role:'assistant', private: true, content:'⚠ **BOSS was updated after this page was opened.** Click **Upgrade!** at the bottom of the screen (or reload the page), then ask again — until then RIA AI answers with the older version.'});
+  }
   let out;
   try{
     const awaiting = !!(ai.flow && ai.flow.step==='await_value');

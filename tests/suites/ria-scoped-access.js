@@ -127,6 +127,24 @@ suite(async t => {
     return 'sees ZZ Other Client only; Aaradhya not found';
   });
 
+  await t.step('8. a page opened before a deploy: RIA AI says once that BOSS was updated, shows Upgrade!, and still answers', async () => {
+    await as(null);
+    const r = await t.eval(async () => {
+      const real = window.CRM_PAGE_BUILD; window.CRM_PAGE_BUILD = 'an-older-build';
+      const ask = async (q) => { const el = document.getElementById('aiInput'); el.value = q; ai.draft = q; await aiSend(); };
+      await ask('aaradhya maurya ka date of birth kya hain');
+      const first = ai.turns.map(x => x.content);
+      await ask('Vishal Kumar Maurya ka DOB batao');
+      const notes = ai.turns.filter(x => /BOSS was updated after this page was opened/.test(x.content)).length;
+      const bar = !!document.getElementById('crmNewBuild');
+      const b = document.getElementById('crmNewBuild'); if(b) b.remove();
+      window.CRM_PAGE_BUILD = real; ai.outdatedSaid = false;
+      return {first, notes, bar, real: !!real};
+    });
+    if(!r.real || r.notes !== 1 || !r.bar || !/BOSS was updated/.test(r.first[1] || '') || !/Aaradhya Maurya — Date of Birth/.test(r.first[2] || '')) throw new Error(JSON.stringify(r).slice(0, 600));
+    return 'one notice, the Upgrade! bar, and the answer after it';
+  });
+
   await t.step('7. an Admin still sees every client', async () => {
     await as(null);
     const r = await t.eval(() => riaVisible().filter(c => /^CMS-SC-/.test(c.id)).map(c => c.cmsName).sort());
