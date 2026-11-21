@@ -44879,9 +44879,10 @@ async function cmsAadhaarStore(clientId, raw, before){
     + 'stored on the server. Open the client and enter it again.');
   return false;
 }
-function openClientForm(id, tab){
+function openClientForm(id, tab, preset){
   if(!mayEditRecord('CMS', id)) return;
-  const client = id? DB.clients.find(c=>c.id===id) : {};
+  /* A new client may start from a draft (RIA AI): its values fill the boxes; nothing is saved until Save. */
+  const client = id? DB.clients.find(c=>c.id===id) : Object.assign({}, preset || {});
   const start = cmsFormStartValues(client || {});
   const fields = [], byKey = {};
   const groups = Object.entries(cmsFieldGroupsVisible()).map(([g, list])=>{
@@ -59296,7 +59297,7 @@ async function aiSend(){
   let out;
   try{
     const awaiting = !!(ai.flow && ai.flow.step==='await_value');
-    const nav = awaiting ? null : bossPageOpenIntent(q);
+    const nav = awaiting || riaDetectClientOnboarding(q) ? null : bossPageOpenIntent(q);
     const desk = nav ? null : await riaDeskHandle(q);
     out = desk ? desk
         : nav ? bossOpenNow(q, nav)
@@ -59314,7 +59315,7 @@ function aiClearDesk(){ ai.flow = null; ai.homeCat = null; }
 async function aiRunChat(q){
   const conv = ai.conv || 0;
   const ctx = aiContextLine(aiConvContext(q));
-  const history = ai.turns.slice(-10).map(t=>({role:t.role, content:t.content}));
+  const history = ai.turns.filter(t=>!t.private).slice(-10).map(t=>({role:t.role, content:t.content}));
   if(ctx) history.unshift({role:'user', content:'(context) '+ctx});
   const r = await aiAsk(history, {});
   aiStale(conv);
@@ -60167,7 +60168,7 @@ async function bossRunChat(q){
   if(dataText.length > 70000) dataText = dataText.slice(0, 70000) + '…(cut: ask a narrower question for the rest)';
   const sys = aiSystemBrief() + '\n' + BOSS_ANSWER_RULES + '\n' + bossOpenRules()
     + '\n\nToday is ' + new Date().toISOString().slice(0,10) + '. ' + aiContextLine(ctx);
-  const history = ai.turns.slice(-8, -1).map(t=>({role:t.role, content:t.content}));
+  const history = ai.turns.slice(-8, -1).filter(t=>!t.private).map(t=>({role:t.role, content:t.content}));
   const ask = (sops.length ? '<sops>\n' + sops.map(bossSopText).join('\n\n') + '\n</sops>\n\n' : '')
     + (Object.keys(data).length ? '<data>\n' + dataText + '\n</data>\n\n' : '<data>none read for this question</data>\n\n')
     + 'Question: ' + q;
@@ -62679,6 +62680,7 @@ function riaFollow(ti, k){
   return riaRun(a.act, a.label).catch(aiIgnoreStale);
 }
 async function riaRun(act, label){
+  if(act && act.t==='onboard'){ riaPushUser(label); const ut = ai.turns[ai.turns.length - 1]; if(ut) ut.private = true; await riaOnboardAct(act); return riaDone(); }
   if(act.t==='menu'){ riaPushUser(label || 'Main Menu'); return riaShowMenu(); }
   if(act.t==='say') return riaAsk(act.text, label);
   if(act.t==='open'){ const o = bossOpen('cms ' + act.id + ' overview'); riaPushUser(label); riaPushBot(o ? {content:'Opened **' + o.label + '**.', opened:o} : {content:'That account is not one you can open.'}); return riaDone(); }
@@ -62808,8 +62810,264 @@ function riaDobIntent(q){
   return {by:'all'};
 }
 /* The desk's turn at a message, before anything else answers it. */
+/* =====================================================================
+   RIA AI — A NEW CLIENT FROM WHAT WAS PASTED
+
+   "Add new client: Name: Rahul Ramesh Sharma, Mobile: 9820123456, PAN:
+   ABCPS1234F, DOB: 14/07/1992, Email: rahul@gmail.com, Branch: Mumbai,
+   Bank: HDFC Bank, A/c: 501004321098, IFSC: HDFC0000123" — or a WhatsApp
+   message or bio-data with labels. RIA AI reads the details into the
+   client form's own fields (accNo, ifsc, mailingZip…), checks each value by
+   the form's own rules, and shows a draft with two choices: the Add Client
+   form already filled in, to review and save; or a direct save, which
+   applies the same rules as the form (its required fields, its formats,
+   a PAN already on file) and goes through the same audit and store.
+   Nothing is read by the AI model: the pasted text and the draft stay on
+   this page and are left out of what later questions send (t.private).
+   Aadhaar is never read from chat (it is stored encrypted, from the form).
+   ===================================================================== */
+const RIA_OB_INTENT = /\b(?:add|create|onboard|register|save|naya|nayi|new|enter)\b[^.?\n]{0,20}\b(?:client|investor|customer)\b|\b(?:client|investor|customer)\b[^.?\n]{0,12}\b(?:add|create|onboard|register|banao|bana\s+do|jodo|add\s+karo|add\s+kar\s+do|save\s+karo)\b/i;
+const RIA_OB_LABELS = [
+  ['secondMobile', 'alternate mobile(?: no\\.?| number)?|alt\\.? mobile|second mobile|other mobile|2nd mobile|alternate (?:number|phone)'],
+  ['cmsName', 'full name|client name|investor name|customer name|cms name|name|naam'],
+  ['salutation', 'salutation'],
+  ['mobile', 'mobile(?: no\\.?| number)?|mob(?:\\.|ile)?(?: no\\.?)?|phone(?: no\\.?| number)?|contact(?: no\\.?| number)?|cell|whatsapp(?: no\\.?)?'],
+  ['email', 'e-?mail(?: id)?|mail id'],
+  ['pan', 'pan(?: no\\.?| number| card)?'],
+  ['dob', 'd\\.?o\\.?b\\.?|date of birth|birth ?date|janam tith?i|janam tarikh'],
+  ['gender', 'gender|sex'],
+  ['branch', 'branch'],
+  ['mailingStreet', 'mailing address|address|addr|street|pata'],
+  ['mailingCity', 'city|shahar|town'],
+  ['mailingState', 'state|rajya'],
+  ['mailingZip', 'pin ?code|pin|zip(?: code)?|postal code'],
+  ['bankName', 'bank name|bank'],
+  ['accNo', 'a/c(?: no\\.?)?|ac no\\.?|account(?: no\\.?| number)?|acc(?:\\.|ount)?(?: no\\.?)?|khata(?: no\\.?)?'],
+  ['ifsc', 'ifsc(?: code)?'],
+  ['maritalStatus', 'marital status|marital'],
+  ['profession', 'profession|occupation|vyavsay'],
+  ['rmName', 'rm name|rm|relationship manager'],
+  ['familyOrIndividual', 'family or individual|client type'],
+  ['investmentsStatus', 'investments? status'],
+  ['insuranceStatus', 'insurance status'],
+  ['productCategory', 'product category|product'],
+  ['aadhaar', 'aadhaa?r(?: no\\.?| number| card)?']];
+const RIA_OB_FIELD_LABEL = {cmsName:'Client name', salutation:'Salutation', mobile:'Mobile', secondMobile:'Second mobile', email:'Email', pan:'PAN',
+  dob:'Date of birth', gender:'Gender', branch:'Branch', mailingStreet:'Address', mailingCity:'City', mailingState:'State', mailingZip:'PIN code',
+  bankName:'Bank', accNo:'A/c no.', ifsc:'IFSC', maritalStatus:'Marital status', profession:'Profession', rmName:'RM', familyOrIndividual:'Family or Individual',
+  productCategory:'Product category', investmentsStatus:'Investments status', insuranceStatus:'Insurance status'};
+const RIA_OB_IFSC_BANK = {HDFC:'HDFC Bank', ICIC:'ICICI Bank', SBIN:'State Bank of India', UTIB:'Axis Bank', KKBK:'Kotak Mahindra Bank', PUNB:'Punjab National Bank',
+  BARB:'Bank of Baroda', CNRB:'Canara Bank', INDB:'IndusInd Bank', IDFB:'IDFC FIRST Bank', YESB:'Yes Bank', UBIN:'Union Bank of India', IOBA:'Indian Overseas Bank',
+  BKID:'Bank of India', MAHB:'Bank of Maharashtra', CBIN:'Central Bank of India', FDRL:'Federal Bank', IDIB:'Indian Bank', UCBA:'UCO Bank', PSIB:'Punjab & Sind Bank'};
+const RIA_OB_MONTHS = {jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12};
+/* "14/07/1992", "14-7-1992", "1992-07-14", "14.07.1992", "14 Jul 1992" → "1992-07-14", or '' when it is not a real past date. */
+function riaObDate(raw){
+  const t = String(raw || '').trim().toLowerCase();
+  let y, m, d, x;
+  if((x = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/))){ y = +x[1]; m = +x[2]; d = +x[3]; }
+  else if((x = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/))){ d = +x[1]; m = +x[2]; y = +x[3]; }
+  else if((x = t.match(/^(\d{1,2})(?:st|nd|rd|th)?[\s-]+([a-z]{3})[a-z]*[\s,-]+(\d{4})/)) && RIA_OB_MONTHS[x[2]]){ d = +x[1]; m = RIA_OB_MONTHS[x[2]]; y = +x[3]; }
+  else return '';
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if(isNaN(dt.getTime()) || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d || y < 1900) return '';
+  const iso = y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+  return iso > new Date().toISOString().slice(0, 10) ? '' : iso;
+}
+const riaObOpt = (opts, v) => { const n = String(v || '').trim().toLowerCase().replace(/\s+and\s+/g, ' & '); return (opts || []).find(o=>String(o).toLowerCase()===n) || ''; };
+/* The client form's own definition of a field. */
+const riaObField = k => (typeof CMS_FIELDS_FLAT !== 'undefined' ? CMS_FIELDS_FLAT : []).find(f=>f.k===k) || null;
+
+/* What was pasted → the client form's fields, or null when it is not a new client. */
+function riaDetectClientOnboarding(text){
+  const s = String(text || '').replace(/\r/g, '').trim();
+  if(!s || s.length > 4000) return null;
+  /* "Label: value", in any order, one per line or comma-separated. */
+  const alts = RIA_OB_LABELS.map(([k, re])=>'(' + re + ')').join('|');
+  const lab = new RegExp('(?:^|[\\n,;|]|\\s)(?:' + alts + ')\\s*(?::|=|-|–|\\bis\\b)\\s*', 'gi');
+  const hits = []; let m;
+  while((m = lab.exec(s))){ const gi = m.slice(1).findIndex(Boolean); if(gi >= 0) hits.push({k: RIA_OB_LABELS[gi][0], start: m.index, end: m.index + m[0].length}); }
+  const labelled = {};
+  hits.forEach((h, i)=>{ const v = s.slice(h.end, i + 1 < hits.length ? hits[i + 1].start : s.length).replace(/^[\s:,-]+|[\s,;.|]+$/g, '').trim(); if(v && !labelled[h.k]) labelled[h.k] = v; });
+  const intent = RIA_OB_INTENT.test(s);
+  const labelledPaste = labelled.cmsName && (labelled.mobile || labelled.pan) && Object.keys(labelled).length >= 3;
+  /* A PAN and a mobile alone are a lookup ("GIYPM3852A ka DOB"), not a new client. */
+  if(!intent && !labelledPaste) return null;
+  if(/\?\s*$/.test(s) && !labelledPaste && !/\b[6-9]\d{9}\b/.test(s)) return null;    // "how do I add a client?"
+  const d = {};
+  const set = (k, v) => { v = String(v == null ? '' : v).trim(); if(v && !d[k]) d[k] = v; };
+  /* the labelled values first, then what the text gives without a label */
+  const nameRaw = labelled.cmsName || ((s.match(/\b(?:client|investor|customer)\b\s*[:\-–]?\s*((?:(?:mr|mrs|ms|dr|shri|smt|kumari)\.?\s+)?[A-Za-z][A-Za-z.]*(?:\s+[A-Za-z][A-Za-z.]*){1,4})/i) || [])[1] || '');
+  if(nameRaw){
+    let nm = nameRaw.split(/[\n,;|]/)[0].replace(/\s+\b(?:mobile|mob|phone|pan|dob|email|e-mail|branch|bank|address|city|state|pin|ifsc|age|contact)\b.*$/i, '').replace(/\d.*$/, '').trim();
+    const sal = nm.match(/^(mr|mrs|ms|dr|shri|smt|kumari)\.?\s+/i);
+    if(sal){ const w = sal[1].toLowerCase(); set('salutation', {mr:'Mr.', shri:'Mr.', mrs:'Mrs.', smt:'Mrs.', ms:'Ms.', kumari:'Ms.', dr:'Dr.'}[w]); nm = nm.slice(sal[0].length); }
+    if(!/^(name|naam|details?|details below)$/i.test(nm)) set('cmsName', nm.replace(/\s+/g, ' ').replace(/\b([a-z])/g, c=>c.toUpperCase()));
+  }
+  const mobs = [labelled.mobile, labelled.secondMobile].filter(Boolean).map(v=>String(v).replace(/\D/g, '').slice(-10))
+    .concat((s.match(/(?:^|[^\d])(?:\+?91[\s-]?)?([6-9]\d{9})(?!\d)/g) || []).map(x=>x.replace(/\D/g, '').slice(-10)));
+  const uniq = [...new Set(mobs.filter(x=>/^[6-9]\d{9}$/.test(x)))];
+  set('mobile', labelled.mobile ? String(labelled.mobile).replace(/\D/g, '').slice(-10) : uniq[0]);
+  set('secondMobile', labelled.secondMobile ? String(labelled.secondMobile).replace(/\D/g, '').slice(-10) : uniq.find(x=>x !== d.mobile));
+  set('email', (String(labelled.email || s).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/) || [])[0]);
+  if(d.email) d.email = d.email.toLowerCase();
+  set('pan', (String(labelled.pan || s).toUpperCase().match(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/) || [])[0]);
+  set('dob', riaObDate(labelled.dob || (s.match(/\b(\d{1,2}[-/.]\d{1,2}[-/.]\d{4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4})\b/) || [])[1]));
+  set('ifsc', (String(labelled.ifsc || s).toUpperCase().match(/\b[A-Z]{4}0[A-Z0-9]{6}\b/) || [])[0]);
+  set('accNo', labelled.accNo ? String(labelled.accNo).replace(/[\s-]/g, '').match(/^\d{6,18}/) && String(labelled.accNo).replace(/[\s-]/g, '').match(/^\d{6,18}/)[0] : '');
+  set('bankName', labelled.bankName || (d.ifsc && RIA_OB_IFSC_BANK[d.ifsc.slice(0, 4)]) || '');
+  if(d.bankName && !/\bbank\b/i.test(d.bankName) && RIA_OB_IFSC_BANK[(d.ifsc || '').slice(0, 4)]) d.bankName = RIA_OB_IFSC_BANK[d.ifsc.slice(0, 4)];
+  set('mailingStreet', labelled.mailingStreet);
+  set('mailingCity', labelled.mailingCity && labelled.mailingCity.split(/[,\n]/)[0]);
+  const stOpts = (riaObField('mailingState') || {}).opts || [];
+  set('mailingState', riaObOpt(stOpts, labelled.mailingState && labelled.mailingState.split(/[,\n]/)[0]) || labelled.mailingState);
+  set('mailingZip', (String(labelled.mailingZip || '').match(/\b[1-9]\d{5}\b/) || [])[0] || (labelled.mailingStreet && (labelled.mailingStreet.match(/\b[1-9]\d{5}\b/) || [])[0]));
+  const gRaw = String(labelled.gender || '').toLowerCase();
+  set('gender', /^f|female|mahila/.test(gRaw) ? 'Female' : /^m|male|purush/.test(gRaw) ? 'Male' : gRaw ? 'Other' : (d.salutation==='Mr.' ? 'Male' : /Mrs\.|Ms\./.test(d.salutation || '') ? 'Female' : ''));
+  if(labelled.salutation) d.salutation = riaObOpt(['Mr.', 'Mrs.', 'Ms.', 'Dr.'], String(labelled.salutation).replace(/\.?$/, '.')) || d.salutation;
+  const mRaw = String(labelled.maritalStatus || '').toLowerCase();
+  set('maritalStatus', /^(married|shaadi ?shuda|vivahit)/.test(mRaw) ? 'Married' : /^(single|unmarried|avivahit)/.test(mRaw) ? 'Single' : mRaw ? 'Other' : '');
+  set('profession', labelled.profession);
+  /* The firm's own branches and team, as they are spelled in BOSS. */
+  const branches = (DB.config && DB.config.branches) || [];
+  const bWant = labelled.branch || ((s.match(/\b([A-Za-z]+)\s+branch\b/i) || [])[1] || '');
+  if(bWant){ const n = riaNorm(bWant).replace(/\bbranch\b/g, '').trim(); set('branch', branches.find(b=>riaNorm(b).replace(/\bbranch\b/g, '').trim()===n) || ''); if(!d.branch) d._branchAsked = bWant; }
+  if(labelled.rmName){ const n = riaNorm(labelled.rmName); const tm = (DB.team || []).find(t=>riaNorm(teamName(t.id))===n || riaNorm(t.name || '')===n); if(tm) d.rmName = tm.id; else d._rmAsked = labelled.rmName; }
+  const fam = String(labelled.familyOrIndividual || '').toLowerCase() || (/\bindividual\b/i.test(s) ? 'individual' : /\bfamily\s+client\b/i.test(s) ? 'family' : '');
+  set('familyOrIndividual', /individual/.test(fam) ? 'Individual' : /family/.test(fam) ? 'Family' : '');
+  const prod = String(labelled.productCategory || '').toLowerCase() || s.toLowerCase();
+  const ins = /\binsurance\b/.test(prod), inv = /\b(investment|mutual funds?|mf|sip|equity|lumpsum)\b/.test(prod);
+  set('productCategory', ins && !inv ? 'Insurance' : inv && !ins ? 'Investment' : '');
+  ['investmentsStatus', 'insuranceStatus'].forEach(k=>{ if(labelled[k]) set(k, riaObOpt((riaObField(k) || {}).opts, labelled[k]) || labelled[k]); });
+  if(labelled.aadhaar) d._aadhaarSkipped = true;
+  /* Each value by the form's own rule for that field; one that fails is not kept. */
+  d._rejected = [];
+  Object.keys(d).filter(k=>k[0] !== '_').forEach(k=>{
+    const f = riaObField(k); if(!f) return;
+    if(f.vk && typeof checkValue==='function'){ const got = checkValue(f.vk, d[k]); if(!got.ok){ d._rejected.push({k, v: d[k], why: f.vm || got.message}); delete d[k]; return; } d[k] = got.value; }
+    if(f.strictOpts && (f.opts || []).indexOf(d[k]) < 0){ d._rejected.push({k, v: d[k], why: f.vm || 'Not one of the choices'}); delete d[k]; }
+  });
+  const kept = Object.keys(d).filter(k=>k[0] !== '_').length;
+  ['investmentsStatus', 'insuranceStatus'].forEach(k=>{ if(d[k] && ((riaObField(k) || {}).opts || []).indexOf(d[k]) < 0){ d._rejected.push({k, v: d[k], why: (riaObField(k) || {}).vm || 'Not one of the choices'}); delete d[k]; } });
+  if(!(d.mobile || d.pan || (d.cmsName && kept >= 3) || (intent && (d.cmsName || d._rejected.length)))) return null;
+  return d;
+}
+/* Whether the client form would show this field for the draft: cmsFieldShown,
+   with the draft's values in place of the boxes (the same CMS_GROUP_SHOW,
+   show, min and minor-nominee rules). */
+function riaObShown(d, k, depth){
+  const groups = typeof cmsFieldGroupsVisible==='function' ? cmsFieldGroupsVisible() : CMS_FIELDS;
+  let f = null, grp = '';
+  Object.keys(groups).some(g=>{ const x = (groups[g] || []).find(y=>y.k===k); if(x){ f = x; grp = g; } return !!x; });
+  if(!f || (depth || 0) > 6) return true;
+  const holds = spec => {
+    if(!spec) return true;
+    if(spec.minor){ for(let i = 0; i < (Number(d.numberOfNominee) || 0); i++){ const a = cmsAgeOn(d[CMS_NOMINEE_ORDINALS[i] + 'NomineeDob']); if(a !== null && a < 18) return true; } return false; }
+    const v = String(d[spec.field] == null ? '' : d[spec.field]);
+    if(spec.min) return (Number(v) || 0) >= spec.min;
+    return (spec.values || []).indexOf(v) >= 0;
+  };
+  const g = CMS_GROUP_SHOW[grp];
+  if(g && (!holds(g) || !riaObShown(d, g.field, (depth || 0) + 1))) return false;
+  if(!f.show) return true;
+  if(!holds(f.show)) return false;
+  return f.show.field ? riaObShown(d, f.show.field, (depth || 0) + 1) : true;
+}
+/* What a direct save still needs — every field the form would require for this
+   draft, including those it asks only once another answer is given — and
+   whether this person is already on file. */
+async function riaObCheck(d){
+  const fields = typeof cmsFieldsFlatVisible==='function' ? cmsFieldsFlatVisible() : CMS_FIELDS_FLAT;
+  const missing = fields.filter(f=>(f.req || f.reqShown) && riaObShown(d, f.k) && !String(d[f.k] || '').trim()).map(f=>f.l);
+  const dup = [];
+  if(d.pan){
+    const same = (DB.clients || []).filter(c=>!c.deletedAt && String(c.pan || '').trim().toUpperCase()===d.pan);
+    same.forEach(c=>dup.push({id: c.id, name: clientDisplayName(c)}));
+    if(!same.length && (DB.clients || []).some(c=>/\*/.test(String(c.pan || '')))){
+      try{ const r = await fetch('/api/clients/pan-match', {method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({pans:[d.pan]})});
+        const j = await r.json(); const res = j && j.ok && j.results && j.results[0] || {};
+        (res.ids || []).forEach(id=>{ const c = DB.clients.find(x=>x.id===id); dup.push({id, name: c ? clientDisplayName(c) : id}); });
+        if(res.elsewhere) dup.push({id:'', name:'a client outside your view'}); }catch(e){ /* no server answer: the form's own checks still apply */ }
+    }
+  }
+  const sameMobile = d.mobile ? (DB.clients || []).filter(c=>!c.deletedAt && String(c.mobile || '').replace(/\D/g, '').slice(-10)===d.mobile && !dup.some(x=>x.id===c.id)) : [];
+  return {missing, dup, sameMobile: sameMobile.map(c=>({id: c.id, name: clientDisplayName(c)}))};
+}
+const riaObRecord = d => { const o = {}; Object.keys(d).forEach(k=>{ if(k[0] !== '_') o[k] = d[k]; }); return o; };
+/* The draft, in the chat. */
+async function riaOnboardDraft(d){
+  const chk = await riaObCheck(d);
+  const order = ['salutation', 'cmsName', 'mobile', 'secondMobile', 'email', 'pan', 'dob', 'gender', 'maritalStatus', 'profession', 'branch', 'rmName',
+    'mailingStreet', 'mailingCity', 'mailingState', 'mailingZip', 'bankName', 'accNo', 'ifsc', 'familyOrIndividual', 'productCategory', 'investmentsStatus', 'insuranceStatus'];
+  const show = (k, v) => k==='rmName' ? teamName(v) : k==='dob' ? riaDate(v) + (calcAge(v)!==null ? ' (Age ' + calcAge(v) + ')' : '') : v;
+  const rows = order.filter(k=>d[k]).map(k=>[RIA_OB_FIELD_LABEL[k] || k, show(k, d[k])]);
+  const L = ['**📝 New client draft — nothing is saved yet**', 'Read from what you pasted. Check it, then open the form already filled in, or save it straight to CMS.'];
+  const notes = [];
+  if(chk.dup.length) notes.push('⚠ **PAN ' + d.pan + ' is already on file** (' + chk.dup.map(x=>x.name + (x.id ? ' · ' + x.id : '')).join(', ') + '). Saving again would file the same investor twice — open the existing account instead.');
+  if(chk.sameMobile.length) notes.push('ℹ Mobile ' + d.mobile + ' is also on ' + chk.sameMobile.map(x=>x.name).join(', ') + ' (a family member can share one; check it is not the same person).');
+  if(chk.missing.length) notes.push('Still needed before saving: **' + chk.missing.join(', ') + '** — pick ' + (chk.missing.length===1 ? 'it' : 'them') + ' in the form, or add ' + (chk.missing.length===1 ? 'it' : 'them') + ' to the message (e.g. "Individual", "Product: Investment").');
+  (d._rejected || []).forEach(r=>notes.push('Not used — ' + (RIA_OB_FIELD_LABEL[r.k] || r.k) + ' "' + r.v + '": ' + r.why));
+  if(d._branchAsked) notes.push('Branch "' + d._branchAsked + '" is not one of the firm’s branches, so it was left blank.');
+  if(d._rmAsked) notes.push('RM "' + d._rmAsked + '" is not on the team list, so it was left blank.');
+  if(d._aadhaarSkipped) notes.push('Aadhaar is not read from chat: enter it in the form, where it is stored encrypted.');
+  if(notes.length) L.push('', ...notes);
+  else L.push('', '✓ Ready to save.');
+  const draft = riaObRecord(d);
+  const acts = [];
+  if(can('CMS', 'create')){
+    acts.push({label:'📝 Open Pre-filled Form in CMS', act:{t:'onboard', how:'form', draft}});
+    acts.push({label:'💾 Direct Save to CMS', act:{t:'onboard', how:'save', draft}});
+  } else L.push('', 'Your account cannot add clients (it needs CMS create), so nothing can be saved from here.');
+  chk.dup.filter(x=>x.id).slice(0, 2).forEach(x=>acts.push({label:'↗ Open ' + x.name, act:{t:'open', id: x.id}}));
+  acts.push({label:'☰ Main Menu', act:{t:'menu'}});
+  riaPushBot({content: L.join('\n'), private: true, onboard: true, table: {title:'New client draft', cols:['Field', 'Value'], rows, show: 40}, actions: acts});
+}
+/* "📝 Open Pre-filled Form in CMS" and "💾 Direct Save to CMS". */
+async function riaOnboardAct(act){
+  const d = Object.assign({}, act.draft || {});
+  if(!can('CMS', 'create')){ riaPushBot({content:'Your account cannot add clients (it needs CMS create).', private: true}); return; }
+  if(act.how==='form'){
+    aiCloseP(); navigate('cms');
+    openClientForm('', null, d);
+    return;
+  }
+  if(act.saved){ riaPushBot({content:'This draft was already saved as **' + esc(d.cmsName || '') + '** (' + act.saved + ').', private: true, actions:[{label:'↗ Open Account', act:{t:'open', id: act.saved}}]}); return; }
+  const chk = await riaObCheck(d);
+  const fields = typeof cmsFieldsFlatVisible==='function' ? cmsFieldsFlatVisible() : CMS_FIELDS_FLAT;
+  const bad = [];
+  Object.keys(d).forEach(k=>{ const f = fields.find(x=>x.k===k) || riaObField(k); if(f && f.vk && !checkValue(f.vk, d[k]).ok) bad.push(f.l); });
+  if(chk.dup.length || chk.missing.length || bad.length){
+    riaPushBot({private: true, content: '**Not saved.** ' + [chk.dup.length ? 'PAN ' + d.pan + ' is already on ' + chk.dup.map(x=>x.name).join(', ') + '.' : '',
+      chk.missing.length ? 'Still needed: ' + chk.missing.join(', ') + '.' : '', bad.length ? 'Not valid: ' + bad.join(', ') + '.' : ''].filter(Boolean).join(' ')
+      + ' Open the pre-filled form to complete it.', actions:[{label:'📝 Open Pre-filled Form in CMS', act:{t:'onboard', how:'form', draft: d}}].concat(chk.dup.filter(x=>x.id).slice(0, 1).map(x=>({label:'↗ Open ' + x.name, act:{t:'open', id: x.id}})))});
+    return;
+  }
+  /* The same steps as Save on the Add Client form. */
+  const data = Object.assign({}, d, {id: uid('CMS'), createdAt: new Date().toISOString()});
+  const snapshot = JSON.stringify(DB.clients);
+  initState('CMS', data);
+  DB.clients.push(data);
+  await logAudit('CMS', data.id, 'Create', [{field:'client', oldValue:'', newValue: data.cmsName}, {field:'created from', oldValue:'', newValue:'RIA AI chat'}]);
+  let ok;
+  ssetFormHeader = 'client';
+  try{ ok = await save('clients'); } finally { ssetFormHeader = ''; }
+  if(ok === false){ DB.clients = JSON.parse(snapshot); riaPushBot({content:'**Not saved** — BOSS refused the save (the reason is shown above). Nothing was added.', private: true}); return; }
+  act.saved = data.id;
+  riaPushBot({private: true, content:'✅ **Saved to CMS:** ' + clientDisplayName(data) + ' · ' + data.id + ' · ' + Object.keys(d).length + ' fields filled.',
+    actions:[{label:'↗ Open Account', act:{t:'open', id: data.id}}, {label:'☰ Main Menu', act:{t:'menu'}}]});
+}
+/* Aadhaar typed into the chat is not kept there. */
+const riaRedactAadhaar = t => String(t || '').replace(/(aadhaa?r[^0-9\n]{0,20})(\d{4})[\s-]?(\d{4})[\s-]?(\d{4})/gi, (m, a, x, y, z)=>a + 'XXXX XXXX ' + z);
 async function riaDeskHandle(q){
   if(/^\s*(☰|menu|main menu|start|help|hi|hello|namaste)\s*[.!]?\s*$/i.test(q)){ ai.flow = null; riaPushBot({ui:{kind:'menu', open:null}}); return {}; }
+  /* "Add new client: Name: …, Mobile: …, PAN: …": a draft, read on this page only. */
+  const onboard = riaDetectClientOnboarding(q);
+  if(onboard){
+    ai.flow = null;
+    const ut = ai.turns.slice().reverse().find(t=>t.role==='user');
+    if(ut){ ut.private = true; ut.content = riaRedactAadhaar(ut.content); }
+    await riaOnboardDraft(onboard);
+    return {};
+  }
   if(ai.flow && ai.flow.step==='disambiguate_client'){
     const f = ai.flow, cands = f.candidates.map(riaPersonById).filter(Boolean);
     const num = /^\s*(\d{1,3})\s*\.?\s*$/.exec(q), n = riaNorm(q);
