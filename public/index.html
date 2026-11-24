@@ -63169,7 +63169,9 @@ const riaRedactAadhaar = t => String(t || '').replace(/(aadhaa?r[^0-9\n]{0,20})(
    one this user may see.
    --------------------------------------------------------------------- */
 const RIA_FOLLOW_PRONOUN = /\b(iska|iski|iske|inka|inki|inke|inhe|inko|unhe|unko|uska|uski|uske|unka|unki|unke|same client|this client|that client|the client|is client|us client|him|her|his)\b/i;
-const RIA_CLIENT_ATTR = /\b(portfolio|holdings?|aum|sips?|review|kyc|nominee|pan|dob|date of birth|age|address|bank|profile|schemes?|details?|mandate|transactions?|mobile|email|allocation|analysis|rebalanc\w*|suggest\w*|funds?)\b/i;
+/* Words about a client's own record. "Suggest", "fund", "analysis", "strategy" are about advice in general
+   ("give me suggestion of bucket strategy"): without a pronoun they do not make a follow-up. */
+const RIA_CLIENT_ATTR = /\b(portfolio|holdings?|aum|sips?|kyc|nominee|pan|dob|date of birth|age|address|bank|details?|mandate|transactions?|mobile|email)\b/i;
 function riaSetActiveClient(c){ if(c && c.id) ai.activeClient = c.id; }
 function riaFollowUpClient(q){
   if(!ai.activeClient) return null;
