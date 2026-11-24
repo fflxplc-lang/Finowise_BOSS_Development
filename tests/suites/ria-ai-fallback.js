@@ -257,6 +257,23 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       return 'the two clients; no [' + sop.id + '] steps';
     });
 
+    await step('one client’s portfolio and one branch’s book, answered by BOSS when the provider cannot', async () => {
+      gemini('503');
+      const cpa = { client: { id: 'CMS-ZZP', name: 'ZZ Portfolio Person', branch: 'Pune', rm: 'ZZ RM', riskProfile: 'Moderate' }, totalAum: 2500000, totalSip: 10000, holdingsCount: 2,
+        allocation: { equity: { value: 2000000, pct: 80 }, debt: { value: 500000, pct: 20 }, hybrid: { value: 0, pct: 0 }, gold: { value: 0, pct: 0 }, liquid: { value: 0, pct: 0 }, unclassified: { value: 0, pct: 0 } },
+        schemes: [{ name: 'ZZ Flexi Cap', category: 'Flexi Cap', folio: 'F1', currentValue: 2000000 }, { name: 'ZZ Short Duration', category: 'Short Duration', folio: '—', currentValue: 500000 }] };
+      const ask = (data, q) => admin.post('/api/ai/chat', { connector: 'gemini', system: 'You are RIA AI.', maxTokens: 1200, messages: [{ role: 'user', content: '<data>\n' + JSON.stringify(data) + '\n</data>\n\nQuestion: ' + q }] });
+      const a = await ask({ clientPortfolioAnalysis: cpa }, 'iska portfolio analysis do');
+      const b = await ask({ branchAnalysis: { branch: 'Pune', totalClients: 2, totalAum: 4500000, totalSip: 10000, topClients: [{ id: 'CMS-ZZP', name: 'ZZ Portfolio Person', aum: 2500000 }] } }, 'Pune branch ka portfolio analysis do');
+      gemini('ok');
+      const t1 = (a.json && a.json.text) || '', t2 = (b.json && b.json.text) || '';
+      if (!t1.startsWith('**📊 Portfolio Analysis: ZZ Portfolio Person (CMS-ZZP)**') || !t1.includes('• **Total Portfolio (AUM):** ₹25,00,000 | **Monthly SIP:** ₹10,000') || !t1.includes('- Equity: 80% (₹20,00,000)')
+        || !t1.includes('| ZZ Flexi Cap | Flexi Cap | F1 | ₹20,00,000 |') || !/above the 40–60% band for a Moderate investor/.test(t1) || /\[[a-z]+-[a-z-]+\]/.test(t1))
+        throw new Error('client: ' + t1.slice(0, 700));
+      if (!t2.startsWith('**🏢 Pune Branch Portfolio Summary**') || !t2.includes('• **Total Branch AUM:** ₹45,00,000') || !t2.includes('| CMS-ZZP | ZZ Portfolio Person | ₹25,00,000 |')) throw new Error('branch: ' + t2.slice(0, 500));
+      return 'portfolio: header, AUM / SIP, allocation, scheme table, verdict (equity 80% above the Moderate band); branch: summary and top clients';
+    });
+
     await step('Gemini overloaded on its model is tried next on gemini-2.5-flash, whose answer is used', async () => {
       gemini('ok'); mode['gemini-2.5-pro'] = '503';
       const n = seen.length;

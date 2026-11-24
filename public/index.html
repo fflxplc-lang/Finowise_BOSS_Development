@@ -58596,7 +58596,7 @@ function toggleConnector(id){
    ===================================================================== */
 const AI_PANEL_KEY = '_aiPanel';
 const AI_CONNECTOR_IDS = ['bossai','claude','gemini'];
-const ai = {open:false, busy:false, turns:[], context:null, draft:'', selection:null,
+const ai = {open:false, busy:false, turns:[], context:null, draft:'', selection:null, activeClient:null,
             status:null, statusAt:0, report:null, error:null};
 
 function iconSparkle(){
@@ -59115,7 +59115,7 @@ function aiCloseP(){ ai.open = false; aiDrawPanel(); }
 function aiClearTurns(){
   ai.conv = (ai.conv || 0) + 1;
   ai.turns = []; ai.report = null; ai.error = null;
-  ai.forceClient = null; ai.selection = null; ai.selectionEl = null;
+  ai.forceClient = null; ai.selection = null; ai.selectionEl = null; ai.activeClient = null;
   ai.scrollAnchor = null; ai.phase = ''; ai.busy = false; ai.draft = '';
   const el = document.getElementById('aiInput'); if(el) el.value = '';
   ai.context = aiContextOf();
@@ -59372,7 +59372,7 @@ async function aiSend(){
     const desk = nav ? null : await riaDeskHandle(q);
     out = desk ? desk
         : nav ? bossOpenNow(q, nav)
-        : riaTotalAumIntent(q) ? await riaTotalAumTurn()
+        : riaTotalAumIntent(q) && !ai.forceClient ? await riaTotalAumTurn()
         : aiLooksLikeReport(q) ? await aiRunReport(q) : await bossRunChat(q);
   }catch(e){ aiIgnoreStale(e); return; }
   if(conv !== (ai.conv || 0)) return;            // cleared meanwhile: the new conversation is not touched
@@ -59971,6 +59971,8 @@ HOW RIA AI ANSWERS
   You are RIA AI: a senior wealth-management operations and planning expert (30+ years, CFP-level) for this firm.
   - For any question about the market, a chart or a technical read, apply the discipline of a Chartered Market Technician (CMT, the US charter): read the primary trend (200-day average, 52-week range), the secondary trend (50-day) and the short-term trend (20-day); ask for confirmation from independent signals (trend, momentum, volume, volatility) before leaning on one; treat a signal that the others contradict as unconfirmed; and always state the level at which the view is invalidated. Use only the indicators in <data>; never invent a pattern, count or divergence that is not computed there. Do not tell anyone you hold the charter.
   - Answer from the <data> and the <sops> you are given. Quote figures exactly as they appear in <data>; never estimate one.
+  - When <data> has clientPortfolioAnalysis, it is that one client's portfolio: open with "**📊 Portfolio Analysis: <name> (<id>)**", then total AUM and monthly SIP, branch and risk profile, the asset allocation (equity / debt / hybrid / gold / liquid, % and ₹), a table Scheme Name | Category | Folio | Current Value, and an advisory verdict for that client's risk profile (if not profiled, say risk profiling comes first). Speak of no other client.
+  - When <data> has branchAnalysis, it is that branch only: open with "**🏢 <branch> Branch Portfolio Summary**", total clients, total branch AUM and monthly SIP, then a table Client ID | Client Name | AUM of its top clients. Speak of no other branch.
   - When <data> has attributeFilter, open with "**Total Clients:** <totalBook> | **Clients without <field>:** <matchingCount>", then a table Client ID | Client Name | Branch | Status of its rows. Where matchingCount is more than the rows, say the rest are in the Excel / CSV export. Name no client that is not in its rows.
   - For a how-to question, give the steps of the matching SOP in order, the documents needed and the TAT. Name the SOP id in brackets.
   - For a client, lead with what is pending or wrong, then what to do next and which SOP does it.
@@ -60033,6 +60035,7 @@ function bossOpen(line){
     window._clientTab = tab;
     navigate('cms', c.id);
     ai.droppedRecord = null;
+    riaSetActiveClient(c);
     return {kind:'cms', id:c.id, tab, label: clientDisplayName(c) + ' › ' + tab.charAt(0).toUpperCase() + tab.slice(1)};
   }
   const v = bossPages().includes(p[0]) ? p[0] : bossPageAlias(p.join(' '));
@@ -60148,16 +60151,22 @@ async function bossRunChat(q){
   const forced = ai.forceClient ? (DB.clients||[]).find(x=>x.id===ai.forceClient) : null;
   ai.forceClient = null;
   if(forced && bossCanSeeClient(forced)) people.push(forced);
-  /* The record open on screen comes first: "is client ka kya pending hai"
-     means this one. */
-  if(ctx.module==='CMS' && ctx.recordId){
+  /* Then a client named in the question, then the client this conversation is
+     about ("iska / inka / uska", a short question about a client) — and only
+     with none of those, the record open on screen ("is client ka kya pending
+     hai" on a client's page). The page behind the panel never joins a client
+     who was asked about by name. */
+  if(!forced) bossClientsNamedIn(q).forEach(c=>{ if(!people.includes(c)) people.push(c); });
+  if(!forced && !people.length){ const prev = riaFollowUpClient(q); if(prev) people.push(prev); }
+  if(!people.length && ctx.module==='CMS' && ctx.recordId){
     const c = DB.clients.find(x=>x.id===ctx.recordId);
     if(c && bossCanSeeClient(c)) people.push(c);
   } else if(ctx.module==='LMS' && ctx.recordId){
     const got = aiReadSource('leads', {where:[{col:'id', op:'eq', value:ctx.recordId}]});
     if(!got.error && got.rows.length) data.openLead = got.rows[0];
   }
-  if(!forced) bossClientsNamedIn(q).forEach(c=>{ if(!people.includes(c)) people.push(c); });
+  if(people.length===1) riaSetActiveClient(people[0]);
+  const branchQ = !people.length ? riaBranchInQuestion(q) : null;
   /* A filter over the book reads the book: no one client stands in for it. */
   const oneClient = forced || AI_POINTS_AT_RECORD.test(q) || bossClientsNamedIn(q).length;   // "Vishal ka PAN nahi hai kya" is about Vishal
   const attr = !oneClient && bossIsBookWideFilter(q) ? bossAttributeFilter(q) : null;
@@ -60195,6 +60204,10 @@ async function bossRunChat(q){
      harvesting", "future projection"…: worked out here, with its charts. */
   const intel = !attr && !chart && !countQ ? riaIntel(q, people) : null;
   if(intel) data.intel = riaIntelForAi(intel);
+  /* One client's portfolio, or one branch's book — never the firm's in their place. */
+  const pfQ = /\b(portfolio|holdings?|analysis|rebalanc\w*|schemes?|allocation|suggest\w*|funds?)\b/i.test(q);
+  if(pfQ && people.length && !attr) data.clientPortfolioAnalysis = bossClientPortfolio(people[0]);
+  if(!people.length && branchQ && branchQ.clients.length && /\b(portfolio|aum|sips?|analysis|performance|business)\b/i.test(q)) data.branchAnalysis = bossBranchPortfolio(branchQ);
   const mktNames = !attr && !clientList && !chart && !chartQ && !countQ && !intel ? lexiMarketAsk(q, people) : null;
   let market = null;
   if(mktNames){
@@ -60233,7 +60246,8 @@ async function bossRunChat(q){
   if(people.length) data.clients = people.slice(0,3).map(bossClientDossier).filter(Boolean);
   /* "Kis client ka kya sell karna hai": the book's signals, as computed. */
   if(!attr && !mktNames && !people.length && !(intel && intel.actions) && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
-    data.portfolioSignals = lexiBookSignals().filter(x=>x.need).slice(0, 15).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
+    const inBranch = branchQ ? new Set(branchQ.clients.flatMap(riaIdsOf)) : null;
+    data.portfolioSignals = lexiBookSignals().filter(x=>x.need && (!inBranch || inBranch.has(x.client.id))).slice(0, 15).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
       rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold' && r.scheme && r.scheme!=='—').map(r=>r.action+': '+r.scheme+' ('+r.why+')')}));
     const z = lexiZoneLabel(); if(!/not set/i.test(z)) data.marketZone = z;
   }
@@ -61737,6 +61751,8 @@ function riaScope(q, people, mods){
   /* "Give me suggestion of bucket strategy": a question about the idea, not
      about anybody's money — illustrated on ₹1 crore. */
   if(mods && mods.length && mods.every(m=>m==='plan') && !RIA_BOOK_WORDS.test(String(q||''))) return {kind:'model', clients:[], label:'Illustration on a ₹1 crore corpus'};
+  const br = riaBranchInQuestion(q);
+  if(br && br.clients.length) return {kind:'book', branch: br.core, clients: br.clients, label: br.label + ' (' + br.clients.length + ' client' + (br.clients.length===1 ? '' : 's') + ')'};
   const clients = (typeof analyticsRecords==='function' ? analyticsRecords('clients') : null) || [];
   return {kind:'book', clients, label: 'Visible book (' + clients.length + ' client' + (clients.length===1 ? '' : 's') + ')'};
 }
@@ -61764,7 +61780,9 @@ function riaIntelModules(q){
 }
 /* ---- the seven analyses ---- */
 function riaIntel(q, people){
-  const mods = riaIntelModules(q);
+  let mods = riaIntelModules(q);
+  /* "Varanasi branch ka portfolio" / "iska portfolio": a portfolio analysis of that scope. */
+  if(!mods.length && /\bportfolio\b/i.test(String(q || '')) && ((people && people.length) || riaBranchInQuestion(q))) mods = ['portfolio'];
   if(!mods.length || !can('CMS','view')) return null;
   const scope = riaScope(q, people, mods);
   if(!scope.clients.length && scope.kind!=='model') return null;
@@ -63135,6 +63153,67 @@ async function riaOnboardAct(act){
 }
 /* Aadhaar typed into the chat is not kept there. */
 const riaRedactAadhaar = t => String(t || '').replace(/(aadhaa?r[^0-9\n]{0,20})(\d{4})[\s-]?(\d{4})[\s-]?(\d{4})/gi, (m, a, x, y, z)=>a + 'XXXX XXXX ' + z);
+/* ---------------------------------------------------------------------
+   THE CLIENT THIS CONVERSATION IS ABOUT, AND A BRANCH NAMED IN A QUESTION
+
+   "Vishal Kumar Maurya ki details" then "iska portfolio analysis do",
+   "inka AUM kya hai", "inhe kaunsa fund suggest karein": the follow-up
+   names nobody, so it used to read nobody — and an analysis question with
+   nobody in it was answered for the whole book (lexiBookSignals). Now the
+   last client resolved in this conversation (ai.activeClient, an id; set by
+   a profile card, a pick from "which client", or a question naming one
+   client; cleared by Clear) is who a pronoun or a short question about a
+   client's details means. A question about the book, a how-to, or one that
+   names a branch is not a follow-up. "Varanasi branch ka portfolio" is
+   scoped to that branch's clients, not the firm. The client must still be
+   one this user may see.
+   --------------------------------------------------------------------- */
+const RIA_FOLLOW_PRONOUN = /\b(iska|iski|iske|inka|inki|inke|inhe|inko|unhe|unko|uska|uski|uske|unka|unki|unke|same client|this client|that client|the client|is client|us client|him|her|his)\b/i;
+const RIA_CLIENT_ATTR = /\b(portfolio|holdings?|aum|sips?|review|kyc|nominee|pan|dob|date of birth|age|address|bank|profile|schemes?|details?|mandate|transactions?|mobile|email|allocation|analysis|rebalanc\w*|suggest\w*|funds?)\b/i;
+function riaSetActiveClient(c){ if(c && c.id) ai.activeClient = c.id; }
+function riaFollowUpClient(q){
+  if(!ai.activeClient) return null;
+  const c = typeof riaPersonById==='function' ? riaPersonById(ai.activeClient) : null;
+  if(!c || !bossCanSeeClient(c)) return null;
+  const t = String(q || '');
+  const screen = ai.context && ai.context.module==='CMS' && ai.context.recordId;
+  if(screen && /\b(this|is|iss|current)\s+(client|investor|customer|account|record)\b/i.test(t) && !riaIdsOf(c).includes(screen)) return null;
+  if(RIA_FOLLOW_PRONOUN.test(t)) return c;
+  const howTo = typeof bossLooksLikeHowTo==='function' && bossLooksLikeHowTo(t);
+  if(RIA_CLIENT_ATTR.test(t) && !bossIsBookWideFilter(t) && !howTo && !riaBranchInQuestion(t)
+    && !/\b(clients|investors|kitne|kitni|how many|total|firm|book|sabhi|saare|all|every)\b/i.test(t) && t.trim().split(/\s+/).length <= 10) return c;
+  return null;
+}
+/* "Varanasi branch ka portfolio": the branch, as the visible records spell it ("Varanasi" and "Varanasi Branch" alike), and its clients. */
+function riaBranchInQuestion(q){
+  const n = ' ' + riaNorm(q) + ' ', cs = riaVisible();
+  const core = b => riaNorm(b).replace(/\bbranch\b/g, '').trim();
+  const hits = [...new Set(cs.map(c=>core(c.branch || c.branchName || '')).filter(Boolean))].filter(x=>n.includes(' ' + x + ' '));
+  if(!hits.length) return null;
+  const pick = hits.sort((a,b)=>b.length - a.length)[0];
+  const clients = cs.filter(c=>core(c.branch || c.branchName || '')===pick);
+  return {core: pick, label: pick.replace(/\b\w/g, x=>x.toUpperCase()) + ' branch', clients};
+}
+/* One client's portfolio, as BOSS counts it (riaPositions: platform holdings or the ledger), for the answer to quote. */
+function bossClientPortfolio(c){
+  const pos = riaPositions(c).slice().sort((a,b)=>b.current - a.current);
+  const total = numVal(riaAum(c)) || pos.reduce((n, p)=>n + p.current, 0);
+  const by = {}; pos.forEach(p=>{ by[p.cls] = (by[p.cls] || 0) + p.current; });
+  const posTotal = pos.reduce((n, p)=>n + p.current, 0) || 1;
+  const slot = k => ({value: Math.round(by[k] || 0), pct: Math.round((by[k] || 0) / posTotal * 100)});
+  const folioOf = p => { const h = (DB.platformHoldings || []).find(x=>riaIdsOf(c).includes(x.clientId) && !x.deletedAt && x.schemeName===p.scheme); return h && (h.folioNumber || h.folio) || '—'; };
+  return {client: {id: c.id, name: clientDisplayName(c), branch: c.branch || c.branchName || 'Not recorded', rm: riaRmOf(c)[0] || 'Not assigned',
+      riskProfile: (typeof lexiProfileOf==='function' && lexiProfileOf(c)) || c.riskProfile || c.iseqCategory || 'Not profiled'},
+    totalAum: Math.round(total), totalSip: Math.round(numVal(riaSip(c))), holdingsCount: pos.length,
+    allocation: {equity: slot('Equity'), debt: slot('Debt'), hybrid: slot('Hybrid'), gold: slot('Gold/Commodities'), liquid: slot('Liquid/Cash'), unclassified: slot('Unclassified')},
+    schemes: pos.slice(0, 15).map(p=>({name: p.scheme, category: p.cat ? p.cat.label || p.cat.id : p.cls, folio: folioOf(p), currentValue: Math.round(p.current)}))};
+}
+/* A branch's book: its clients, AUM and SIP as BOSS counts them, biggest first. */
+function bossBranchPortfolio(br){
+  const rows = br.clients.map(c=>({c, aum: numVal(riaAum(c)), sip: numVal(riaSip(c))})).sort((a,b)=>b.aum - a.aum);
+  return {branch: br.label.replace(/ branch$/, ''), totalClients: rows.length, totalAum: Math.round(rows.reduce((n, r)=>n + r.aum, 0)), totalSip: Math.round(rows.reduce((n, r)=>n + r.sip, 0)),
+    topClients: rows.slice(0, 10).map(r=>({id: r.c.id, name: clientDisplayName(r.c), aum: Math.round(r.aum)}))};
+}
 async function riaDeskHandle(q){
   if(/^\s*(☰|menu|main menu|start|help|hi|hello|namaste)\s*[.!]?\s*$/i.test(q)){ ai.flow = null; riaPushBot({ui:{kind:'menu', open:null}}); return {}; }
   /* "Add new client: Name: …, Mobile: …, PAN: …": a draft, read on this page only. */
@@ -63181,11 +63260,19 @@ async function riaDeskHandle(q){
     if(who.list.length === 1){
       /* One client: personal data is answered here; any other question goes on
          to the usual answer with that client's records, and no other's. */
+      riaSetActiveClient(who.list[0]);
       if(topic!=='personal'){ ai.forceClient = who.list[0].id; return null; }
       ai.flow = null; riaAnswerClient(topic, who.list[0], fields); return {};
     }
     riaAskWhich(who.list, who.said, {topic, fields, pendingQuestion: q});
     return {};
+  }
+  /* "iska DOB batao", "inka portfolio analysis do": the client this conversation is about. */
+  const prev = group ? null : riaFollowUpClient(q);
+  if(prev){
+    const fields = riaAskedFields(q), personal = fields.length > 0 || RIA_PERSONAL_RE.test(q);
+    if(personal && !/\b(portfolio|analysis|suggest\w*|funds?|rebalanc\w*|aum)\b/i.test(q)){ ai.flow = null; riaAnswerClient('personal', prev, fields); return {}; }
+    ai.forceClient = prev.id; return null;
   }
   return null;
 }
@@ -63335,6 +63422,7 @@ function riaPersonalCard(c){
     ['Total AUM', money(numVal(riaAum(c)))], ['Monthly SIP', money(numVal(riaSip(c)))]];
 }
 function riaAnswerClient(topic, c, fields){
+  riaSetActiveClient(c);
   if(topic==='personal' || topic==='dob'){
     const rows = riaPersonalCard(c), lead = riaLeadLine(c, fields);
     const turn = {actions: riaClientActions(c), deskClient: c.id,
@@ -63669,6 +63757,7 @@ const RIA_FILTER_SOURCES = {
 function riaQueryFilterEngine(q){
   const t = String(q||'').toLowerCase();
   if(typeof riaIntelModules==='function' && riaIntelModules(q).length) return null;
+  if(/\b(portfolio|analysis|performance)\b/.test(t) && riaBranchInQuestion(q)) return null;      // "Varanasi branch ka portfolio": the branch's analysis
   const source = /\btransactions?\b|\btxns?\b/.test(t) ? 'transactions' : /\bleads?\b/.test(t) ? 'leads' : /\bmeetings?\b/.test(t) ? 'meetings'
     : /\b(business entr\w*|dbt|business)\b/.test(t) ? 'business' : /\bcalls?\b|\bcall logs?\b/.test(t) ? 'calls'
     : /\btasks?\b|\boverdue\b/.test(t) ? 'tasks' : /\bsips\b|\bsip (?:registrations?|book|list)\b/.test(t) && !/\b(active|zero|no|without)\s+sips?\b/.test(t) && !riaParseAmounts(q).some(a=>a.field==='sip') ? 'sips' : 'clients';

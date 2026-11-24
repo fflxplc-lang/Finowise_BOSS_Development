@@ -477,6 +477,8 @@ function chat(messages, opts) {
 
   if (data) {
     if (data.attributeFilter) out.push(...describeAttributeFilter(data.attributeFilter));
+    if (data.clientPortfolioAnalysis) out.push(...describeClientPortfolio(data.clientPortfolioAnalysis), '');
+    if (data.branchAnalysis) out.push(...describeBranchPortfolio(data.branchAnalysis), '');
     if (data.countSummary) out.push(...describeCount(data.countSummary, q));
     if (data.intel) out.push(...describeIntel(data.intel));
     if (Array.isArray(data.suggestedActions) && data.suggestedActions.length) {
@@ -500,7 +502,7 @@ function chat(messages, opts) {
   /* A count question is answered by its numbers; an SOP under it is noise. */
   const countQ = isCountQ(q) && !house && !(data && data.intel) && !(data && Array.isArray(data.clients) && data.clients.length);   // a client's own question keeps its SOPs
   const listQ = /\b(clients|investors|customers)\b/i.test(q) && /\b(who|whose|which|list|all|give me|show me|without|having|have not|has not|jinka|jinke|jiska|more than|above|below|less than|lakh|crore|se (?:jyada|zyada|kam))\b/i.test(q);
-  if ((data && data.attributeFilter) || (listQ && data && data.reads)) {
+  if ((data && (data.attributeFilter || data.clientPortfolioAnalysis || data.branchAnalysis)) || (listQ && data && data.reads)) {
     /* A filter over the book, or a list of clients, is answered by its count and its list; no SOP under it. */
   } else if (countQ) {
     if (!data || !(data.reads || data.countSummary || data.clients)) out.push(isHinglish(q)
@@ -561,6 +563,43 @@ function openLine(q, pages, data) {
     .filter(Boolean).sort((a, b) => b.length - a.length);
   for (const n of names) if (t.includes(' ' + n + ' ')) { const p = pageFor(n, pages); if (p) return p.view; }
   return '';
+}
+
+/* One client's portfolio, as the page counted it, and an indicative verdict for
+   their risk profile. The bands are a guide for the advisor, not advice. */
+const PROFILE_EQUITY_BAND = [[/moderately conservative/i, 20, 40], [/conservative/i, 0, 25], [/moderately aggressive/i, 60, 80], [/aggressive/i, 70, 100], [/moderate|balanced/i, 40, 60]];
+function describeClientPortfolio(p) {
+  const rs = (x) => '₹' + Number(Math.round(x || 0)).toLocaleString('en-IN');
+  const cell = (x) => String(x == null || x === '' ? '—' : x).replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
+  const c = p.client || {}, a = p.allocation || {};
+  const out = ['**📊 Portfolio Analysis: ' + cell(c.name) + ' (' + cell(c.id) + ')**',
+    '• **Total Portfolio (AUM):** ' + rs(p.totalAum) + ' | **Monthly SIP:** ' + rs(p.totalSip),
+    '• **Branch:** ' + cell(c.branch) + ' | **RM:** ' + cell(c.rm) + ' | **Risk Profile:** ' + cell(c.riskProfile)];
+  if (!p.holdingsCount) { out.push('', 'No holdings are on record for this client in BOSS, so there is no allocation to analyse yet. Import the platform holdings or record the transactions first.'); return out; }
+  out.push('', '**Asset Allocation:**');
+  [['Equity', a.equity], ['Debt', a.debt], ['Hybrid', a.hybrid], ['Gold/Commodities', a.gold], ['Liquid/Cash', a.liquid], ['Unclassified', a.unclassified]]
+    .filter(([, v]) => v && v.value > 0).forEach(([k, v]) => out.push('- ' + k + ': ' + v.pct + '% (' + rs(v.value) + ')'));
+  out.push('', '**Top Schemes Held (' + p.holdingsCount + ' Total):**', '| Scheme Name | Category | Folio | Current Value |', '|---|---|---|---|');
+  (p.schemes || []).forEach((x) => out.push('| ' + [x.name, x.category, x.folio, rs(x.currentValue)].map(cell).join(' | ') + ' |'));
+  const eq = (a.equity && a.equity.pct || 0) + Math.round((a.hybrid && a.hybrid.pct || 0) / 2);
+  const band = PROFILE_EQUITY_BAND.find(([re]) => re.test(String(c.riskProfile || '')));
+  out.push('', '**Advisory Verdict:**');
+  if (!band) out.push('This client has no risk profile on record. Complete the ISEQ / risk profiling first; the allocation can only be judged against it.');
+  else if (eq > band[2]) out.push('Equity exposure (about ' + eq + '% incl. half of hybrid) is above the ' + band[1] + '–' + band[2] + '% band for a ' + c.riskProfile + ' investor: consider moving the excess into debt / hybrid in stages.');
+  else if (eq < band[1]) out.push('Equity exposure (about ' + eq + '%) is below the ' + band[1] + '–' + band[2] + '% band for a ' + c.riskProfile + ' investor: a staggered move from debt / liquid into diversified equity (or a SIP step-up) would bring it in line.');
+  else out.push('Equity exposure (about ' + eq + '%) is within the ' + band[1] + '–' + band[2] + '% band for a ' + c.riskProfile + ' investor: hold the allocation and review fund quality and concentration.');
+  out.push('Indicative only — review with the client’s suitability before acting.');
+  return out;
+}
+/* One branch's book, as the page counted it. */
+function describeBranchPortfolio(b) {
+  const rs = (x) => '₹' + Number(Math.round(x || 0)).toLocaleString('en-IN');
+  const cell = (x) => String(x == null || x === '' ? '—' : x).replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
+  const out = ['**🏢 ' + cell(b.branch) + ' Branch Portfolio Summary**', '• **Total Clients:** ' + Number(b.totalClients || 0).toLocaleString('en-IN'),
+    '• **Total Branch AUM:** ' + rs(b.totalAum), '• **Total Monthly SIP:** ' + rs(b.totalSip)];
+  const top = Array.isArray(b.topClients) ? b.topClients : [];
+  if (top.length) { out.push('', '**Top Clients in ' + cell(b.branch) + ' Branch:**', '| Client ID | Client Name | AUM |', '|---|---|---|'); top.forEach((x) => out.push('| ' + [x.id, x.name, rs(x.aum)].map(cell).join(' | ') + ' |')); }
+  return out;
 }
 
 /* "Jiska mobile no add nhi hai": the book's total, how many lack the field, and who.

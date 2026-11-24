@@ -29,6 +29,10 @@
         counted against the book with their total AUM, biggest first, no
         model call, no SOP, no market text; PDF / Excel / CSV of every
         matching client with full details
+    12. the client this conversation is about: "ZZ Alpha Clientone ki details"
+        then "iska DOB batao" / "iska portfolio analysis do" are that client
+        only (no firm-wide signals); naming another client moves it; Clear
+        forgets it; "Pune branch ka portfolio analysis do" is that branch only
 
    Synthetic clients only. */
 const http = require('http');
@@ -355,6 +359,70 @@ suite(async t => {
     const a = await listTurn();
     if(seen.length !== n || a.rows.map(r => r[1]).join() !== 'ZZ Bravo Clienttwo,ZZ Nomobile Two' || NOISE.test(a.text)) throw new Error(JSON.stringify({calls: seen.length - n, a}).slice(0, 600));
     return 'bossRunChat → the same list, ' + (seen.length - n) + ' model calls';
+  });
+
+  const lastData = (from) => { const j = seen.slice(from).filter(x => !/WHICH RECORDS/.test(((x.messages || []).find(m => m.role === 'system') || {}).content || '')).pop();
+    const u = j ? j.messages[j.messages.length - 1].content : ''; try { return JSON.parse((u.match(/<data>\n([\s\S]*?)\n<\/data>/) || [])[1] || '{}'); } catch(e) { return {}; } };
+
+  await t.step('12a. "ZZ Alpha Clientone ki details dikhao" makes ZZ Alpha the conversation’s client; "iska DOB batao" answers for ZZ Alpha from the records', async () => {
+    await fresh();
+    await ask('ZZ Alpha Clientone ki details dikhao');
+    const ac = await t.eval(() => ai.activeClient);
+    const n = seen.length;
+    await ask('iska DOB batao');
+    const a = await t.eval(() => String((ai.turns[ai.turns.length - 1] || {}).content || ''));
+    if(ac !== 'CMS-CC-A' || !/^\*\*ZZ Alpha Clientone — Date of Birth:\*\* 01 Jan 1980/.test(a) || seen.length !== n) throw new Error(JSON.stringify({ac, a: a.slice(0, 200), calls: seen.length - n}));
+    return 'activeClient CMS-CC-A; "iska DOB batao" → ' + a.split('\n')[0].replace(/\*\*/g, '');
+  });
+
+  await t.step('12b. "iska portfolio analysis do" → ZZ Alpha’s portfolio only: her AUM, allocation and schemes; no other client, no firm-wide signals', async () => {
+    const n = seen.length;
+    await ask('iska portfolio analysis do');
+    const d = lastData(n), out = sent(n), p = d.clientPortfolioAnalysis || {};
+    if(!p.client || p.client.id !== 'CMS-CC-A' || p.totalAum !== 2500000 || p.totalSip !== 10000 || (p.allocation.equity || {}).pct !== 100 || (p.schemes[0] || {}).name !== 'ZZ Flexi Cap'
+      || d.portfolioSignals || !d.intel || (d.intel.scope || {}).clientId !== 'CMS-CC-A' || /ZZ Bravo|ZZ Nomobile/.test(out)) throw new Error(JSON.stringify({p, signals: !!d.portfolioSignals, scope: d.intel && d.intel.scope}).slice(0, 700));
+    return 'clientPortfolioAnalysis: ' + p.client.name + ', AUM ₹25,00,000, SIP ₹10,000, equity 100%, ' + p.holdingsCount + ' scheme; intel scoped to her; no portfolioSignals';
+  });
+
+  await t.step('12c. "ZZ Bravo Clienttwo ka AUM kya hai" moves the conversation to ZZ Bravo — her AUM, not the firm’s total', async () => {
+    const n = seen.length;
+    await ask('ZZ Bravo Clienttwo ka AUM kya hai');
+    const ac = await t.eval(() => ai.activeClient), d = lastData(n), out = sent(n);
+    const shown = await t.eval(() => ai.turns.slice(-1)[0].content || '');
+    if(ac !== 'CMS-CC-B' || !(d.clients || []).some(c => c.id === 'CMS-CC-B') || (d.clients || []).some(c => c.id === 'CMS-CC-A') || /Total firm AUM|AUM in your scope/.test(shown)) throw new Error(JSON.stringify({ac, clients: (d.clients || []).map(c => c.id), shown: shown.slice(0, 200)}));
+    const n2 = seen.length;
+    await ask('inka portfolio analysis do');
+    const d2 = lastData(n2);
+    if(((d2.clientPortfolioAnalysis || {}).client || {}).id !== 'CMS-CC-B') throw new Error('follow-up after the move: ' + JSON.stringify(d2.clientPortfolioAnalysis || null).slice(0, 300));
+    return 'activeClient CMS-CC-B; her dossier sent; "inka portfolio analysis do" → ZZ Bravo';
+  });
+
+  await t.step('12d. Clear forgets the conversation’s client: "clients without mobile" reads the whole book; "iska portfolio analysis do" names nobody', async () => {
+    await t.eval(() => navigate('dashboard'));           // no client page behind the panel: only the conversation could name one
+    await clear();
+    const ac = await t.eval(() => ai.activeClient);
+    await ask('clients without mobile');
+    const a = await t.eval(() => { const x = ai.turns[ai.turns.length - 1] || {}; return {text: String(x.content || ''), rows: x.table ? x.table.rows.map(r => r[1]) : []}; });
+    const n = seen.length;
+    await ask('iska portfolio analysis do');
+    const d = lastData(n);
+    if(ac !== null || !/^\*\*Total Clients:\*\* 4 \| \*\*Clients without Mobile Number:\*\* 2/.test(a.text) || a.rows.sort().join() !== 'ZZ Nomobile One,ZZ Nomobile Two'
+      || d.clientPortfolioAnalysis || (d.clients || []).length) throw new Error(JSON.stringify({ac, a, cpa: d.clientPortfolioAnalysis, clients: d.clients}).slice(0, 600));
+    return 'activeClient null; missing mobile: 2 of 4 (whole book); the pronoun alone named nobody';
+  });
+
+  await t.step('12e. "Pune branch ka portfolio analysis do" and "Pune branch ka portfolio": Pune’s clients only — not Mumbai, not Delhi, not the firm', async () => {
+    await fresh();
+    const n = seen.length;
+    await ask('Pune branch ka portfolio analysis do');
+    const d = lastData(n), out = sent(n), b = d.branchAnalysis || {};
+    const n2 = seen.length;
+    await ask('Pune branch ka portfolio');
+    const d2 = lastData(n2);
+    if(b.branch !== 'Pune' || b.totalClients !== 2 || b.totalAum !== 4500000 || b.topClients.map(c => c.name).join() !== 'ZZ Alpha Clientone,ZZ Bravo Clienttwo'
+      || !d.intel || !/^Pune branch \(2 clients\)/.test((d.intel.scope || {}).label || '') || /ZZ Nomobile/.test(out) || d.clientPortfolioAnalysis
+      || ((d2.branchAnalysis || {}).totalClients !== 2)) throw new Error(JSON.stringify({b, scope: d.intel && d.intel.scope, b2: d2.branchAnalysis}).slice(0, 700));
+    return 'branchAnalysis: Pune, 2 clients, AUM ₹45,00,000, top ZZ Alpha / ZZ Bravo; intel "' + d.intel.scope.label + '"; Mumbai and Delhi clients absent';
   });
 
   await t.step('CRM records untouched: the four clients are as they were saved', async () => {
