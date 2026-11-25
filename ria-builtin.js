@@ -479,6 +479,9 @@ function chat(messages, opts) {
     if (data.attributeFilter) out.push(...describeAttributeFilter(data.attributeFilter));
     if (data.clientPortfolioAnalysis) out.push(...describeClientPortfolio(data.clientPortfolioAnalysis), '');
     if (data.branchAnalysis) out.push(...describeBranchPortfolio(data.branchAnalysis), '');
+    if (data.schemeSignals) out.push(...describeSchemeSignals(data.schemeSignals), '');
+    if (data.goalGap) out.push(...describeGoalGap(data.goalGap), '');
+    if (data.matureRebalancing) out.push(...describeMatureRebalancing(data.matureRebalancing), '');
     if (data.countSummary) out.push(...describeCount(data.countSummary, q));
     if (data.intel) out.push(...describeIntel(data.intel));
     if (Array.isArray(data.suggestedActions) && data.suggestedActions.length) {
@@ -502,7 +505,7 @@ function chat(messages, opts) {
   /* A count question is answered by its numbers; an SOP under it is noise. */
   const countQ = isCountQ(q) && !house && !(data && data.intel) && !(data && Array.isArray(data.clients) && data.clients.length);   // a client's own question keeps its SOPs
   const listQ = /\b(clients|investors|customers)\b/i.test(q) && /\b(who|whose|which|list|all|give me|show me|without|having|have not|has not|jinka|jinke|jiska|more than|above|below|less than|lakh|crore|se (?:jyada|zyada|kam))\b/i.test(q);
-  if ((data && (data.attributeFilter || data.clientPortfolioAnalysis || data.branchAnalysis)) || (listQ && data && data.reads)) {
+  if ((data && (data.attributeFilter || data.clientPortfolioAnalysis || data.branchAnalysis || data.schemeSignals || data.goalGap || data.matureRebalancing)) || (listQ && data && data.reads)) {
     /* A filter over the book, or a list of clients, is answered by its count and its list; no SOP under it. */
   } else if (countQ) {
     if (!data || !(data.reads || data.countSummary || data.clients)) out.push(isHinglish(q)
@@ -591,6 +594,42 @@ function describeClientPortfolio(p) {
   out.push('Indicative only — review with the client’s suitability before acting.');
   return out;
 }
+/* One client's schemes against the firm's quartile matrix. */
+function describeSchemeSignals(s) {
+  const rs = (x) => '₹' + Number(Math.round(x || 0)).toLocaleString('en-IN');
+  const out = ['**🔎 Scheme signals: ' + ((s.client || {}).name || '') + '** _(' + (s.source || 'firm quartile matrix') + ')_'];
+  const block = (title, list) => { if (list && list.length) { out.push('', title); list.forEach((x) => out.push('- ' + x.signal)); } };
+  block('**🔴 Switch alerts (' + (s.switches || []).length + '):**', s.switches);
+  block('**🟡 De-risk (' + (s.deRisk || []).length + '):**', s.deRisk);
+  block('**🟡 Watch (' + (s.watch || []).length + '):**', s.watch);
+  if ((s.holds || []).length) out.push('', '**🟢 Core holds (' + s.holds.length + '):** ' + s.holds.map((h) => h.scheme + ' (' + rs(h.current) + ')').join(', '));
+  if ((s.notCovered || []).length) out.push('', '⚪ Not in the matrix (review vs peers): ' + s.notCovered.join(', '));
+  if (!(s.switches || []).length && !(s.deRisk || []).length && !(s.watch || []).length && !(s.holds || []).length) out.push('', 'None of this client’s schemes is covered by the firm’s quartile matrix.');
+  if (s.freshAllocation) out.push('', '💡 ' + s.freshAllocation);
+  out.push('Indicative — review suitability with the client before acting.');
+  return out;
+}
+/* The SIP each mapped goal needs, against the SIP running now. */
+function describeGoalGap(g) {
+  const rs = (x) => '₹' + Number(Math.round(x || 0)).toLocaleString('en-IN');
+  const out = ['**🎯 Goal gap: ' + (g.client || '') + '**'];
+  if (!(g.goals || []).length) { out.push(g.note || 'No goals mapped.'); out.push('Current SIP: ' + rs(g.currentSip) + ' · Corpus: ' + rs(g.corpus)); return out; }
+  out.push('| Goal | Target | Year | SIP needed |', '|---|---|---|---|');
+  g.goals.forEach((x) => out.push('| ' + [x.goal, rs(x.target), x.year + ' (' + x.years + ' yrs @ ' + x.rate + '%)', rs(x.sipNeeded) + '/mo'].join(' | ') + ' |'));
+  out.push('', '**SIP needed:** ' + rs(g.sipNeededTotal) + '/mo · **Running now:** ' + rs(g.currentSip) + '/mo · **Gap:** ' + rs(g.sipGap) + '/mo', g.note || '');
+  return out;
+}
+/* Clients over 55 or near a goal still in mid / small cap. */
+function describeMatureRebalancing(m) {
+  const rs = (x) => '₹' + Number(Math.round(x || 0)).toLocaleString('en-IN');
+  const out = ['**🧓 Mature clients to de-risk: ' + (m.total || 0) + '** (' + rs(m.totalValue) + ' in mid / small cap)'];
+  if ((m.clients || []).length) { out.push('| Client | Age / goal | Mid + small cap | Schemes |', '|---|---|---|---|');
+    m.clients.forEach((c) => out.push('| ' + [c.name, (c.age != null ? 'age ' + c.age : '') + (c.yearsToGoal != null ? (c.age != null ? ', ' : '') + 'goal in ' + c.yearsToGoal + ' yrs' : ''), rs(c.midSmallValue), (c.schemes || []).join(', ')].join(' | ') + ' |')); }
+  else out.push('No client over 55 or near a goal holds mid / small cap.');
+  if (m.strategy) out.push('', '**Strategy:** ' + m.strategy);
+  return out;
+}
+
 /* One branch's book, as the page counted it. */
 function describeBranchPortfolio(b) {
   const rs = (x) => '₹' + Number(Math.round(x || 0)).toLocaleString('en-IN');

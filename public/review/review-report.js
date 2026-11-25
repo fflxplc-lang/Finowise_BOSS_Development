@@ -2038,6 +2038,7 @@ const ReviewPage = (() => {
         <label class="xl-date" title="Review date">Date <input type="date" id="xlDate" value="${esc(edits.reviewDate || data.today)}"></label>
         <span id="xlStatus" class="xl-status ${data.editsSavedAt ? "ok" : ""}">${data.editsSavedAt ? "Changes saved" : "No changes yet"}</span>
         <button type="button" class="xl-btn" id="xlView" title="Switch between the dashboard look and a spreadsheet look">${excelView ? "Dashboard view" : "Excel view"}</button>
+        <button type="button" class="xl-btn" id="xlRia" title="Writes the firm's quartile-matrix suggestion into every scheme whose Suggestions is empty. Yours are never overwritten; edit or clear any of them.">Fill RIA suggestions</button>
         <button type="button" class="xl-btn" id="xlReset">Reset changes</button>
         <button type="button" class="xl-btn" id="xlPrev" title="Review reports exported before, kept with the client">Previous reviews</button>
         <button type="button" class="xl-btn" id="xlPdf" title="Every sheet of the review, one to a page, to save as a PDF from the print window">Export PDF</button>
@@ -2056,6 +2057,7 @@ const ReviewPage = (() => {
     $("xlExport").addEventListener("click", exportNow);
     $("xlClose").addEventListener("click", () => ReviewReport.close());
     $("xlPdf").addEventListener("click", exportPdf);
+    $("xlRia").addEventListener("click", fillRiaSuggestions);
     $("xlPrev").addEventListener("click", (e) => openMenu(e, rrPreviousItems(data.clientKey)));
     $("xlView").addEventListener("click", () => {
       excelView = !excelView;
@@ -2213,6 +2215,17 @@ const ReviewPage = (() => {
         + `${edit ? ` title="Click to change"` : ""}>${shown || "–"}</b></div>`;
     },
     pct(r, c) { const v = this.num(r, c); return v === null ? "" : fmt.pct(v); },
+    // A scheme the reviewer has not written a suggestion for: the firm's quartile matrix verdict, marked as RIA's.
+    verdict(r) {
+      if (typeof window.riaReviewSuggestion !== "function" || !data) return null;
+      const name = this.text(r, "B");
+      if (!name || /\(investor total\)|^Not broken out/i.test(name)) return null;   // a platform's total is not a scheme
+      return window.riaReviewSuggestion(data.clientKey, { name, subType: this.text(r, "C"), xirr: this.num(r, "K"), current: this.cur(r) });
+    },
+    ria(r) {
+      const v = this.verdict(r);
+      return v ? `<span class="cv-ria cv-ria-${esc(v.tone)}" title="${esc(v.signal + " — " + v.source)}">RIA: ${esc(v.cardText)}</span>` : "";
+    },
     gain(r) {
       const inv = this.num(r, "D") || 0, cur = this.num(r, "J") ?? this.num(r, "G") ?? 0;
       return cur - inv;
@@ -2256,7 +2269,7 @@ const ReviewPage = (() => {
           ${this.cell(r, "P", "New SIP", this.num(r, "P") === null ? "" : fmt.money(this.num(r, "P")))}
         </div>
         ${this.cell(r, "T", "Remarks", esc(this.text(r, "T")), "cv-wide cv-note")}
-        ${this.cell(r, "U", "Suggestions", esc(this.text(r, "U")), "cv-wide cv-note")}
+        ${this.cell(r, "U", "Suggestions", esc(this.text(r, "U")) || this.ria(r), "cv-wide cv-note")}
       </article>`;
     },
     rowsOf: (g) => [...schemeRows.keys()].filter((x) => x >= g.first && x <= g.last).sort((a, b) => a - b),
@@ -2840,6 +2853,20 @@ const ReviewPage = (() => {
   function changed() {
     scheduleSave();
     rebuild();
+  }
+  // Every scheme with no suggestion of the reviewer's gets the matrix's, saved like a typed one.
+  function fillRiaSuggestions() {
+    let n = 0;
+    for (const [row, k] of schemeRows) {
+      if (Cards.text(row, "U")) continue;
+      const v = Cards.verdict(row);
+      if (!v || !v.cardText) continue;
+      ((edits.schemes ||= {})[k] ||= {}).suggestions = v.cardText;
+      n++;
+    }
+    if (!n) { setStatus("Every scheme already has a suggestion.", "warn"); return; }
+    changed();
+    setStatus(n + " suggestion" + (n === 1 ? "" : "s") + " filled from the firm's quartile matrix. Edit or clear any of them before exporting.");
   }
 
   // ---- Right-click menu -------------------------------------------------------------------------

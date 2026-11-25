@@ -274,6 +274,22 @@ const timed = async (fn) => { const t0 = Date.now(); const r = await fn(); retur
       return 'portfolio: header, AUM / SIP, allocation, scheme table, verdict (equity 80% above the Moderate band); branch: summary and top clients';
     });
 
+    await step('scheme signals, goal gap and mature clients from the quartile matrix, answered by BOSS when the provider cannot', async () => {
+      gemini('503');
+      const data = { schemeSignals: { client: { id: 'CMS-ZZQ', name: 'ZZ Quartile Person' }, source: 'Firm 10-year quartile consistency matrix (2014–2023), as supplied by the firm',
+          switches: [{ scheme: 'DSP Midcap Fund', current: 260000, signal: 'DSP Midcap Fund (₹2.6 L) ranked Bottom in 2020, 2021, 2022. Switch to Motilal Oswal Midcap Fund (90% consistency).' }],
+          deRisk: [], watch: [], holds: [{ scheme: 'Kotak Flexi Cap Fund', current: 610000 }], notCovered: ['ZZ Unknown Fund'], freshAllocation: 'Fresh SIPs to top-quartile picks: Parag Parikh Flexi Cap / Mirae Asset Large & Midcap.' },
+        goalGap: { client: 'ZZ Quartile Person', goals: [{ goal: 'Child education', target: 2500000, year: '2034', years: 7.6, rate: 12, sipNeeded: 17420 }], currentSip: 5000, corpus: 1600000, sipNeededTotal: 17420, sipGap: 12420, note: 'Illustrative.' },
+        matureRebalancing: { total: 1, totalValue: 800000, clients: [{ name: 'ZZ Senior', age: 61, yearsToGoal: null, midSmallValue: 800000, schemes: ['Kotak Midcap Fund'] }], strategy: '15% Liquid / 35% Corporate Debt / 50% Growth Equity.' } };
+      const r = await admin.post('/api/ai/chat', { connector: 'gemini', system: 'You are RIA AI.', maxTokens: 1200, messages: [{ role: 'user', content: '<data>\n' + JSON.stringify(data) + '\n</data>\n\nQuestion: iska switch analysis do aur goal gap batao' }] });
+      gemini('ok');
+      const t = (r.json && r.json.text) || '';
+      if (!t.includes('**🔴 Switch alerts (1):**') || !/Switch to Motilal Oswal Midcap Fund/.test(t) || !t.includes('**🟢 Core holds (1):** Kotak Flexi Cap Fund (₹6,10,000)') || !/Not in the matrix .*ZZ Unknown Fund/.test(t)
+        || !t.includes('| Child education | ₹25,00,000 | 2034 (7.6 yrs @ 12%) | ₹17,420/mo |') || !t.includes('**Gap:** ₹12,420/mo') || !t.includes('**🧓 Mature clients to de-risk: 1**') || /\[[a-z]+-[a-z-]+\]/.test(t))
+        throw new Error(t.slice(0, 900));
+      return 'switch alerts, core holds, not covered, goal table with the gap, mature clients and the bucket strategy; no SOP';
+    });
+
     await step('Gemini overloaded on its model is tried next on gemini-2.5-flash, whose answer is used', async () => {
       gemini('ok'); mode['gemini-2.5-pro'] = '503';
       const n = seen.length;

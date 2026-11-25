@@ -60050,6 +60050,9 @@ HOW RIA AI ANSWERS
   - For any question about the market, a chart or a technical read, apply the discipline of a Chartered Market Technician (CMT, the US charter): read the primary trend (200-day average, 52-week range), the secondary trend (50-day) and the short-term trend (20-day); ask for confirmation from independent signals (trend, momentum, volume, volatility) before leaning on one; treat a signal that the others contradict as unconfirmed; and always state the level at which the view is invalidated. Use only the indicators in <data>; never invent a pattern, count or divergence that is not computed there. Do not tell anyone you hold the charter.
   - Answer from the <data> and the <sops> you are given. Quote figures exactly as they appear in <data>; never estimate one.
   - When <data> has clientPortfolioAnalysis, it is that one client's portfolio: open with "**📊 Portfolio Analysis: <name> (<id>)**", then total AUM and monthly SIP, branch and risk profile, the asset allocation (equity / debt / hybrid / gold / liquid, % and ₹), a table Scheme Name | Category | Folio | Current Value, and an advisory verdict for that client's risk profile (if not profiled, say risk profiling comes first). Speak of no other client.
+  - When <data> has schemeSignals, give "🔴 Switch alerts" (each scheme, its quartile record and the named alternative), "🟡 De-risk / Watch", "🟢 Core holds", the schemes not covered by the matrix, and the fresh-allocation line, exactly as in <data>; say the verdicts come from the firm's quartile matrix. Name no fund that is not in <data>.
+  - When <data> has goalGap, show each goal's target, year and SIP needed against the current SIP and the gap, with its note; if it has no goals, say goals must be mapped first.
+  - When <data> has matureRebalancing, list those clients (age or goal horizon, mid / small cap value, schemes) and the 15 / 35 / 50 bucket strategy to de-risk them in stages.
   - When <data> has branchAnalysis, it is that branch only: open with "**🏢 <branch> Branch Portfolio Summary**", total clients, total branch AUM and monthly SIP, then a table Client ID | Client Name | AUM of its top clients. Speak of no other branch.
   - When <data> has attributeFilter, open with "**Total Clients:** <totalBook> | **Clients without <field>:** <matchingCount>", then a table Client ID | Client Name | Branch | Status of its rows. Where matchingCount is more than the rows, say the rest are in the Excel / CSV export. Name no client that is not in its rows.
   - For a how-to question, give the steps of the matching SOP in order, the documents needed and the TAT. Name the SOP id in brackets.
@@ -60285,6 +60288,11 @@ async function bossRunChat(q){
   /* One client's portfolio, or one branch's book — never the firm's in their place. */
   const pfQ = /\b(portfolio|holdings?|analysis|rebalanc\w*|schemes?|allocation|suggest\w*|funds?)\b/i.test(q);
   if(pfQ && people.length && !attr) data.clientPortfolioAnalysis = bossClientPortfolio(people[0]);
+  const schemeQ = /\b(portfolio|review|switch\w*|rebalanc\w*|quartile|consisten\w*|underperform\w*|laggard|hold|sell|exit|funds?|schemes?|de-?risk\w*|analysis)\b/i.test(q);
+  if(people.length && !attr && schemeQ) data.schemeSignals = bossSchemeSignals(people[0]);
+  if(people.length && !attr && /\b(goals?|target|shortfall|gap|achieve\w*|retire\w*|education|lakshya)\b/i.test(q)) data.goalGap = bossGoalGap(people[0]);
+  if(!people.length && !attr && /\b(mature|senior|old(?:er)?|55\+?|retire\w*|near(?:ing)? (?:goal|retirement)|budhe|buzurg)\b/i.test(q) && /\b(rebalanc\w*|de-?risk\w*|switch\w*|shift|allocation|portfolio)\b/i.test(q))
+    data.matureRebalancing = bossMatureRebalancing(branchQ ? branchQ.clients : riaVisible());
   if(!people.length && branchQ && branchQ.clients.length && /\b(portfolio|aum|sips?|analysis|performance|business)\b/i.test(q)) data.branchAnalysis = bossBranchPortfolio(branchQ);
   const mktNames = !attr && !clientList && !chart && !chartQ && !countQ && !intel ? lexiMarketAsk(q, people) : null;
   let market = null;
@@ -61857,6 +61865,147 @@ function riaIntelModules(q){
   return mods;
 }
 /* ---- the seven analyses ---- */
+/* =====================================================================
+   THE FIRM'S 10-YEAR QUARTILE MATRIX — HOLD / SWITCH / DE-RISK PER SCHEME
+
+   The firm's own consistency matrix (category → top picks and chronic
+   laggards, with their quartile record), as the firm supplied it. Every
+   verdict below is read from it, never from a fund's name in the code:
+     · a laggard of its own category → Switch to that category's first top
+       pick (or, marked "watch", hold with a trailing stop and send fresh
+       SIPs to the top pick);
+     · a Balanced Advantage / DAA scheme that is not a top pick and has an
+       XIRR under 8.5% → Switch to the category's top pick;
+     · a client over 55, or a goal within 3 years, holding mid / small cap →
+       De-risk into Corporate Bond / BAF top picks;
+     · a top pick → Hold, with its consistency;
+     · anything the matrix does not cover → "not in the matrix — review",
+       never a Hold the data does not back.
+   A scheme is matched to an entry by name (lexiTokens, all of the entry's
+   words in the scheme's), only within the scheme's own category, so
+   "Motilal Oswal Large & Midcap" is not "Motilal Oswal Midcap".
+   ===================================================================== */
+const RIA_MATRIX_SOURCE = 'Firm 10-year quartile consistency matrix (2014–2023), as supplied by the firm';
+const RIA_FUND_MATRIX = {
+  'Mid Cap': {topPicks: [{name:'Motilal Oswal Midcap Fund', consistency:'90%', note:'Consistently Top/Upper Mid (2020-2023)'},
+      {name:'Kotak Midcap Fund', consistency:'85%', note:'Solid Upper Mid consistency'}, {name:'HDFC Mid-Cap Opportunities Fund', consistency:'88%', note:'High AUM stable performer'}],
+    laggards: [{name:'DSP Midcap Fund', pattern:'Bottom in 2020, 2021, 2022', reason:'Persistent 3-year quartile underperformance'},
+      {name:'Aditya Birla SL Midcap Fund', pattern:'Lower Mid / Bottom', reason:'High expense & sub-benchmark alpha'}]},
+  'Small Cap': {topPicks: [{name:'Nippon India Small Cap Fund', consistency:'92%', note:'Consistently Top quartile across 10 years'},
+      {name:'Quant Small Cap Fund', consistency:'88%', note:'Exceptional alpha & Top quartile (2020-2023)'}],
+    laggards: [{name:'DSP Small Cap Fund', pattern:'Volatile (Bottom 2017-18, Lower Mid 2021-22)', reason:'Inconsistent downside protection', action:'watch'}]},
+  'Flexi Cap': {topPicks: [{name:'Parag Parikh Flexi Cap Fund', consistency:'95%', note:'Consistent Top Quartile across cycles'},
+      {name:'Kotak Flexi Cap Fund', consistency:'82%', note:'Stable large-cap oriented core holding'}],
+    laggards: [{name:'Motilal Oswal Flexi Cap Fund', pattern:'Bottom in 2019-2021', reason:'Concentrated portfolio drag'}]},
+  'Large Cap': {topPicks: [{name:'Nippon India Large Cap Fund', consistency:'85%', note:'Top Quartile 2022-2023'},
+      {name:'SBI Large Cap Fund', consistency:'80%', note:'Reliable bluechip compounder'}],
+    laggards: [{name:'Axis Bluechip Fund', pattern:'Bottom in 2021, 2022, 2023', reason:'Persistent growth style underperformance'}]},
+  'Large and Mid Cap': {topPicks: [{name:'Mirae Asset Large & Midcap Fund', consistency:'86%', note:'Consistent Top/Upper Mid'},
+      {name:'Kotak Equity Opportunities Fund', consistency:'84%', note:'Strong category alpha'}],
+    laggards: [{name:'Axis Large & Mid Cap Fund', pattern:'Lower Mid / Bottom 2021-23', reason:'Lagging category benchmark'}]},
+  'DAA': {topPicks: [{name:'ICICI Prudential Balanced Advantage Fund', consistency:'90%', note:'Model-driven consistent downside protection'},
+      {name:'Edelweiss Balanced Advantage Fund', consistency:'85%', note:'Low volatility dynamic hedging'}],
+    laggards: [{name:'Motilal Oswal Balance Advantage Fund', pattern:'Bottom in 2017, 2019, 2020, 2021', reason:'Failed to beat conservative hybrid benchmarks'}]},
+  'Corporate Bond': {topPicks: [{name:'Aditya Birla Sun Life Corporate Bond Fund', consistency:'92%', note:'Top safety & accrual'},
+      {name:'HDFC Corporate Bond Fund', consistency:'88%', note:'High credit quality (AAA)'}], laggards: []},
+  'Liquid': {topPicks: [{name:'HDFC Liquid Fund', consistency:'95%', note:'Zero credit risk, consistent yield'},
+      {name:'ICICI Prudential Liquid Fund', consistency:'94%', note:'High liquidity and instant redemption'}], laggards: []}};
+const RIA_MATRIX_CAT = {'mid cap':'Mid Cap', 'small cap':'Small Cap', 'flexi cap':'Flexi Cap', 'large cap':'Large Cap', 'large and mid':'Large and Mid Cap', 'baf':'DAA', 'corporate bond':'Corporate Bond', 'liquid':'Liquid'};
+const riaShortFund = n => String(n || '').replace(/\s+fund$/i, '').replace(/ICICI Prudential/i, 'ICICI Pru');
+/* The matrix category of a scheme (from its name, or the review sheet's sub type), and the entry it is, if any. */
+function riaMatrixLookup(name, subType){
+  const cat = (typeof lexiCategoryOf==='function' && (lexiCategoryOf(name) || (subType && lexiCategoryOf(subType)))) || null;
+  const key = cat && RIA_MATRIX_CAT[cat.id];
+  const norm = n => lexiTokens(n).map(w=>w==='balance' ? 'balanced' : w);      // "Balance Advantage" is "Balanced Advantage"
+  const toks = new Set(norm(name));
+  const has = e => { const w = norm(e.name); return w.length && w.every(x=>toks.has(x)); };
+  const cats = key ? [key] : Object.keys(RIA_FUND_MATRIX);
+  for(const k of cats){
+    const m = RIA_FUND_MATRIX[k];
+    const lag = m.laggards.find(has); if(lag) return {cat: k, kind: 'laggard', entry: lag};
+    const top = m.topPicks.find(has); if(top) return {cat: k, kind: 'top', entry: top};
+  }
+  return {cat: key || '', kind: '', entry: null};
+}
+/* A client's age and nearest goal, for the de-risking rule. */
+function riaClientHorizon(c){
+  if(!c) return {age: null, yearsToGoal: null};
+  const age = typeof calcAge==='function' ? calcAge(riaDob(c)) : null;
+  const ys = (typeof clientGoals==='function' ? clientGoals(c) : []).map(g=>(Date.parse(g.targetDate) - Date.now()) / (365.25 * 864e5)).filter(n=>isFinite(n) && n > 0);
+  return {age, yearsToGoal: ys.length ? Math.round(Math.min(...ys) * 10) / 10 : null};
+}
+/* One scheme's verdict. h: {name, subType, xirr (%), current (₹)}; ctx: {age, yearsToGoal}. */
+function riaSchemeVerdict(h, ctx){
+  ctx = ctx || {};
+  const name = String(h.name || '').trim(), val = numVal(h.current), xirr = h.xirr === '' || h.xirr == null || !isFinite(Number(h.xirr)) ? null : Number(h.xirr);
+  const L = val ? ' (' + riaCompact2(val) + ')' : '';
+  const hit = riaMatrixLookup(name, h.subType), m = hit.cat ? RIA_FUND_MATRIX[hit.cat] : null;
+  const pick = m && m.topPicks.find(t=>!hit.entry || t.name !== hit.entry.name);
+  const mature = (ctx.age != null && ctx.age > 55) || (ctx.yearsToGoal != null && ctx.yearsToGoal <= 3);
+  const out = (status, tone, cardText, signal, target, why) => ({status, tone, cardText, signal, target: target || null, why: why || '', category: hit.cat || '', source: RIA_MATRIX_SOURCE});
+  if(hit.kind==='laggard' && hit.entry.action==='watch' && pick)
+    return out('WATCH', 'amber', '🟡 Hold with trailing stop — fresh SIPs to ' + riaShortFund(pick.name),
+      name + L + ': ' + hit.entry.pattern + ' (' + hit.entry.reason + '). Hold with a trailing stop; direct fresh SIPs to ' + pick.name + ' (' + pick.consistency + ' consistency).', pick.name, hit.entry.pattern);
+  if(hit.kind==='laggard' && pick)
+    return out('SWITCH', 'red', '🔴 Switch to ' + riaShortFund(pick.name) + ' — ' + hit.entry.pattern,
+      name + L + ' ranked ' + hit.entry.pattern + ' (' + hit.entry.reason + '). Switch to ' + pick.name + ' (' + pick.consistency + ' consistency: ' + pick.note + ').', pick.name, hit.entry.pattern);
+  if(hit.cat==='DAA' && hit.kind!=='top' && xirr != null && xirr < 8.5 && pick)
+    return out('SWITCH', 'red', '🔴 Switch to ' + riaShortFund(pick.name) + ' — XIRR ' + xirr.toFixed(1) + '% below 8.5%',
+      name + L + ' has an XIRR of ' + xirr.toFixed(1) + '%, under the 8.5% the firm expects of a Balanced Advantage fund. Switch to ' + pick.name + ' (' + pick.consistency + ' consistency).', pick.name, 'XIRR ' + xirr.toFixed(1) + '%');
+  if(mature && (hit.cat==='Mid Cap' || hit.cat==='Small Cap')){
+    const why = ctx.age != null && ctx.age > 55 ? 'age ' + ctx.age : 'goal in ' + ctx.yearsToGoal + ' yrs';
+    const to = RIA_FUND_MATRIX['Corporate Bond'].topPicks[1].name + ' / ' + RIA_FUND_MATRIX.DAA.topPicks[0].name;
+    return out('DERISK', 'amber', '🟡 De-risk to Corporate Bond / BAF (' + why + ')',
+      name + L + ': ' + hit.cat.toLowerCase() + ' volatility does not suit a near horizon (' + why + '). Shift in stages to ' + to + '.', to, why);
+  }
+  if(hit.kind==='top')
+    return out('HOLD', 'green', '🟢 Hold — consistent top quartile (' + hit.entry.consistency + ')',
+      name + L + (xirr != null ? ', XIRR ' + xirr.toFixed(1) + '%' : '') + ': ' + hit.entry.note + ' (' + hit.entry.consistency + ' consistency). Retain.', null, hit.entry.note);
+  return out('REVIEW', 'grey', '⚪ Not in the firm’s quartile matrix — review vs category peers',
+    name + L + ' is not covered by the firm’s quartile matrix' + (hit.cat ? ' for ' + hit.cat : '') + '; review it against its category peers before acting.', null, '');
+}
+/* The review sheet asks for a scheme's suggestion by client and scheme. */
+window.riaReviewSuggestion = function(clientKey, h){
+  try{
+    const c = (typeof riaPersonById==='function' && riaPersonById(clientKey)) || (DB.clients || []).find(x=>x.id===clientKey) || null;
+    return riaSchemeVerdict(h || {}, riaClientHorizon(c));
+  }catch(e){ return null; }
+};
+/* One client's holdings, each with its verdict, grouped for an answer. */
+function bossSchemeSignals(c){
+  const ctx = riaClientHorizon(c);
+  const rows = riaPositions(c).filter(p=>p.current > 0 && p.scheme && !/platform sleeve/.test(p.scheme)).sort((a,b)=>b.current - a.current)
+    .map(p=>Object.assign({scheme: p.scheme, current: Math.round(p.current), xirr: p.xirr}, riaSchemeVerdict({name: p.scheme, current: p.current, xirr: p.xirr}, ctx)));
+  const pick = st => rows.filter(r=>r.status===st).map(r=>({scheme: r.scheme, current: r.current, xirr: r.xirr, signal: r.signal, target: r.target}));
+  return {client: {id: c.id, name: clientDisplayName(c), age: ctx.age, yearsToGoal: ctx.yearsToGoal}, source: RIA_MATRIX_SOURCE,
+    switches: pick('SWITCH'), deRisk: pick('DERISK'), watch: pick('WATCH'), holds: pick('HOLD'), notCovered: pick('REVIEW').map(r=>r.scheme),
+    freshAllocation: 'Fresh SIPs to top-quartile picks: ' + ['Flexi Cap', 'Large and Mid Cap'].map(k=>riaShortFund(RIA_FUND_MATRIX[k].topPicks[0].name)).join(' / ') + '.'};
+}
+/* The SIP each mapped goal needs from today (rate by horizon: 12% for 7+ years, 9% for 3–7, 7% under 3), against the SIP running now. */
+function bossGoalGap(c){
+  const goals = (typeof clientGoals==='function' ? clientGoals(c) : []).map(g=>({g, n: (Date.parse(g.targetDate) - Date.now()) / (365.25 * 864e5), t: numVal(g.target)})).filter(x=>x.t > 0 && isFinite(x.n) && x.n > 0)
+    .sort((a,b)=>a.n - b.n);
+  const sip = Math.round(numVal(riaSip(c))), corpus = Math.round(numVal(riaAum(c)));
+  if(!goals.length) return {client: clientDisplayName(c), goals: [], currentSip: sip, corpus, note: 'No goals are mapped for this client, so there is no target to measure a shortfall against. Map the goals (Goals tab or the blueprint) first.'};
+  const rows = goals.map(({g, n, t})=>{ const r = n >= 7 ? 0.12 : n >= 3 ? 0.09 : 0.07; return {goal: g.name || 'Goal', target: Math.round(t), year: String(g.targetDate).slice(0, 4), years: Math.round(n * 10) / 10, rate: Math.round(r * 100), sipNeeded: Math.round(planSip(t, r, n))}; });
+  const need = rows.reduce((a, r)=>a + r.sipNeeded, 0);
+  return {client: clientDisplayName(c), goals: rows, currentSip: sip, corpus, sipNeededTotal: need, sipGap: Math.max(0, need - sip),
+    note: 'SIP needed per goal if started today with nothing earmarked yet; the existing corpus of ' + money(corpus) + ' reduces it once allocated to goals. Illustrative, not guaranteed.'};
+}
+/* Clients over 55, or with a goal within 3 years, holding mid / small cap: the de-risking list. */
+function bossMatureRebalancing(clients){
+  const out = [];
+  clients.forEach(c=>{
+    const ctx = riaClientHorizon(c);
+    if(!((ctx.age != null && ctx.age > 55) || (ctx.yearsToGoal != null && ctx.yearsToGoal <= 3))) return;
+    const risky = riaPositions(c).filter(p=>{ const cat = typeof lexiCategoryOf==='function' && lexiCategoryOf(p.scheme); return cat && (cat.id==='mid cap' || cat.id==='small cap') && p.current > 0; });
+    const val = risky.reduce((a, p)=>a + p.current, 0);
+    if(val > 0) out.push({id: c.id, name: clientDisplayName(c), age: ctx.age, yearsToGoal: ctx.yearsToGoal, midSmallValue: Math.round(val), schemes: risky.map(p=>p.scheme).slice(0, 4)});
+  });
+  out.sort((a, b)=>b.midSmallValue - a.midSmallValue);
+  return {clients: out.slice(0, 20), total: out.length, totalValue: Math.round(out.reduce((a, x)=>a + x.midSmallValue, 0)), source: RIA_MATRIX_SOURCE,
+    strategy: '15% Liquid (0–2 yrs) / 35% Corporate Debt (2–7 yrs) / 50% Growth Equity (7+ yrs) — the firm’s 3-bucket (GAB) split, moving the excess in stages.'};
+}
 function riaIntel(q, people){
   let mods = riaIntelModules(q);
   /* "Varanasi branch ka portfolio" / "iska portfolio": a portfolio analysis of that scope. */
@@ -61932,6 +62081,13 @@ function riaIntel(q, people){
   if(need('actions') || need('portfolio')){
     const sig = scope.clients.map(c=>lexiClientSignals(c)).filter(s=>s.rows.length);
     const count = {}; const list = [];
+    /* The firm's quartile matrix, scheme by scheme: Switch / De-risk / Watch, and the consistent holds. */
+    scope.clients.forEach(c=>{ const ctx = riaClientHorizon(c);
+      riaPositions(c).filter(p=>p.current > 0 && p.scheme).forEach(p=>{ const v = riaSchemeVerdict({name: p.scheme, current: p.current, xirr: p.xirr}, ctx);
+        if(v.status==='REVIEW') return;
+        const k = {SWITCH:'Switch (quartile)', DERISK:'De-risk (horizon)', WATCH:'Watch (quartile)', HOLD:'Hold (top quartile)'}[v.status];
+        count[k] = (count[k]||0) + 1;
+        if(v.status!=='HOLD') list.push({client: clientDisplayName(c), action: v.status==='DERISK' ? 'De-risk' : v.status==='WATCH' ? 'Watch' : 'Switch', scheme: p.scheme, why: v.signal, value: riaR(p.current), to: v.target}); }); });
     sig.forEach(s=>{ s.rows.filter(r=>r.scheme && r.scheme!=='—').forEach(r=>{ count[r.action] = (count[r.action]||0) + 1; if(r.action!=='Hold') list.push({client: clientDisplayName(s.client), action:r.action, scheme:r.scheme, why:r.why, value: riaR(r.value)}); });
       s.moves.forEach(m=>{ const k = m.action + ' (rebalance)'; count[k] = (count[k]||0) + 1; list.push({client: clientDisplayName(s.client), action: m.action, scheme: m.asset + ' rebalance', why: m.why, value: riaR(m.amount)}); }); });
     const risky = positions.filter(p=>p.cat && ['small cap','mid cap','thematic'].includes(p.cat.id));
