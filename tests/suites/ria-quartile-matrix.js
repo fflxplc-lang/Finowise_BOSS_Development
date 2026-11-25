@@ -1,23 +1,27 @@
-/* THE FIRM'S 10-YEAR QUARTILE MATRIX: HOLD / SWITCH / DE-RISK PER SCHEME.
+/* THE FIRM'S QUARTILE RANKING SHEET: HOLD / SWITCH / WATCH / DE-RISK PER SCHEME.
 
-   Every verdict comes from the matrix the firm supplied, matched by name
-   within the scheme's own category; a scheme it does not cover is "not in
-   the matrix — review", never a Hold. Checked here:
-     1. the verdicts: DSP Midcap → Switch to Motilal Oswal Midcap (Bottom
-        2020-22); Motilal Oswal BAF → Switch to ICICI Pru BAF; Kotak Flexi /
-        SBI Large Cap → Hold; DSP Small Cap → Watch, SIPs to Nippon; Axis
-        Large & Mid → Switch to Mirae; a top-pick midcap for a 60-year-old →
-        De-risk; "Motilal Oswal Large & Midcap" is not mistaken for the
-        Motilal Oswal Midcap pick; an unknown scheme → review
-     2. RIA AI's "Buy / sell / switch" finding counts the matrix's verdicts
+   Every verdict is read from the firm's Mutual Fund Quartile Ranking Sheet
+   (public/ria-quartiles.js, generated from the uploaded sheet: each
+   scheme's quartile in its peer group, 2013 to 2023 YTD), and carries the
+   fund's own record. Checked here:
+     1. the verdicts, against the sheet: DSP Midcap (Bottom 2021-23) ->
+        Switch to the best Mid Cap peer; Motilal Oswal BAF -> Switch to
+        ICICI Pru BAF; Parag Parikh Flexi Cap (Bottom 2022, 2023) -> Switch;
+        Kotak Flexi Cap -> Watch; Motilal Oswal Midcap -> Hold; "Axis
+        Bluechip" found as Axis Large Cap; "ICICI Prudential Balanced
+        Advantage" as "ICICI Pru Balanced Advtg"; "Motilal Oswal Large &
+        Midcap" not taken for the Midcap fund; a midcap for a 61-year-old ->
+        De-risk; an unknown scheme -> not in the sheet
+     2. RIA AI's "Buy / sell / switch" finding counts the sheet's verdicts
         instead of "No scheme-level signals"
      3. the chat's data: one client's scheme signals, the goal gap from the
         mapped goals (and "map goals first" without them), and the mature
         clients to de-risk
      4. the review sheet's Detailed Portfolio: every card without a
-        suggestion shows the matrix's (marked RIA); "Fill RIA suggestions"
-        saves them as the reviewer's (a Suggestions already written is skipped), and fills nothing twice
-   Synthetic clients only. */
+        suggestion shows the sheet's verdict (marked RIA); "Fill RIA
+        suggestions" saves them as the reviewer's (a Suggestions already
+        written is skipped), and fills nothing twice
+   Synthetic clients only; the funds and their records are the sheet's. */
 const {suite} = require('../lib/harness');
 
 suite(async t => {
@@ -48,32 +52,34 @@ suite(async t => {
     return 'two clients, seven holdings, one goal';
   });
 
-  await t.step('1. the verdicts, read from the matrix', async () => {
+  await t.step('1. the verdicts, read from the sheet with each fund’s record', async () => {
     const r = await t.eval(() => {
       const v = (name, xirr, ctx) => riaSchemeVerdict({name, xirr, current: 100000}, ctx || {age: 45, yearsToGoal: 8});
       return {
-        dspMid: v('DSP Midcap Fund Regular Growth', 6), moBaf: v('Motilal Oswal Balanced Advantage Fund Reg Gr', 7.17), kotakFlexi: v('Kotak Flexi Cap Fund Reg Gr', 14),
-        sbiLarge: v('SBI Large Cap Fund Reg Gr', 12), dspSmall: v('DSP Small Cap Fund Reg Gr', 20), axisLM: v('Axis Large & Mid Cap Fund Reg Gr', 9),
-        seniorMid: v('Kotak Midcap Fund Reg Gr', 18, {age: 61, yearsToGoal: null}), moLargeMid: v('Motilal Oswal Large and Midcap Fund Reg Gr', 15),
-        unknown: v('ZZ Unknown Thematic Fund', 3), liquid: v('HDFC Liquid Fund Reg Gr', 6.5)};
+        dspMid: v('DSP Midcap Fund Regular Growth', 6), moBaf: v('Motilal Oswal Balanced Advantage Fund Reg Gr', 7.17), ppfas: v('Parag Parikh Flexi Cap Fund Direct Growth', 18),
+        kotakFlexi: v('Kotak Flexi Cap Fund Reg Gr', 14), moMid: v('Motilal Oswal Midcap Fund Regular Growth', 20), axisBlue: v('Axis Bluechip Fund Regular Growth', 9),
+        iciciBaf: v('ICICI Prudential Balanced Advantage Fund Growth', 10), moLargeMid: v('Motilal Oswal Large and Midcap Fund Reg Gr', 15),
+        seniorMid: v('Motilal Oswal Midcap Fund Regular Growth', 20, {age: 61, yearsToGoal: null}), unknown: v('ZZ Unknown Thematic Fund', 3),
+        src: (riaQ() || {}).source};
     });
-    const want = [['dspMid', 'SWITCH', /Switch to Motilal Oswal Midcap — Bottom in 2020, 2021, 2022/], ['moBaf', 'SWITCH', /Switch to ICICI Pru Balanced Advantage/],
-      ['kotakFlexi', 'HOLD', /Hold — consistent top quartile \(82%\)/], ['sbiLarge', 'HOLD', /Hold — consistent top quartile \(80%\)/],
-      ['dspSmall', 'WATCH', /trailing stop — fresh SIPs to Nippon India Small Cap/], ['axisLM', 'SWITCH', /Switch to Mirae Asset Large & Midcap/],
-      ['seniorMid', 'DERISK', /De-risk to Corporate Bond \/ BAF \(age 61\)/], ['moLargeMid', 'REVIEW', /Not in the firm’s quartile matrix/],
-      ['unknown', 'REVIEW', /Not in the firm’s quartile matrix/], ['liquid', 'HOLD', /consistent top quartile \(95%\)/]];
+    const want = [['dspMid', 'SWITCH', /^🔴 Switch to Nippon India Gr Mid Cap — Bottom 2021, 2022, 2023 YTD$/], ['moBaf', 'SWITCH', /^🔴 Switch to ICICI Pru Balanced Advtg — Bottom 2021, 2022$/],
+      ['ppfas', 'SWITCH', /^🔴 Switch to Quant Flexi Cap — Bottom 2022, 2023 YTD$/], ['kotakFlexi', 'WATCH', /^🟡 Watch — 2021 Bottom, 2023 YTD LM$/],
+      ['moMid', 'HOLD', /^🟢 Hold — Top \/ Upper Mid in 4 of the last 5 years$/], ['axisBlue', 'SWITCH', /^🔴 Switch to /], ['iciciBaf', 'HOLD', /^🟢 Hold/],
+      ['moLargeMid', 'REVIEW', /^⚪ Mixed record/], ['seniorMid', 'DERISK', /^🟡 De-risk to Corporate Bond \/ BAF \(age 61\)$/], ['unknown', 'REVIEW', /^⚪ Not in the quartile sheet/]];
     const bad = want.filter(([k, st, re]) => !r[k] || r[k].status !== st || !re.test(r[k].cardText));
     if(bad.length) throw new Error(JSON.stringify(bad.map(([k]) => [k, r[k] && r[k].status, r[k] && r[k].cardText])));
-    return want.length + ' verdicts as the matrix says, incl. "Motilal Oswal Large & Midcap" not taken for the Midcap pick and an unknown scheme left for review';
+    if(!/2021 Bottom · 2022 Bottom · 2023 YTD Bottom/.test(r.dspMid.signal) || !/Nippon India Gr Mid Cap Fund Gr Gr \(Top \/ Upper Mid in \d of the last 5 years/.test(r.dspMid.signal)
+      || !/1,968 schemes in 67 peer groups/.test(r.src)) throw new Error(JSON.stringify({sig: r.dspMid.signal, src: r.src}));
+    return want.length + ' verdicts from the sheet, each with its record; "Axis Bluechip" found as Axis Large Cap, "Motilal Oswal Large & Midcap" not taken for the Midcap fund, an unknown scheme left for review';
   });
 
-  await t.step('2. RIA AI’s "Buy / sell / switch" finding counts the matrix’s verdicts', async () => {
+  await t.step('2. RIA AI’s "Buy / sell / switch" finding counts the sheet’s verdicts', async () => {
     const r = await t.eval((id) => { const c = riaPersonById(id); const x = riaIntel('complete portfolio analysis', [c]); const f = riaFindings(x).find(([k]) => k === 'Buy / sell / switch');
       return {f: f && f[1], list: (x.actions.list || []).filter(a => a.action === 'Switch').map(a => a.scheme + ' → ' + a.to)}; }, ids.p);
     const quart = r.list.filter(x => !/undefined$/.test(x));
-    if(!r.f || /No scheme-level signals/.test(r.f) || !/Switch \(quartile\) 2/.test(r.f) || !/Hold \(top quartile\) 2/.test(r.f) || quart.length !== 2
-      || !quart.some(x => /DSP Midcap .* → Motilal Oswal Midcap Fund/.test(x))) throw new Error(JSON.stringify(r));
-    return '"' + r.f.slice(0, 120) + '"; matrix switches: ' + quart.join('; ');
+    if(!r.f || /No scheme-level signals/.test(r.f) || !/Switch \(quartile\) 2/.test(r.f) || !/Watch \(quartile\) 2/.test(r.f) || quart.length < 2
+      || !quart.some(x => /DSP Midcap .* → Nippon India Gr Mid Cap/.test(x))) throw new Error(JSON.stringify(r));
+    return '"' + r.f.slice(0, 120) + '"; sheet switches / watches: ' + quart.join('; ');
   });
 
   await t.step('3. the chat’s data: scheme signals, the goal gap, and the mature clients to de-risk', async () => {
@@ -83,13 +89,13 @@ suite(async t => {
       return {sw: s.switches.map(x => x.scheme), holds: s.holds.map(x => x.scheme), nc: s.notCovered, goal: g.goals[0], gap: g.sipGap, need: g.sipNeededTotal, g0: g0.note,
         mature: m.clients.map(x => x.name + ' ' + x.midSmallValue), strategy: m.strategy};
     }, ids);
-    if(r.sw.length !== 2 || !r.sw.some(x => /DSP Midcap/.test(x)) || !r.sw.some(x => /Balanced Advantage/.test(x)) || r.holds.length !== 2 || r.nc.length !== 1
+    if(r.sw.length !== 2 || !r.sw.some(x => /DSP Midcap/.test(x)) || !r.sw.some(x => /Balanced Advantage/.test(x)) || r.holds.length !== 0 || r.nc.length !== 1
       || !r.goal || r.goal.goal !== 'Child education' || r.goal.rate !== 12 || !(r.goal.sipNeeded > 10000 && r.goal.sipNeeded < 20000) || r.gap !== r.need
       || !/No goals are mapped/.test(r.g0) || r.mature.join() !== 'ZZ Senior Test 800000' || !/15% Liquid/.test(r.strategy)) throw new Error(JSON.stringify(r));
-    return 'switches ' + r.sw.length + ', holds ' + r.holds.length + ', not covered 1; goal: SIP ₹' + r.goal.sipNeeded.toLocaleString('en-IN') + '/mo for ₹25 L in ' + r.goal.years + ' yrs (no SIP running → gap the same); no goals → "map goals first"; mature: ' + r.mature.join(', ');
+    return 'switches ' + r.sw.length + ', holds ' + r.holds.length + ', not in the sheet 1; goal: SIP ₹' + r.goal.sipNeeded.toLocaleString('en-IN') + '/mo for ₹25 L in ' + r.goal.years + ' yrs (no SIP running → gap the same); no goals → "map goals first"; mature: ' + r.mature.join(', ');
   });
 
-  await t.step('4. the review sheet: cards without a suggestion show the matrix’s; "Fill RIA suggestions" saves them and keeps one already typed', async () => {
+  await t.step('4. the review sheet: cards without a suggestion show the sheet’s; "Fill RIA suggestions" saves them and fills nothing twice', async () => {
     const r = await t.eval(async (id) => {
       ReviewReport.open(id);
       for(let i = 0; i < 60; i++){ await new Promise(r => setTimeout(r, 250)); if(document.querySelectorAll('#xlTabs .xl-tab').length) break; }
@@ -105,7 +111,7 @@ suite(async t => {
     if(r.err) throw new Error(r.err);
     const card = (list, re) => list.find(c => re.test(c.name)) || {};
     const b = r.before;
-    if(!r.hasBtn || !/RIA: 🔴 Switch to Motilal Oswal Midcap/.test(card(b, /DSP Midcap/).sug) || !/RIA: 🟢 Hold/.test(card(b, /Kotak Flexi/).sug) || !/RIA: ⚪ Not in the firm/.test(card(b, /Unknown Thematic/).sug))
+    if(!r.hasBtn || !/RIA: 🔴 Switch to Nippon India Gr Mid Cap/.test(card(b, /DSP Midcap/).sug) || !/RIA: 🟡 Watch/.test(card(b, /Kotak Flexi/).sug) || !/RIA: ⚪ Not in the quartile sheet/.test(card(b, /Unknown Thematic/).sug))
       throw new Error('before: ' + JSON.stringify(b).slice(0, 700));
     /* a suggestion the reviewer already typed is kept; the rest are filled */
     const r2 = await t.eval(async (id) => {
@@ -128,8 +134,8 @@ suite(async t => {
       const x = document.getElementById('rrOverlay'); if(x) x.remove();
       return {hadEdits: !!e, sug, after, status, status2};
     }, ids.p);
-    if(!/5 suggestions filled from the firm's quartile matrix/.test(r3.status) || !/Every scheme already has a suggestion/.test(r3.status2) || r3.sug.length !== 5 || !r3.sug.some(s => /Switch to Motilal Oswal Midcap/.test(s)) || r3.after.some(a => a.ria) || !/Switch to Motilal Oswal Midcap/.test(card(r3.after, /DSP Midcap/).sug))
+    if(!/5 suggestions filled from the firm's quartile sheet/.test(r3.status) || !/Every scheme already has a suggestion/.test(r3.status2) || r3.sug.length !== 5 || !r3.sug.some(s => /Switch to Nippon India Gr Mid Cap/.test(s)) || r3.after.some(a => a.ria) || !/Switch to Nippon India Gr Mid Cap/.test(card(r3.after, /DSP Midcap/).sug))
       throw new Error('fill: ' + JSON.stringify({status: r3.status, status2: r3.status2, n: r3.sug.length, ria: r3.after.filter(a => a.ria).map(a => a.name)}));
-    return '5 cards showed the matrix verdict (marked RIA); Fill saved 5 suggestions as the reviewer’s; a second Fill finds nothing left to fill';
+    return '5 cards showed the sheet verdict (marked RIA); Fill saved 5 suggestions as the reviewer’s; a second Fill finds nothing left to fill';
   });
 });

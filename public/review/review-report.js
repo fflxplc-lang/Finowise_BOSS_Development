@@ -2038,7 +2038,7 @@ const ReviewPage = (() => {
         <label class="xl-date" title="Review date">Date <input type="date" id="xlDate" value="${esc(edits.reviewDate || data.today)}"></label>
         <span id="xlStatus" class="xl-status ${data.editsSavedAt ? "ok" : ""}">${data.editsSavedAt ? "Changes saved" : "No changes yet"}</span>
         <button type="button" class="xl-btn" id="xlView" title="Switch between the dashboard look and a spreadsheet look">${excelView ? "Dashboard view" : "Excel view"}</button>
-        <button type="button" class="xl-btn" id="xlRia" title="Writes the firm's quartile-matrix suggestion into every scheme whose Suggestions is empty. Yours are never overwritten; edit or clear any of them.">Fill RIA suggestions</button>
+        <button type="button" class="xl-btn" id="xlRia" title="Writes the firm's quartile-sheet verdict into every scheme whose Suggestions is empty. Yours are never overwritten; edit or clear any of them.">Fill RIA suggestions</button>
         <button type="button" class="xl-btn" id="xlReset">Reset changes</button>
         <button type="button" class="xl-btn" id="xlPrev" title="Review reports exported before, kept with the client">Previous reviews</button>
         <button type="button" class="xl-btn" id="xlPdf" title="Every sheet of the review, one to a page, to save as a PDF from the print window">Export PDF</button>
@@ -2215,7 +2215,7 @@ const ReviewPage = (() => {
         + `${edit ? ` title="Click to change"` : ""}>${shown || "–"}</b></div>`;
     },
     pct(r, c) { const v = this.num(r, c); return v === null ? "" : fmt.pct(v); },
-    // A scheme the reviewer has not written a suggestion for: the firm's quartile matrix verdict, marked as RIA's.
+    // A scheme the reviewer has not written a suggestion for: the firm's quartile-sheet verdict, marked as RIA's.
     verdict(r) {
       if (typeof window.riaReviewSuggestion !== "function" || !data) return null;
       const name = this.text(r, "B");
@@ -2854,7 +2854,7 @@ const ReviewPage = (() => {
     scheduleSave();
     rebuild();
   }
-  // Every scheme with no suggestion of the reviewer's gets the matrix's, saved like a typed one.
+  // Every scheme with no suggestion of the reviewer's gets the sheet's verdict, saved like a typed one.
   function fillRiaSuggestions() {
     let n = 0;
     for (const [row, k] of schemeRows) {
@@ -2866,7 +2866,7 @@ const ReviewPage = (() => {
     }
     if (!n) { setStatus("Every scheme already has a suggestion.", "warn"); return; }
     changed();
-    setStatus(n + " suggestion" + (n === 1 ? "" : "s") + " filled from the firm's quartile matrix. Edit or clear any of them before exporting.");
+    setStatus(n + " suggestion" + (n === 1 ? "" : "s") + " filled from the firm's quartile sheet. Edit or clear any of them before exporting.");
   }
 
   // ---- Right-click menu -------------------------------------------------------------------------

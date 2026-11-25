@@ -372,7 +372,7 @@ table.xl-grid.xl-modern td.xl-edited::after { border-color: transparent #f2a900 
 .cv-bars-gap { margin-top: 12px; }
 .cv-bars > .cv-bars-h:first-child { margin-top: 0; }
 
-/* The firm's quartile-matrix suggestion, shown where the reviewer has not written one. */
+/* The firm's quartile-sheet verdict, shown where the reviewer has not written one. */
 .cv-ria { display: inline-block; font-weight: 600; font-size: 12px; line-height: 1.35; white-space: normal; }
 .cv-ria-red { color: #dc2626; }
 .cv-ria-amber { color: #b45309; }

@@ -19,6 +19,7 @@
      total AUM (the server require()s the same file). -->
 <script src="/book-aum.js"></script>
 <script src="/review/review-report.js"></script>
+<script src="/ria-quartiles.js"></script>
 <title>BOSS</title>
 <!-- THE TAB SHOULD SAY WHOSE SYSTEM THIS IS.
      The browser drew its own globe because nothing here named an icon.
@@ -60050,7 +60051,7 @@ HOW RIA AI ANSWERS
   - For any question about the market, a chart or a technical read, apply the discipline of a Chartered Market Technician (CMT, the US charter): read the primary trend (200-day average, 52-week range), the secondary trend (50-day) and the short-term trend (20-day); ask for confirmation from independent signals (trend, momentum, volume, volatility) before leaning on one; treat a signal that the others contradict as unconfirmed; and always state the level at which the view is invalidated. Use only the indicators in <data>; never invent a pattern, count or divergence that is not computed there. Do not tell anyone you hold the charter.
   - Answer from the <data> and the <sops> you are given. Quote figures exactly as they appear in <data>; never estimate one.
   - When <data> has clientPortfolioAnalysis, it is that one client's portfolio: open with "**📊 Portfolio Analysis: <name> (<id>)**", then total AUM and monthly SIP, branch and risk profile, the asset allocation (equity / debt / hybrid / gold / liquid, % and ₹), a table Scheme Name | Category | Folio | Current Value, and an advisory verdict for that client's risk profile (if not profiled, say risk profiling comes first). Speak of no other client.
-  - When <data> has schemeSignals, give "🔴 Switch alerts" (each scheme, its quartile record and the named alternative), "🟡 De-risk / Watch", "🟢 Core holds", the schemes not covered by the matrix, and the fresh-allocation line, exactly as in <data>; say the verdicts come from the firm's quartile matrix. Name no fund that is not in <data>.
+  - When <data> has schemeSignals, give "🔴 Switch alerts" (each scheme, its quartile record and the named alternative), "🟡 De-risk / Watch", "🟢 Core holds", the schemes not covered by the matrix, and the fresh-allocation line, exactly as in <data>; say the verdicts come from the firm's quartile ranking sheet and quote each fund's record. Name no fund that is not in <data>.
   - When <data> has goalGap, show each goal's target, year and SIP needed against the current SIP and the gap, with its note; if it has no goals, say goals must be mapped first.
   - When <data> has matureRebalancing, list those clients (age or goal horizon, mid / small cap value, schemes) and the 15 / 35 / 50 bucket strategy to de-risk them in stages.
   - When <data> has branchAnalysis, it is that branch only: open with "**🏢 <branch> Branch Portfolio Summary**", total clients, total branch AUM and monthly SIP, then a table Client ID | Client Name | AUM of its top clients. Speak of no other branch.
@@ -61866,67 +61867,95 @@ function riaIntelModules(q){
 }
 /* ---- the seven analyses ---- */
 /* =====================================================================
-   THE FIRM'S 10-YEAR QUARTILE MATRIX — HOLD / SWITCH / DE-RISK PER SCHEME
+   THE FIRM'S QUARTILE RANKING SHEET — HOLD / SWITCH / WATCH / DE-RISK
 
-   The firm's own consistency matrix (category → top picks and chronic
-   laggards, with their quartile record), as the firm supplied it. Every
-   verdict below is read from it, never from a fund's name in the code:
-     · a laggard of its own category → Switch to that category's first top
-       pick (or, marked "watch", hold with a trailing stop and send fresh
-       SIPs to the top pick);
-     · a Balanced Advantage / DAA scheme that is not a top pick and has an
-       XIRR under 8.5% → Switch to the category's top pick;
-     · a client over 55, or a goal within 3 years, holding mid / small cap →
-       De-risk into Corporate Bond / BAF top picks;
-     · a top pick → Hold, with its consistency;
-     · anything the matrix does not cover → "not in the matrix — review",
-       never a Hold the data does not back.
-   A scheme is matched to an entry by name (lexiTokens, all of the entry's
-   words in the scheme's), only within the scheme's own category, so
-   "Motilal Oswal Large & Midcap" is not "Motilal Oswal Midcap".
+   Every verdict is read from the firm's Mutual Fund Quartile Ranking Sheet
+   (public/ria-quartiles.js, generated from the sheet the firm uploaded):
+   each scheme's quartile within its peer group (the sheet's numbered
+   sections), year by year, 2013 to 2023 YTD. The rules, stated on every
+   verdict with the fund's own record:
+     · Switch — Bottom in 2 of the last 3 years; the target is the best
+       fund of the same peer group (most Top / Upper Mid years in the last
+       5, then the latest year, then AUM);
+     · De-risk — a client over 55, or a goal within 3 years, holding mid /
+       small cap: to the best Corporate Bond and Balanced Advantage funds;
+     · Watch — Bottom in 1 of the last 3 years, or Lower Mid or worse in 2;
+     · Hold — Top / Upper Mid in 4 of the last 5 years, not Bottom lately;
+     · otherwise "mixed record", "too new to judge" or "not in the sheet"
+       — review, never a Hold the record does not back.
+   A holding is matched to a sheet row by name (lexiTokens, the sheet's
+   abbreviations dropped), only where both names point at the same
+   category, so "Motilal Oswal Large & Midcap" is never the Midcap fund.
    ===================================================================== */
-const RIA_MATRIX_SOURCE = 'Firm 10-year quartile consistency matrix (2014–2023), as supplied by the firm';
-const RIA_FUND_MATRIX = {
-  'Mid Cap': {topPicks: [{name:'Motilal Oswal Midcap Fund', consistency:'90%', note:'Consistently Top/Upper Mid (2020-2023)'},
-      {name:'Kotak Midcap Fund', consistency:'85%', note:'Solid Upper Mid consistency'}, {name:'HDFC Mid-Cap Opportunities Fund', consistency:'88%', note:'High AUM stable performer'}],
-    laggards: [{name:'DSP Midcap Fund', pattern:'Bottom in 2020, 2021, 2022', reason:'Persistent 3-year quartile underperformance'},
-      {name:'Aditya Birla SL Midcap Fund', pattern:'Lower Mid / Bottom', reason:'High expense & sub-benchmark alpha'}]},
-  'Small Cap': {topPicks: [{name:'Nippon India Small Cap Fund', consistency:'92%', note:'Consistently Top quartile across 10 years'},
-      {name:'Quant Small Cap Fund', consistency:'88%', note:'Exceptional alpha & Top quartile (2020-2023)'}],
-    laggards: [{name:'DSP Small Cap Fund', pattern:'Volatile (Bottom 2017-18, Lower Mid 2021-22)', reason:'Inconsistent downside protection', action:'watch'}]},
-  'Flexi Cap': {topPicks: [{name:'Parag Parikh Flexi Cap Fund', consistency:'95%', note:'Consistent Top Quartile across cycles'},
-      {name:'Kotak Flexi Cap Fund', consistency:'82%', note:'Stable large-cap oriented core holding'}],
-    laggards: [{name:'Motilal Oswal Flexi Cap Fund', pattern:'Bottom in 2019-2021', reason:'Concentrated portfolio drag'}]},
-  'Large Cap': {topPicks: [{name:'Nippon India Large Cap Fund', consistency:'85%', note:'Top Quartile 2022-2023'},
-      {name:'SBI Large Cap Fund', consistency:'80%', note:'Reliable bluechip compounder'}],
-    laggards: [{name:'Axis Bluechip Fund', pattern:'Bottom in 2021, 2022, 2023', reason:'Persistent growth style underperformance'}]},
-  'Large and Mid Cap': {topPicks: [{name:'Mirae Asset Large & Midcap Fund', consistency:'86%', note:'Consistent Top/Upper Mid'},
-      {name:'Kotak Equity Opportunities Fund', consistency:'84%', note:'Strong category alpha'}],
-    laggards: [{name:'Axis Large & Mid Cap Fund', pattern:'Lower Mid / Bottom 2021-23', reason:'Lagging category benchmark'}]},
-  'DAA': {topPicks: [{name:'ICICI Prudential Balanced Advantage Fund', consistency:'90%', note:'Model-driven consistent downside protection'},
-      {name:'Edelweiss Balanced Advantage Fund', consistency:'85%', note:'Low volatility dynamic hedging'}],
-    laggards: [{name:'Motilal Oswal Balance Advantage Fund', pattern:'Bottom in 2017, 2019, 2020, 2021', reason:'Failed to beat conservative hybrid benchmarks'}]},
-  'Corporate Bond': {topPicks: [{name:'Aditya Birla Sun Life Corporate Bond Fund', consistency:'92%', note:'Top safety & accrual'},
-      {name:'HDFC Corporate Bond Fund', consistency:'88%', note:'High credit quality (AAA)'}], laggards: []},
-  'Liquid': {topPicks: [{name:'HDFC Liquid Fund', consistency:'95%', note:'Zero credit risk, consistent yield'},
-      {name:'ICICI Prudential Liquid Fund', consistency:'94%', note:'High liquidity and instant redemption'}], laggards: []}};
-const RIA_MATRIX_CAT = {'mid cap':'Mid Cap', 'small cap':'Small Cap', 'flexi cap':'Flexi Cap', 'large cap':'Large Cap', 'large and mid':'Large and Mid Cap', 'baf':'DAA', 'corporate bond':'Corporate Bond', 'liquid':'Liquid'};
-const riaShortFund = n => String(n || '').replace(/\s+fund$/i, '').replace(/ICICI Prudential/i, 'ICICI Pru');
-/* The matrix category of a scheme (from its name, or the review sheet's sub type), and the entry it is, if any. */
-function riaMatrixLookup(name, subType){
-  const cat = (typeof lexiCategoryOf==='function' && (lexiCategoryOf(name) || (subType && lexiCategoryOf(subType)))) || null;
-  const key = cat && RIA_MATRIX_CAT[cat.id];
-  const norm = n => lexiTokens(n).map(w=>w==='balance' ? 'balanced' : w);      // "Balance Advantage" is "Balanced Advantage"
-  const toks = new Set(norm(name));
-  const has = e => { const w = norm(e.name); return w.length && w.every(x=>toks.has(x)); };
-  const cats = key ? [key] : Object.keys(RIA_FUND_MATRIX);
-  for(const k of cats){
-    const m = RIA_FUND_MATRIX[k];
-    const lag = m.laggards.find(has); if(lag) return {cat: k, kind: 'laggard', entry: lag};
-    const top = m.topPicks.find(has); if(top) return {cat: k, kind: 'top', entry: top};
-  }
-  return {cat: key || '', kind: '', entry: null};
+const RIA_Q_DROP = new Set(['reg','gr','dir','pl','fund','plan','growth','opt','option','direct','regular','retail','institutional','inst']);
+const RIA_Q_NAME = ['', 'Top', 'Upper Mid', 'Lower Mid', 'Bottom'];
+const RIA_Q_SHORT = ['—', 'Top', 'UM', 'LM', 'Bottom'];
+/* "ICICI Pru Balanced Advtg Gr", "ICICI Pru Corp Bond Gr": the sheet's abbreviations, written out; renamed "Bluechip" funds are Large Cap now. */
+const RIA_Q_EXPAND = [[/\badvtg\b|\badvg\b/g, 'advantage'], [/\bcorp\b/g, 'corporate'], [/\bopps?\b|\boppor\w*\b|\bopport\w*\b/g, 'opportunities'], [/\bdyn\b/g, 'dynamic'],
+  [/\bgovt\b/g, 'government'], [/\bbal\b/g, 'balanced'], [/\bbalance\b/g, 'balanced'], [/\bhyb\b/g, 'hybrid'], [/\binfra\b/g, 'infrastructure'], [/\bbluechip\b|\bblue chip\b/g, 'large cap'],
+  [/\bsav\b/g, 'savings'], [/\bst\b/g, 'short term'], [/\bmidcap\b/g, 'mid cap'], [/\bsmallcap\b/g, 'small cap'], [/\blargecap\b/g, 'large cap']];
+const riaQExpand = n => { let t = ' ' + String(n || '').toLowerCase().replace(/&/g, ' and ') + ' '; RIA_Q_EXPAND.forEach(([re, to])=>{ t = t.replace(re, to); }); return t.trim(); };
+const riaShortFund = n => { let t = String(n || '').replace(/\(.*?\)/g, ' ').replace(/ICICI Prudential/i, 'ICICI Pru').replace(/\s+/g, ' ').trim();
+  for(let i = 0; i < 4; i++) t = t.replace(/\s+(fund|reg(ular)?|dir(ect)?|gr(owth)?|plan|pl|option|opt)$/i, '').trim();
+  return t; };
+const riaQTokens = n => lexiTokens(riaQExpand(n)).filter(w=>!RIA_Q_DROP.has(w));
+const riaQCatOf = n => (typeof lexiCategoryOf==='function' && lexiCategoryOf(riaQExpand(n))) || null;
+let riaQCache = null;
+/* The sheet, indexed once: rows with their tokens and category, and each peer group's category. */
+function riaQ(){
+  const Q = window.RIA_QUARTILES;
+  if(!Q || !Array.isArray(Q.rows)) return null;
+  if(riaQCache && riaQCache.src === Q) return riaQCache;
+  const rows = Q.rows.map(([name, aum, launch, ranks, sec])=>({name, aum: Number(aum) || 0, launch, ranks: String(ranks).split('').map(Number), sec,
+    toks: new Set(riaQTokens(name)), cat: riaQCatOf(name)}));
+  const bySec = new Map(); rows.forEach(r=>{ if(!bySec.has(r.sec)) bySec.set(r.sec, []); bySec.get(r.sec).push(r); });
+  const secCat = new Map();
+  bySec.forEach((list, sec)=>{ const n = {}; list.forEach(r=>{ if(r.cat) n[r.cat.id] = (n[r.cat.id] || 0) + 1; }); const top = Object.keys(n).sort((x, y)=>n[y] - n[x])[0]; if(top && n[top] >= list.length * 0.4) secCat.set(sec, top); });
+  riaQCache = {src: Q, years: Q.years, latest: Q.latestLabel || String(Q.years[Q.years.length - 1]), source: Q.source, rows, bySec, secCat};
+  return riaQCache;
 }
+const riaQYear = (q, i) => i === q.years.length - 1 ? q.latest : String(q.years[i]);
+/* A scheme's sheet row, by name, where both names agree on the category. */
+function riaQFind(name){
+  const q = riaQ(); if(!q || !name) return null;
+  const t = new Set(riaQTokens(name)); if(!t.size) return null;
+  const hc = riaQCatOf(name);
+  let best = null, bestScore = 0;
+  q.rows.forEach(r=>{
+    let inter = 0; r.toks.forEach(w=>{ if(t.has(w)) inter++; });
+    if(!inter) return;
+    const jac = inter / (t.size + r.toks.size - inter);
+    if(jac < 0.75) return;
+    const rc = r.cat || (q.secCat.has(r.sec) ? {id: q.secCat.get(r.sec)} : null);
+    if(hc && rc && hc.id !== rc.id) return;
+    const ranked = r.ranks.filter(Boolean).length, score = jac * 100 + ranked + Math.min(1, r.aum / 1e5);
+    if(score > bestScore){ best = r; bestScore = score; }
+  });
+  return best;
+}
+/* The last 3 / last 5 years of a row, counted. */
+function riaQRecord(q, r){
+  const n = q.years.length, last5 = r.ranks.slice(n - 5), last3 = r.ranks.slice(n - 3);
+  const yrs = i => riaQYear(q, n - 5 + i);
+  return {last5, last3, ranked: r.ranks.filter(Boolean).length, latest: r.ranks[n - 1],
+    good5: last5.filter(x=>x===1 || x===2).length, bottom3: last3.filter(x=>x===4).length, weak3: last3.filter(x=>x===3 || x===4).length,
+    text: last5.map((x, i)=>yrs(i) + ' ' + RIA_Q_SHORT[x]).join(' · '),
+    years: (want) => last5.map((x, i)=>want(x) ? yrs(i) : null).filter(Boolean)};
+}
+/* The best fund of a peer group: most Top / Upper Mid years in the last 5 (at least 4 ranked), then the latest year, then AUM. */
+function riaQBestOf(sec, exceptName){
+  const q = riaQ(); if(!q) return null;
+  const list = (q.bySec.get(sec) || []).filter(r=>r.name !== exceptName).map(r=>({r, rec: riaQRecord(q, r)})).filter(x=>x.rec.last5.filter(Boolean).length >= 4 && x.rec.bottom3 < 2);
+  list.sort((a, b)=>(b.rec.good5 - a.rec.good5) || ((a.rec.latest || 9) - (b.rec.latest || 9)) || (b.r.aum - a.r.aum));
+  return list[0] || null;
+}
+function riaQBestOfCat(catId){
+  const q = riaQ(); if(!q) return null;
+  const secs = [...q.secCat.entries()].filter(([, c])=>c===catId).map(([s])=>s);
+  const all = secs.map(s=>riaQBestOf(s)).filter(Boolean).sort((a, b)=>(b.rec.good5 - a.rec.good5) || (b.r.aum - a.r.aum));
+  return all[0] || null;
+}
+const RIA_MATRIX_SOURCE_FALLBACK = 'Firm Mutual Fund Quartile Ranking Sheet';
 /* A client's age and nearest goal, for the de-risking rule. */
 function riaClientHorizon(c){
   if(!c) return {age: null, yearsToGoal: null};
@@ -61937,32 +61966,40 @@ function riaClientHorizon(c){
 /* One scheme's verdict. h: {name, subType, xirr (%), current (₹)}; ctx: {age, yearsToGoal}. */
 function riaSchemeVerdict(h, ctx){
   ctx = ctx || {};
-  const name = String(h.name || '').trim(), val = numVal(h.current), xirr = h.xirr === '' || h.xirr == null || !isFinite(Number(h.xirr)) ? null : Number(h.xirr);
-  const L = val ? ' (' + riaCompact2(val) + ')' : '';
-  const hit = riaMatrixLookup(name, h.subType), m = hit.cat ? RIA_FUND_MATRIX[hit.cat] : null;
-  const pick = m && m.topPicks.find(t=>!hit.entry || t.name !== hit.entry.name);
+  const q = riaQ(), source = q ? q.source : RIA_MATRIX_SOURCE_FALLBACK;
+  const name = String(h.name || '').trim(), val = numVal(h.current), L = val ? ' (' + riaCompact2(val) + ')' : '';
+  const cat = riaQCatOf(name) || (h.subType && riaQCatOf(h.subType)) || null;
+  const out = (status, tone, cardText, signal, target, record) => ({status, tone, cardText, signal, target: target || null, record: record || '', category: cat ? cat.label : '', source});
+  const r = q ? riaQFind(name) : null;
   const mature = (ctx.age != null && ctx.age > 55) || (ctx.yearsToGoal != null && ctx.yearsToGoal <= 3);
-  const out = (status, tone, cardText, signal, target, why) => ({status, tone, cardText, signal, target: target || null, why: why || '', category: hit.cat || '', source: RIA_MATRIX_SOURCE});
-  if(hit.kind==='laggard' && hit.entry.action==='watch' && pick)
-    return out('WATCH', 'amber', '🟡 Hold with trailing stop — fresh SIPs to ' + riaShortFund(pick.name),
-      name + L + ': ' + hit.entry.pattern + ' (' + hit.entry.reason + '). Hold with a trailing stop; direct fresh SIPs to ' + pick.name + ' (' + pick.consistency + ' consistency).', pick.name, hit.entry.pattern);
-  if(hit.kind==='laggard' && pick)
-    return out('SWITCH', 'red', '🔴 Switch to ' + riaShortFund(pick.name) + ' — ' + hit.entry.pattern,
-      name + L + ' ranked ' + hit.entry.pattern + ' (' + hit.entry.reason + '). Switch to ' + pick.name + ' (' + pick.consistency + ' consistency: ' + pick.note + ').', pick.name, hit.entry.pattern);
-  if(hit.cat==='DAA' && hit.kind!=='top' && xirr != null && xirr < 8.5 && pick)
-    return out('SWITCH', 'red', '🔴 Switch to ' + riaShortFund(pick.name) + ' — XIRR ' + xirr.toFixed(1) + '% below 8.5%',
-      name + L + ' has an XIRR of ' + xirr.toFixed(1) + '%, under the 8.5% the firm expects of a Balanced Advantage fund. Switch to ' + pick.name + ' (' + pick.consistency + ' consistency).', pick.name, 'XIRR ' + xirr.toFixed(1) + '%');
-  if(mature && (hit.cat==='Mid Cap' || hit.cat==='Small Cap')){
-    const why = ctx.age != null && ctx.age > 55 ? 'age ' + ctx.age : 'goal in ' + ctx.yearsToGoal + ' yrs';
-    const to = RIA_FUND_MATRIX['Corporate Bond'].topPicks[1].name + ' / ' + RIA_FUND_MATRIX.DAA.topPicks[0].name;
-    return out('DERISK', 'amber', '🟡 De-risk to Corporate Bond / BAF (' + why + ')',
-      name + L + ': ' + hit.cat.toLowerCase() + ' volatility does not suit a near horizon (' + why + '). Shift in stages to ' + to + '.', to, why);
+  const midSmall = cat && (cat.id==='mid cap' || cat.id==='small cap');
+  if(!r){
+    if(mature && midSmall) return riaDeriskVerdict(name, L, ctx, cat, out, '');
+    return out('REVIEW', 'grey', '⚪ Not in the quartile sheet — review vs category peers', name + L + ' is not in the firm’s quartile ranking sheet; review it against its category peers before acting.');
   }
-  if(hit.kind==='top')
-    return out('HOLD', 'green', '🟢 Hold — consistent top quartile (' + hit.entry.consistency + ')',
-      name + L + (xirr != null ? ', XIRR ' + xirr.toFixed(1) + '%' : '') + ': ' + hit.entry.note + ' (' + hit.entry.consistency + ' consistency). Retain.', null, hit.entry.note);
-  return out('REVIEW', 'grey', '⚪ Not in the firm’s quartile matrix — review vs category peers',
-    name + L + ' is not covered by the firm’s quartile matrix' + (hit.cat ? ' for ' + hit.cat : '') + '; review it against its category peers before acting.', null, '');
+  const rec = riaQRecord(q, r), peer = riaQBestOf(r.sec, r.name);
+  const peerTxt = peer ? peer.r.name + ' (Top / Upper Mid in ' + peer.rec.good5 + ' of the last 5 years: ' + peer.rec.text + ')' : '';
+  if(rec.ranked < 3) return out('REVIEW', 'grey', '⚪ Too new to judge — ranked in ' + rec.ranked + ' year' + (rec.ranked===1 ? '' : 's'),
+    name + L + ' has only ' + rec.ranked + ' ranked year(s) in the sheet (' + rec.text + '); too new to judge on consistency.', null, rec.text);
+  if(rec.bottom3 >= 2 && peer)
+    return out('SWITCH', 'red', '🔴 Switch to ' + riaShortFund(peer.r.name) + ' — Bottom ' + rec.years(x=>x===4).filter(y=>y >= riaQYear(q, q.years.length - 3)).join(', '),
+      name + L + ': Bottom quartile in ' + rec.bottom3 + ' of the last 3 years (' + rec.text + '). Switch to ' + peerTxt + '.', peer.r.name, rec.text);
+  if(mature && midSmall) return riaDeriskVerdict(name, L, ctx, cat, out, rec.text);
+  if(rec.bottom3 === 1 || rec.weak3 >= 2)
+    return out('WATCH', 'amber', '🟡 Watch — ' + rec.last3.map((x, i)=>x===3 || x===4 ? riaQYear(q, q.years.length - 3 + i) + ' ' + RIA_Q_SHORT[x] : null).filter(Boolean).join(', '),
+      name + L + ': ' + rec.text + '. Weak in the last 3 years; hold for now and review next quarter' + (peer ? ', and send fresh SIPs to ' + peerTxt : '') + '.', peer ? peer.r.name : null, rec.text);
+  if(rec.good5 >= 4 && rec.latest !== 4)
+    return out('HOLD', 'green', '🟢 Hold — Top / Upper Mid in ' + rec.good5 + ' of the last 5 years',
+      name + L + ': ' + rec.text + '. Consistently Top / Upper Mid in its peer group; retain.', null, rec.text);
+  return out('REVIEW', 'grey', '⚪ Mixed record — review (' + rec.text + ')',
+    name + L + ': a mixed quartile record (' + rec.text + '); neither a clear hold nor a switch — review against ' + (peer ? peerTxt : 'its peers') + '.', null, rec.text);
+}
+function riaDeriskVerdict(name, L, ctx, cat, out, record){
+  const why = ctx.age != null && ctx.age > 55 ? 'age ' + ctx.age : 'goal in ' + ctx.yearsToGoal + ' yrs';
+  const cb = riaQBestOfCat('corporate bond'), baf = riaQBestOfCat('baf');
+  const to = [cb && riaShortFund(cb.r.name), baf && riaShortFund(baf.r.name)].filter(Boolean).join(' / ') || 'Corporate Bond / Balanced Advantage';
+  return out('DERISK', 'amber', '🟡 De-risk to Corporate Bond / BAF (' + why + ')',
+    name + L + ': ' + cat.label.toLowerCase() + ' volatility does not suit a near horizon (' + why + ')' + (record ? '; record ' + record : '') + '. Shift in stages to ' + to + '.', to, record);
 }
 /* The review sheet asks for a scheme's suggestion by client and scheme. */
 window.riaReviewSuggestion = function(clientKey, h){
@@ -61977,9 +62014,9 @@ function bossSchemeSignals(c){
   const rows = riaPositions(c).filter(p=>p.current > 0 && p.scheme && !/platform sleeve/.test(p.scheme)).sort((a,b)=>b.current - a.current)
     .map(p=>Object.assign({scheme: p.scheme, current: Math.round(p.current), xirr: p.xirr}, riaSchemeVerdict({name: p.scheme, current: p.current, xirr: p.xirr}, ctx)));
   const pick = st => rows.filter(r=>r.status===st).map(r=>({scheme: r.scheme, current: r.current, xirr: r.xirr, signal: r.signal, target: r.target}));
-  return {client: {id: c.id, name: clientDisplayName(c), age: ctx.age, yearsToGoal: ctx.yearsToGoal}, source: RIA_MATRIX_SOURCE,
-    switches: pick('SWITCH'), deRisk: pick('DERISK'), watch: pick('WATCH'), holds: pick('HOLD'), notCovered: pick('REVIEW').map(r=>r.scheme),
-    freshAllocation: 'Fresh SIPs to top-quartile picks: ' + ['Flexi Cap', 'Large and Mid Cap'].map(k=>riaShortFund(RIA_FUND_MATRIX[k].topPicks[0].name)).join(' / ') + '.'};
+  return {client: {id: c.id, name: clientDisplayName(c), age: ctx.age, yearsToGoal: ctx.yearsToGoal}, source: (riaQ() || {}).source || RIA_MATRIX_SOURCE_FALLBACK,
+    switches: pick('SWITCH'), deRisk: pick('DERISK'), watch: pick('WATCH'), holds: pick('HOLD'), notCovered: rows.filter(r=>r.status==='REVIEW').map(r=>r.scheme + ' (' + r.cardText.replace(/^⚪\s*/, '') + ')'),
+    freshAllocation: (()=>{ const f = ['flexi cap', 'large and mid'].map(riaQBestOfCat).filter(Boolean); return f.length ? 'Fresh SIPs to the best-ranked peers in the sheet: ' + f.map(x=>riaShortFund(x.r.name)).join(' / ') + '.' : ''; })()};
 }
 /* The SIP each mapped goal needs from today (rate by horizon: 12% for 7+ years, 9% for 3–7, 7% under 3), against the SIP running now. */
 function bossGoalGap(c){
@@ -62003,7 +62040,7 @@ function bossMatureRebalancing(clients){
     if(val > 0) out.push({id: c.id, name: clientDisplayName(c), age: ctx.age, yearsToGoal: ctx.yearsToGoal, midSmallValue: Math.round(val), schemes: risky.map(p=>p.scheme).slice(0, 4)});
   });
   out.sort((a, b)=>b.midSmallValue - a.midSmallValue);
-  return {clients: out.slice(0, 20), total: out.length, totalValue: Math.round(out.reduce((a, x)=>a + x.midSmallValue, 0)), source: RIA_MATRIX_SOURCE,
+  return {clients: out.slice(0, 20), total: out.length, totalValue: Math.round(out.reduce((a, x)=>a + x.midSmallValue, 0)), source: (riaQ() || {}).source || RIA_MATRIX_SOURCE_FALLBACK,
     strategy: '15% Liquid (0–2 yrs) / 35% Corporate Debt (2–7 yrs) / 50% Growth Equity (7+ yrs) — the firm’s 3-bucket (GAB) split, moving the excess in stages.'};
 }
 function riaIntel(q, people){
