@@ -62002,6 +62002,8 @@ function riaDeriskVerdict(name, L, ctx, cat, out, record){
     name + L + ': ' + cat.label.toLowerCase() + ' volatility does not suit a near horizon (' + why + ')' + (record ? '; record ' + record : '') + '. Shift in stages to ' + to + '.', to, record);
 }
 /* The review sheet asks for a scheme's suggestion by client and scheme. */
+/* "DSP Midcap (₹2.60 L): Bottom quartile…" under a Scheme column that already names it: the reason alone. */
+const riaWhyOnly = (signal, name) => { const t = String(signal || ''); return name && t.startsWith(name) ? t.slice(name.length).replace(/^\s*(\([^)]*\))?\s*:\s*/, '') : t; };
 window.riaReviewSuggestion = function(clientKey, h){
   try{
     const c = (typeof riaPersonById==='function' && riaPersonById(clientKey)) || (DB.clients || []).find(x=>x.id===clientKey) || null;
@@ -62124,7 +62126,7 @@ function riaIntel(q, people){
         if(v.status==='REVIEW') return;
         const k = {SWITCH:'Switch (quartile)', DERISK:'De-risk (horizon)', WATCH:'Watch (quartile)', HOLD:'Hold (top quartile)'}[v.status];
         count[k] = (count[k]||0) + 1;
-        if(v.status!=='HOLD') list.push({client: clientDisplayName(c), action: v.status==='DERISK' ? 'De-risk' : v.status==='WATCH' ? 'Watch' : 'Switch', scheme: p.scheme, why: v.signal, value: riaR(p.current), to: v.target}); }); });
+        if(v.status!=='HOLD') list.push({client: clientDisplayName(c), action: v.status==='DERISK' ? 'De-risk' : v.status==='WATCH' ? 'Watch' : 'Switch', scheme: p.scheme, why: riaWhyOnly(v.signal, p.scheme), value: riaR(p.current), to: v.target}); }); });
     sig.forEach(s=>{ s.rows.filter(r=>r.scheme && r.scheme!=='—').forEach(r=>{ count[r.action] = (count[r.action]||0) + 1; if(r.action!=='Hold') list.push({client: clientDisplayName(s.client), action:r.action, scheme:r.scheme, why:r.why, value: riaR(r.value)}); });
       s.moves.forEach(m=>{ const k = m.action + ' (rebalance)'; count[k] = (count[k]||0) + 1; list.push({client: clientDisplayName(s.client), action: m.action, scheme: m.asset + ' rebalance', why: m.why, value: riaR(m.amount)}); }); });
     const risky = positions.filter(p=>p.cat && ['small cap','mid cap','thematic'].includes(p.cat.id));
