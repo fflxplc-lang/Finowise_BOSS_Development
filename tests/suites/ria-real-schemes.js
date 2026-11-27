@@ -95,7 +95,9 @@ suite(async t => {
       const c = riaPersonById(id) || DB.clients.find(x => x.id === id);
       const pos = riaPositions(c).map(p => ({s: p.scheme, v: Math.round(p.current), cls: p.cls, folio: p.folio || ''}));
       const sig = lexiClientSignals(c).rows.map(r => r.scheme + ' → ' + r.action);
-      const ins = riaReviewInsight([id]);
+      /* the review page's RIA Insight box where the page has one (production); its same lines from riaIntel where it does not (TEST) */
+      const ins = typeof riaReviewInsight === 'function' ? riaReviewInsight([id]) : (() => { const x = riaIntel('complete portfolio analysis', [c]);
+        return {lines: riaFindings(x).map(([k, v]) => k + ': ' + v).concat(((x.actions || {}).list || []).map(a => a.action + ' — ' + a.scheme + ': ' + (a.why || '')))}; })();
       const ss = bossSchemeSignals(c);
       const dossier = JSON.stringify(bossClientDossier(c).holdings || []);
       return {pos, sig, lines: ins.lines, sw: ss.switches.map(x => x.scheme), dossier};
