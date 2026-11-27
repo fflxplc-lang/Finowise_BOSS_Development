@@ -59894,7 +59894,7 @@ function bossClientDossier(c){
     fields[f.l] = f.k==='pan' ? bossMask(v,4) : f.t==='team' ? (riaRmName(v) || '—') : v;
   });
   const lim = (a, n) => a.slice(0, n);
-  const holdings = (DB.platformHoldings||[]).filter(h=>riaIdsOf(c).includes(h.clientId) && !h.deletedAt)
+  const holdings = riaIdsOf(c).flatMap(id=>riaSchemeHoldingsOf(id))       // the schemes on Detailed Portfolio, not the upload's sleeve summary
     .map(h=>bossScalars(h, ['id','key','clientId','batchId','format','importedBy','firstSeenAt']));
   const sips = (DB.platformSips||[]).filter(s=>riaIdsOf(c).includes(s.clientId) && !s.deletedAt)
     .map(s=>bossScalars(s, ['id','key','clientId','batchId','format','importedBy','firstSeenAt']));
@@ -60051,7 +60051,7 @@ HOW RIA AI ANSWERS
   - For any question about the market, a chart or a technical read, apply the discipline of a Chartered Market Technician (CMT, the US charter): read the primary trend (200-day average, 52-week range), the secondary trend (50-day) and the short-term trend (20-day); ask for confirmation from independent signals (trend, momentum, volume, volatility) before leaning on one; treat a signal that the others contradict as unconfirmed; and always state the level at which the view is invalidated. Use only the indicators in <data>; never invent a pattern, count or divergence that is not computed there. Do not tell anyone you hold the charter.
   - Answer from the <data> and the <sops> you are given. Quote figures exactly as they appear in <data>; never estimate one.
   - When <data> has clientPortfolioAnalysis, it is that one client's portfolio: open with "**📊 Portfolio Analysis: <name> (<id>)**", then total AUM and monthly SIP, branch and risk profile, the asset allocation (equity / debt / hybrid / gold / liquid, % and ₹), a table Scheme Name | Category | Folio | Current Value, and an advisory verdict for that client's risk profile (if not profiled, say risk profiling comes first). Speak of no other client.
-  - When <data> has schemeSignals, give "🔴 Switch alerts" (each scheme, its quartile record and the named alternative), "🟡 De-risk / Watch", "🟢 Core holds", the schemes not covered by the matrix, and the fresh-allocation line, exactly as in <data>; say the verdicts come from the firm's quartile ranking sheet and quote each fund's record. Name no fund that is not in <data>.
+  - When <data> has schemeSignals, give "🔴 Switch alerts" (each scheme, its quartile record and the named alternative), "🟡 De-risk / Watch", "🟢 Core holds", the schemes not covered by the matrix, and the fresh-allocation line, exactly as in <data>, for that client only and before anything else (a process SOP is not the answer to a switch / hold question); say the verdicts come from the firm's quartile ranking sheet and quote each fund's record. Name no fund that is not in <data>.
   - When <data> has goalGap, show each goal's target, year and SIP needed against the current SIP and the gap, with its note; if it has no goals, say goals must be mapped first.
   - When <data> has matureRebalancing, list those clients (age or goal horizon, mid / small cap value, schemes) and the 15 / 35 / 50 bucket strategy to de-risk them in stages.
   - When <data> has branchAnalysis, it is that branch only: open with "**🏢 <branch> Branch Portfolio Summary**", total clients, total branch AUM and monthly SIP, then a table Client ID | Client Name | AUM of its top clients. Speak of no other branch.
@@ -60289,8 +60289,10 @@ async function bossRunChat(q){
   /* One client's portfolio, or one branch's book — never the firm's in their place. */
   const pfQ = /\b(portfolio|holdings?|analysis|rebalanc\w*|schemes?|allocation|suggest\w*|funds?)\b/i.test(q);
   if(pfQ && people.length && !attr) data.clientPortfolioAnalysis = bossClientPortfolio(people[0]);
-  const schemeQ = /\b(portfolio|review|switch\w*|rebalanc\w*|quartile|consisten\w*|underperform\w*|laggard|hold|sell|exit|funds?|schemes?|de-?risk\w*|analysis)\b/i.test(q);
+  const schemeQ = /\b(portfolio|review|signals?|switch\w*|rebalanc\w*|quartile|consisten\w*|underperform\w*|laggard|hold|sell|exit|funds?|schemes?|de-?risk\w*|analysis)\b/i.test(q);
   if(people.length && !attr && schemeQ) data.schemeSignals = bossSchemeSignals(people[0]);
+  /* "Iska switch signals kya hai": the answer is this client's schemes against the sheet; the switch-process SOP is for "how do I switch", not in its place. */
+  if(data.schemeSignals && !bossLooksLikeHowTo(q)) sops = sops.filter(bossIsPolicy).slice(0, 2);
   if(people.length && !attr && /\b(goals?|target|shortfall|gap|achieve\w*|retire\w*|education|lakshya)\b/i.test(q)) data.goalGap = bossGoalGap(people[0]);
   if(!people.length && !attr && /\b(mature|senior|old(?:er)?|55\+?|retire\w*|near(?:ing)? (?:goal|retirement)|budhe|buzurg)\b/i.test(q) && /\b(rebalanc\w*|de-?risk\w*|switch\w*|shift|allocation|portfolio)\b/i.test(q))
     data.matureRebalancing = bossMatureRebalancing(branchQ ? branchQ.clients : riaVisible());
@@ -60334,8 +60336,10 @@ async function bossRunChat(q){
   /* "Kis client ka kya sell karna hai": the book's signals, as computed. */
   if(!attr && !mktNames && !people.length && !(intel && intel.actions) && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
     const inBranch = branchQ ? new Set(branchQ.clients.flatMap(riaIdsOf)) : null;
-    data.portfolioSignals = lexiBookSignals().filter(x=>x.need && (!inBranch || inBranch.has(x.client.id))).slice(0, 15).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
-      rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold' && r.scheme && r.scheme!=='—').map(r=>r.action+': '+r.scheme+' ('+r.why+')')}));
+    /* Every client listed says what to do: a holding with no scheme name is named as such, and a client with nothing to act on is not listed with a blank. */
+    data.portfolioSignals = lexiBookSignals().filter(x=>x.need && (!inBranch || inBranch.has(x.client.id))).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
+      rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold').map(r=>r.action+': '+(r.scheme && r.scheme!=='—' ? r.scheme : 'a holding with no scheme name')+' ('+r.why+')')}))
+      .filter(x=>x.rebalance.length || x.funds.length).slice(0, 15);
     const z = lexiZoneLabel(); if(!/not set/i.test(z)) data.marketZone = z;
   }
   if(people.length > 3) data.note = (people.length-3)+' more clients matched the name; ask for a fuller name to see them.';
@@ -60890,7 +60894,7 @@ function lexiHoldingValue(h){
 }
 const LEXI_ACTION_TONE = {'Buy':'ok', 'Add':'ok', 'Hold':'', 'Switch':'warn', 'Review':'info', 'Sell':'danger'};
 function lexiClientSignals(c){
-  const holdings = (DB.platformHoldings||[]).filter(h=>h.clientId===c.id && !h.deletedAt);
+  const holdings = typeof riaSchemeHoldingsOf === 'function' ? riaSchemeHoldingsOf(c.id) : (DB.platformHoldings||[]).filter(h=>h.clientId===c.id && !h.deletedAt);
   const zone = lexiZone(), profile = lexiProfileOf(c), target = LEXI_TARGET[profile];
   const rows = holdings.map(h=>{
     const v = lexiHoldingValue(h), f = lexiFundVerdict(h.schemeName);
@@ -61784,6 +61788,47 @@ const RIA_SLEEVE_CLASS = {Equity:'Equity', Debt:'Debt', Structured:'Hybrid', Hyb
   Commodities:'Gold/Commodities', Liquid:'Liquid/Cash', Cash:'Liquid/Cash'};
 const riaYearsSince = d => { const t = Date.parse(String(d||'').slice(0,10)); return isFinite(t) ? (Date.now() - t) / (365.25*864e5) : null; };
 /* A client's positions, as finely as the records allow. */
+/* REAL SCHEMES, NOT PLATFORM SLEEVES (27-11-2026). A multi-asset upload
+   keeps every scheme row (assetRows.<id>, read through maState(), which is
+   what the review sheet's Detailed Portfolio shows) and writes one summary
+   platform holding per client and platform with only its sleeves — Equity,
+   Others… That summary is all RIA AI read, so a client with DSP Midcap,
+   Motilal Oswal BAF and Kotak Flexi Cap on Detailed Portfolio came out as
+   "Others (platform sleeve) 49.4%" and "No scheme-level holdings to read
+   signals from". Where an upload has scheme rows for the client, those rows
+   now stand in for its summary, one holding each; a summary-only report
+   (one total row per client) keeps its sleeves. Nothing is counted twice:
+   a summary is replaced only by the rows it was summed from. */
+function riaMaSchemeRows(clientId){
+  const by = new Map();
+  if(!clientId || typeof maState !== 'function' || typeof maUploads !== 'function' || !maUploads().length) return by;
+  let st; try { st = maState(); } catch(e){ return by; }
+  (st.holdings || []).forEach(r=>{
+    if(!r || r.level === 'summary' || r.removed || !r._c || r._c.clientId !== clientId || !String(r.security_name || '').trim()) return;
+    if(!(numVal(r.current_value) > 0 || numVal(r.invested) > 0)) return;
+    const k = 'ma|' + r.platform_key + '|' + r.product + '|' + clientId;
+    if(!by.has(k)) by.set(k, []);
+    by.get(k).push(r);
+  });
+  return by;
+}
+const RIA_MA_CLASS = {Equity:'Equity', Debt:'Debt', 'Fixed Income':'Debt', Bond:'Debt', Bonds:'Debt', Gold:'Gold/Commodities', Commodity:'Gold/Commodities', Cash:'Liquid/Cash', Hybrid:'Hybrid'};
+/* A client's platform holdings, with each multi-asset summary that has scheme rows replaced by those rows. */
+function riaSchemeHoldingsOf(clientId){
+  const holdings = (DB.platformHoldings || []).filter(h=>h && h.clientId === clientId && !h.deletedAt);
+  const rows = riaMaSchemeRows(clientId);
+  if(!rows.size) return holdings;
+  const out = [];
+  holdings.forEach(h=>{
+    const mine = h.source === 'multiasset' && !h.schemeName ? rows.get(h.key) : null;
+    if(!mine || !mine.length) return out.push(h);
+    mine.forEach(r=>out.push({id: h.id + '|' + (r.isin || maKey(r.security_name)) + '|' + maKey(r.identifier || ''), clientId, schemeName: maTidy(r.security_name),
+      isin: r.isin || '', folio: r.identifier || '', invested: numVal(r.invested), current: numVal(r.current_value),
+      xirr: r.xirr == null || r.xirr === '' ? '' : r.xirr, purchaseDate: r.start_date || r.purchase_date || r.as_of || '',
+      platform: h.platform, product: r.product, category: r.category || '', assetClass: r.asset_class || '', source: 'multiasset-scheme', summaryId: h.id}));
+  });
+  return out;
+}
 /* A person's positions: every row they are filed under. */
 function riaPositions(c){ return c && Array.isArray(c._rows) && c._rows.length > 1 ? [].concat(...c._rows.map(riaPositionsOne)) : riaPositionsOne(c && c._rows ? c._rows[0] : c); }
 function riaPositionsOne(c){
@@ -61794,11 +61839,17 @@ function riaPositionsOne(c){
     return {scheme, invested: numVal(invested), current: numVal(current), start: start || '', xirr: xirr==='' || xirr==null ? null : numVal(xirr),
       amc: riaAmcOf(scheme), cat, cls: riaClassOf(cat), src};
   };
-  const holdings = (DB.platformHoldings||[]).filter(h=>h.clientId===c.id && !h.deletedAt);
+  const holdings = riaSchemeHoldingsOf(c.id);
   let unclassified = 0, uInv = 0, uX = null;
   holdings.forEach(h=>{
     const cur = typeof lexiHoldingValue==='function' ? lexiHoldingValue(h).value : numVal(h.current);
-    if(h.schemeName) return add(asPos(h.schemeName, h.invested, cur, h.purchaseDate || h.startDate || h.accountOpenDate, h.xirr, 'holding'));
+    if(h.schemeName){
+      const p = asPos(h.schemeName, h.invested, cur, h.purchaseDate || h.startDate || h.accountOpenDate, h.xirr, 'holding');
+      /* a stock, bond or FD row from a multi-asset upload: its asset class says what it is where the name cannot */
+      if(!p.cat && h.source === 'multiasset-scheme'){ const cat = h.category ? riaCategoryOf(h.category) : null; if(cat){ p.cat = cat; p.cls = riaClassOf(cat); } else if(RIA_MA_CLASS[h.assetClass]) p.cls = RIA_MA_CLASS[h.assetClass]; }
+      if(h.folio) p.folio = h.folio;
+      return add(p);
+    }
     const sl = h.sleeves && typeof h.sleeves==='object' ? Object.keys(h.sleeves).filter(k=>numVal((h.sleeves[k]||{}).current) > 0) : [];
     if(sl.length) return sl.forEach(k=>{ const s = h.sleeves[k]; add({scheme: k + ' (platform sleeve)', invested: numVal(s.invested), current: numVal(s.current),
       start: h.accountOpenDate || '', xirr: s.xirr==null || s.xirr==='' ? null : numVal(s.xirr), cls: RIA_SLEEVE_CLASS[k] || 'Unclassified',
@@ -63500,7 +63551,7 @@ function bossClientPortfolio(c){
   const by = {}; pos.forEach(p=>{ by[p.cls] = (by[p.cls] || 0) + p.current; });
   const posTotal = pos.reduce((n, p)=>n + p.current, 0) || 1;
   const slot = k => ({value: Math.round(by[k] || 0), pct: Math.round((by[k] || 0) / posTotal * 100)});
-  const folioOf = p => { const h = (DB.platformHoldings || []).find(x=>riaIdsOf(c).includes(x.clientId) && !x.deletedAt && x.schemeName===p.scheme); return h && (h.folioNumber || h.folio) || '—'; };
+  const folioOf = p => { if(p.folio) return p.folio; const h = (DB.platformHoldings || []).find(x=>riaIdsOf(c).includes(x.clientId) && !x.deletedAt && x.schemeName===p.scheme); return h && (h.folioNumber || h.folio) || '—'; };
   return {client: {id: c.id, name: clientDisplayName(c), branch: c.branch || c.branchName || 'Not recorded', rm: riaRmOf(c)[0] || 'Not assigned',
       riskProfile: (typeof lexiProfileOf==='function' && lexiProfileOf(c)) || c.riskProfile || c.iseqCategory || 'Not profiled'},
     totalAum: Math.round(total), totalSip: Math.round(numVal(riaSip(c))), holdingsCount: pos.length,

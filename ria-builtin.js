@@ -496,7 +496,7 @@ function chat(messages, opts) {
     if (data.marketZone && !/not set/i.test(String(data.marketZone)) && (data.liveMarket || data.marketNow || (Array.isArray(data.portfolioSignals) && data.portfolioSignals.length))) out.push('Market zone: ' + data.marketZone + '.');
     if (Array.isArray(data.portfolioSignals) && data.portfolioSignals.length) {
       out.push('Portfolio checks the CRM computed (for the advisor to review before anything is suggested):');
-      data.portfolioSignals.slice(0, 5).forEach((s) => out.push('- ' + (s.client || '') + ': ' + [].concat(s.funds || [], s.rebalance || []).slice(0, 3).join('; ')));
+      data.portfolioSignals.filter((s) => [].concat(s.funds || [], s.rebalance || []).length).slice(0, 5).forEach((s) => out.push('- ' + (s.client || '') + ': ' + [].concat(s.funds || [], s.rebalance || []).slice(0, 3).join('; ')));
     }
     if (data.note) out.push(data.note);
   }
