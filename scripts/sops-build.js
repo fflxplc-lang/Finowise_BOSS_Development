@@ -192,21 +192,20 @@ function pdfOfJpegs(jpegs, dpi){
   parts.push(Buffer.from('xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' + offsets.map(o=>String(o).padStart(10, '0') + ' 00000 n \n').join('') + 'trailer\n<< /Size ' + (objs.length + 1) + ' /Root ' + catalog + ' 0 R >>\nstartxref\n' + at + '\n%%EOF\n'));
   return Buffer.concat(parts);
 }
-function flattenPdf(pdf){
+function flattenPdf(pdf, skip){
   const dpi = 110, tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sopflat-'));
   execFileSync('pdftoppm', ['-r', String(dpi), '-jpeg', '-jpegopt', 'quality=72', pdf, path.join(tmp, 'p')], {stdio: 'ignore', timeout: 300000});
-  const jpegs = fs.readdirSync(tmp).filter(f=>/\.jpg$/.test(f)).sort().map(f=>fs.readFileSync(path.join(tmp, f)));
+  const jpegs = fs.readdirSync(tmp).filter(f=>/\.jpg$/.test(f)).sort().filter((f, i)=>!(skip && skip.has(i + 1))).map(f=>fs.readFileSync(path.join(tmp, f)));
   if(!jpegs.length) throw new Error('pdftoppm made no pages');
   fs.writeFileSync(pdf, pdfOfJpegs(jpegs, dpi));
   fs.rmSync(tmp, {recursive: true, force: true});
 }
-/* a PDF source is used as it is (flattened when the entry asks; slides cannot be withheld from it — say so) */
+/* a PDF source is used as it is, or — flattened, or with pages withheld — rebuilt from pictures of its pages */
 function copyPdf(file, entry){
-  if((entry.withholdSlides || []).length) throw new Error(entry.id + ': withholdSlides cannot be applied to a PDF source — export the deck instead');
   fs.mkdirSync(OUT, {recursive: true});
-  const out = path.join(OUT, entry.pdfFile);
+  const out = path.join(OUT, entry.pdfFile), drop = new Set(entry.withholdSlides || []);
   fs.copyFileSync(file, out);
-  if(entry.flatten) flattenPdf(out);
+  if(entry.flatten || drop.size) flattenPdf(out, drop);
   return fs.statSync(out).size;
 }
 function convert(file, entry){

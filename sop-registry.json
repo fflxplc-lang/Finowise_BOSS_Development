@@ -49,6 +49,7 @@
         16
       ],
       "withholdSlides": [
+        7,
         13,
         14,
         15
@@ -57,7 +58,7 @@
         16
       ],
       "flatten": true,
-      "reviewNote": "Slides 13–15 are a client's cheque, bank statement and signed PAN card (covered only by shapes drawn on top, which a PDF does not truly hide) — withheld from the PDF.",
+      "reviewNote": "Slide 7 is a filled change-of-bank form with a client's folio and name, and slides 13–15 a client's cheque, bank statement and PAN card — withheld.",
       "curated": true
     },
     {
@@ -110,22 +111,23 @@
         11,
         12
       ],
-      "withholdSlides": [],
-      "reviewedSlides": [
+      "withholdSlides": [
         2,
+        8,
+        11
+      ],
+      "reviewedSlides": [
         3,
         4,
         5,
         6,
         7,
-        8,
         9,
         10,
-        11,
         12
       ],
       "flatten": true,
-      "reviewNote": "Slides 5 and 7–11 are MF Central screenshots showing investors' names and folio numbers — redact before uploading.",
+      "reviewNote": "Slides 2, 8 and 11 show an investor's MF Central user ID (PAN), folio numbers, bank and IFSC — withheld. Slides 5, 7, 9 and 10 show investors' names.",
       "curated": true
     },
     {
@@ -234,22 +236,23 @@
         11,
         12
       ],
-      "withholdSlides": [],
-      "reviewedSlides": [
+      "withholdSlides": [
         2,
+        8,
+        9,
+        11
+      ],
+      "reviewedSlides": [
         3,
         4,
         5,
         6,
         7,
-        8,
-        9,
         10,
-        11,
         12
       ],
       "flatten": true,
-      "reviewNote": "Slides 5 and 7–11 are MF Central screenshots showing investors' names, e-mail addresses and folio numbers — redact before uploading.",
+      "reviewNote": "Slides 2, 8, 9 and 11 show an investor's MF Central user ID (PAN), e-mail addresses and folio numbers — withheld. Slides 5, 7 and 10 show investors' names.",
       "curated": true
     },
     {
@@ -299,6 +302,7 @@
         14
       ],
       "withholdSlides": [
+        4,
         5,
         6,
         7
@@ -313,7 +317,7 @@
         14
       ],
       "flatten": true,
-      "reviewNote": "Slides 5–7 are a minor's Aadhaar and two PAN cards — withheld from the PDF.",
+      "reviewNote": "Slide 4 is a signed request letter with a minor's folio and guardians' names, and slides 5–7 a minor's Aadhaar and two PAN cards — withheld.",
       "curated": true
     },
     {
@@ -418,21 +422,22 @@
         10,
         11
       ],
-      "withholdSlides": [],
-      "reviewedSlides": [
+      "withholdSlides": [
         2,
+        8,
+        10
+      ],
+      "reviewedSlides": [
         3,
         4,
         5,
         6,
         7,
-        8,
         9,
-        10,
         11
       ],
       "flatten": true,
-      "reviewNote": "Slides 5 and 7–10 are MF Central screenshots showing investors' names and folio numbers — redact before uploading.",
+      "reviewNote": "Slides 2, 8 and 10 show an investor's MF Central user ID (PAN) and folio numbers — withheld. Slides 5, 7 and 9 show investors' names.",
       "curated": true
     },
     {
@@ -595,7 +600,12 @@
         16
       ],
       "withholdSlides": [
-        3
+        3,
+        10,
+        12,
+        13,
+        14,
+        15
       ],
       "reviewedSlides": [
         4,
@@ -606,7 +616,7 @@
         16
       ],
       "flatten": true,
-      "reviewNote": "Slide 3 shows the Edge 360 login with a partly visible password — withheld. Slide 9 shows a client's name typed in the search.",
+      "reviewNote": "Slide 3 shows the Edge 360 login with a partly visible password, and slides 10 and 12–15 an investor's name, PAN, e-mail, mobile, folios and bank account — withheld. Slide 9 shows a client's name.",
       "curated": true
     },
     {
@@ -715,14 +725,20 @@
       ],
       "withholdSlides": [
         3,
-        17
+        9,
+        11,
+        12,
+        13,
+        16,
+        17,
+        18
       ],
       "reviewedSlides": [
         19,
         20
       ],
       "flatten": true,
-      "reviewNote": "Slide 3 shows the Edge 360 login with a partly visible password and slide 17 a client's name, PAN, e-mail, mobile and nominee — withheld. Slide 8 shows a client's name.",
+      "reviewNote": "Slide 3 shows the Edge 360 login with a partly visible password, and slides 9, 11–13 and 16–18 an investor's PAN, e-mail, folio and the nominee's PAN and address — withheld. Slides 5 and 8 show clients' names.",
       "curated": true
     },
     {
@@ -881,13 +897,14 @@
         7
       ],
       "withholdSlides": [
+        4,
         5,
         6,
         7
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 5–7 are copies of a client's request letter and PAN card — withheld from the PDF.",
+      "reviewNote": "Slides 4–7 are a client's filled request letter (folio, PAN, e-mail, signature) and PAN card — withheld from the PDF.",
       "curated": true
     },
     {
@@ -936,6 +953,9 @@
         13
       ],
       "withholdSlides": [
+        5,
+        6,
+        7,
         10,
         11,
         12
@@ -944,7 +964,7 @@
         13
       ],
       "flatten": true,
-      "reviewNote": "Slides 10–12 are a client's Aadhaar, PAN card and cheque — withheld from the PDF.",
+      "reviewNote": "Slides 5–7 are a filled Annexure 1A with a client's bank account, IFSC, address and signature, and slides 10–12 a client's Aadhaar, PAN card and cheque — withheld.",
       "curated": true
     },
     {
@@ -1071,19 +1091,20 @@
         17
       ],
       "withholdSlides": [
+        1,
+        5,
+        6,
+        8,
+        9,
+        10,
+        11,
         16
       ],
       "reviewedSlides": [
         2,
         3,
         4,
-        5,
-        6,
         7,
-        8,
-        9,
-        10,
-        11,
         12,
         13,
         14,
@@ -1091,7 +1112,7 @@
         17
       ],
       "flatten": true,
-      "reviewNote": "Slide 16 is a generated family chart with a client's name, address and policy list — withheld from the PDF. Slides 5, 6, 10 and 11 show policyholders' names and policy numbers in i-Magic — redact before uploading.",
+      "reviewNote": "Slide 1 shows an i-Magic login with a client's e-mail as user name, slides 5, 6 and 8–11 policyholders' names with policy numbers, dates of birth, sums assured and premiums, and slide 16 a client's family chart — withheld. Slides 7, 14 and 17 show client names.",
       "curated": true
     },
     {
@@ -1142,11 +1163,13 @@
       "slides": 52,
       "imageOnlySlides": [],
       "withholdSlides": [
-        4
+        4,
+        11,
+        39
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 4 shows an agent's name, mobile and e-mail on the Partner Plus landing page — withheld.",
+      "reviewNote": "Slide 4 shows an agent's contact details and slides 11 and 39 a proposer's mobile and e-mail — withheld. Slides 44, 45 and 49 show a Bajaj application number.",
       "curated": true
     },
     {
@@ -1193,9 +1216,17 @@
       "source": "How_to_Generate_Quotation_in_Bajaj_Life_Insurance.pptx",
       "slides": 37,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        7,
+        8,
+        9,
+        27,
+        28,
+        29
+      ],
       "reviewedSlides": [],
       "flatten": true,
+      "reviewNote": "Slides 7–9 and 27–29 show a policyholder's and rider beneficiaries' names with dates of birth and pincode — withheld. Slide 36 shows the policyholder's name.",
       "curated": true
     },
     {
@@ -1241,9 +1272,12 @@
       "source": "How_to_Generate_Quotation.pptx",
       "slides": 10,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        6
+      ],
       "reviewedSlides": [],
       "flatten": true,
+      "reviewNote": "Slide 6 shows a policyholder's name, date of birth and pincode — withheld. Slide 9 shows the policyholder's name.",
       "curated": true
     },
     {
@@ -1494,13 +1528,15 @@
       "slides": 17,
       "imageOnlySlides": [],
       "withholdSlides": [
+        7,
         8,
+        9,
         11,
         16
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 8, 11 and 16 show clients' names, PANs, mobiles, e-mails and a UCC — withheld.",
+      "reviewNote": "Slides 7, 8, 9, 11 and 16 show the Top 10 Investors table, clients' names, PANs, address, mobiles, e-mails and a UCC — withheld. Slides 10 and 15 show client names.",
       "curated": true
     },
     {
@@ -1593,6 +1629,12 @@
         22
       ],
       "withholdSlides": [
+        5,
+        6,
+        8,
+        12,
+        15,
+        16,
         18,
         19
       ],
@@ -1600,7 +1642,7 @@
         22
       ],
       "flatten": true,
-      "reviewNote": "Slides 18–19 are a client's PAN card and Aadhaar (covered only by shapes drawn on top, which a PDF does not truly hide) — withheld from the PDF.",
+      "reviewNote": "Slides 5, 6, 8, 12, 15, 16, 18, 19 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -1646,12 +1688,16 @@
       "slides": 18,
       "imageOnlySlides": [],
       "withholdSlides": [
+        4,
+        5,
+        8,
         9,
+        10,
         17
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 9 lists clients' names, PANs, mobiles and e-mails and slide 17 a client's name and UCC — withheld. Slides 11–12 show a client's name. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
+      "reviewNote": "Slides 4, 5, 8, 9, 10, 17 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
       "curated": true
     },
     {
@@ -1781,12 +1827,14 @@
       "slides": 16,
       "imageOnlySlides": [],
       "withholdSlides": [
+        9,
         12,
-        13
+        13,
+        14
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 12–13 show a minor's name and date of birth and the guardian's PAN, date of birth, e-mail and mobile — withheld. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
+      "reviewNote": "Slides 9, 12, 13, 14 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
       "curated": true
     },
     {
@@ -1834,12 +1882,15 @@
       "slides": 25,
       "imageOnlySlides": [],
       "withholdSlides": [
+        3,
+        4,
         7,
-        11
+        11,
+        12
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 7 lists client names with AUM and slide 11 a client's overseas address — withheld. Slide 16 shows a client's name.",
+      "reviewNote": "Slides 3, 4, 7, 11, 12 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -1990,10 +2041,20 @@
       "source": "NRI_onboarding_-Single_holding_MOH.pptx",
       "slides": 18,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        3,
+        4,
+        7,
+        8,
+        9,
+        10,
+        11,
+        15,
+        17
+      ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 3, 4, 8 and 17 are screenshots showing client names / e-mails (client list, search, NSE activation mail) — redact before uploading.",
+      "reviewNote": "Slides 3, 4, 7–11, 15 and 17 show clients' names with PAN, mobile, e-mail, overseas address, bank account and a UCC — withheld. Slide 16 shows a client's name.",
       "curated": true
     },
     {
@@ -2041,12 +2102,16 @@
       "slides": 25,
       "imageOnlySlides": [],
       "withholdSlides": [
+        3,
+        4,
         7,
-        11
+        11,
+        12,
+        15
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 7 lists client names with AUM and slide 11 a client's overseas address — withheld. Slide 16 shows a client's name.",
+      "reviewNote": "Slides 3, 4, 7, 11, 12, 15 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -2094,12 +2159,16 @@
       "slides": 18,
       "imageOnlySlides": [],
       "withholdSlides": [
+        4,
+        5,
+        8,
         9,
+        10,
         17
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 9 lists clients' names and e-mails and slide 17 a client's name and UCC — withheld. Slide 16 shows a client's name. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
+      "reviewNote": "Slides 4, 5, 8, 9, 10, 17 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
       "curated": true
     },
     {
@@ -2143,9 +2212,15 @@
       "source": "NJ-_Additional_Lumpsum_purchase_sop.pptx",
       "slides": 11,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        6,
+        7,
+        8,
+        9
+      ],
       "reviewedSlides": [],
       "flatten": true,
+      "reviewNote": "Slides 6, 7, 8, 9 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -2421,9 +2496,12 @@
       "source": "NJ_-_Fresh_Additional_Lumpsum_Purchase_-_Online_-_SOP.pptx",
       "slides": 14,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        6
+      ],
       "reviewedSlides": [],
       "flatten": true,
+      "reviewNote": "Slides 6 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -2464,9 +2542,15 @@
       "source": "IAP_TO_IMP_SOP_26-02-2026.pptx",
       "slides": 9,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        5,
+        6,
+        7,
+        8
+      ],
       "reviewedSlides": [],
       "flatten": true,
+      "reviewNote": "Slides 5, 6, 7, 8 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -2522,18 +2606,22 @@
         9,
         34
       ],
-      "withholdSlides": [],
+      "withholdSlides": [
+        8,
+        12,
+        16,
+        35
+      ],
       "reviewedSlides": [
         3,
         4,
         5,
         6,
-        8,
         9,
         34
       ],
       "flatten": true,
-      "reviewNote": "Slide 8 shows the MO First business summary with client names and codes — redact before uploading.",
+      "reviewNote": "Slides 8, 12, 16, 35 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -2586,11 +2674,32 @@
       "imageOnlySlides": [
         83
       ],
-      "withholdSlides": [],
+      "withholdSlides": [
+        7,
+        21,
+        22,
+        40,
+        41,
+        42,
+        46,
+        47,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        68
+      ],
       "reviewedSlides": [
         83
       ],
       "flatten": true,
+      "reviewNote": "Slides 7, 21, 22, 40, 41, 42, 46, 47, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 68 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -2643,10 +2752,16 @@
       "source": "ONBOARDING_-_NJ_E_Wealth_MF_AC_-_Single.pptx",
       "slides": 30,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        6,
+        12,
+        14,
+        18,
+        29
+      ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 12–15 are photos of the platform showing a client's name; slides 27–29 show client names / UCCs — redact before uploading.",
+      "reviewNote": "Slides 6, 12, 14, 18 and 29 show real clients' PAN / KYC status, mobile, e-mail, bank account and mandate details — withheld. Slides 15–17, 21 and 28 show client names.",
       "curated": true
     },
     {
@@ -3144,9 +3259,14 @@
       "source": "NJ-_Online_Redemption_process_sop.pptx",
       "slides": 12,
       "imageOnlySlides": [],
-      "withholdSlides": [],
+      "withholdSlides": [
+        6,
+        7,
+        10
+      ],
       "reviewedSlides": [],
       "flatten": true,
+      "reviewNote": "Slides 6, 7 and 10 show a client's UCC, PAN, name, demat account and holdings — withheld.",
       "curated": true
     },
     {
@@ -3192,11 +3312,12 @@
         6,
         8,
         9,
+        10,
         11
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 6, 8, 9 and 11 show a client's name, UCC, PAN, demat account and bank / mandate numbers — withheld from the PDF.",
+      "reviewNote": "Slides 6 and 8–11 show a client's name, UCC, PAN, demat account and bank / mandate numbers — withheld.",
       "curated": true
     },
     {
@@ -3544,11 +3665,12 @@
       "slides": 10,
       "imageOnlySlides": [],
       "withholdSlides": [
+        5,
         7
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 7 shows a client's UCC, name, PAN and demat account — withheld.",
+      "reviewNote": "Slides 5 and 7 show a client's UCC, name, PAN, demat account and holdings — withheld.",
       "curated": true
     },
     {
@@ -4054,6 +4176,7 @@
         12
       ],
       "withholdSlides": [
+        5,
         6,
         7,
         15,
@@ -4070,7 +4193,7 @@
         12
       ],
       "flatten": true,
-      "reviewNote": "Slides 6, 15–18 and 22–25 show clients' names with codes, profiles, mobiles and family IDs, and slides 7 and 19 the partner / AR login IDs — withheld. Slides 9–13 show an NJ client's name.",
+      "reviewNote": "Slides 5, 6, 7, 15, 16, 17, 18, 19, 22, 23, 24, 25 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4128,7 +4251,9 @@
         16,
         17
       ],
-      "withholdSlides": [],
+      "withholdSlides": [
+        11
+      ],
       "reviewedSlides": [
         4,
         5,
@@ -4136,7 +4261,6 @@
         8,
         9,
         10,
-        11,
         12,
         13,
         15,
@@ -4144,7 +4268,7 @@
         17
       ],
       "flatten": true,
-      "reviewNote": "MF Central / CAMS screenshots with the investor's name, PAN and e-mail blacked out by shapes drawn on top — the PDF is flattened to images so the covered details are really gone.",
+      "reviewNote": "Slides 11 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4257,12 +4381,13 @@
       "slides": 8,
       "imageOnlySlides": [],
       "withholdSlides": [
+        3,
         4,
         5
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 4–5 show the dashboard's Top Investors list with client names and PANs — withheld. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
+      "reviewNote": "Slides 3, 4, 5 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name. The deck was made on the NFLX (Next Freedom LifeX) build of Advisory Khoj — check the menus match the Finowise platform.",
       "curated": true
     },
     {
@@ -4324,7 +4449,12 @@
         19,
         20
       ],
-      "withholdSlides": [],
+      "withholdSlides": [
+        9,
+        10,
+        17,
+        18
+      ],
       "reviewedSlides": [
         2,
         3,
@@ -4333,21 +4463,17 @@
         6,
         7,
         8,
-        9,
-        10,
         11,
         12,
         13,
         14,
         15,
         16,
-        17,
-        18,
         19,
         20
       ],
       "flatten": true,
-      "reviewNote": "Slides 9, 10, 17 and 18 show NJ reports with clients' names and their AUM / transaction amounts — redact before uploading.",
+      "reviewNote": "Slides 9, 10, 17, 18 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4400,9 +4526,18 @@
       ],
       "withholdSlides": [
         6,
+        7,
         8,
         22,
-        23
+        23,
+        24,
+        25,
+        29,
+        30,
+        33,
+        34,
+        35,
+        36
       ],
       "reviewedSlides": [
         4,
@@ -4412,7 +4547,7 @@
         16
       ],
       "flatten": true,
-      "reviewNote": "Slides 6, 8, 22 and 23 show clients' PANs, mobiles, e-mails, addresses or dates of birth — withheld from the PDF. Slides 14–16, 30, 33 and 36 show client names / codes and holdings — redact before uploading.",
+      "reviewNote": "Slides 6, 7, 8, 22, 23, 24, 25, 29, 30, 33, 34, 35, 36 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4552,11 +4687,13 @@
       "imageOnlySlides": [],
       "withholdSlides": [
         3,
-        6
+        5,
+        6,
+        7
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 3 lists clients' names, PANs, mobiles and e-mails; slide 6 a folio and bank account — withheld. Slide 9 shows a client's name in the NSE mail — redact before uploading.",
+      "reviewNote": "Slides 3, 5, 6, 7 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4599,12 +4736,18 @@
       "slides": 15,
       "imageOnlySlides": [],
       "withholdSlides": [
+        4,
+        6,
+        7,
+        9,
+        11,
         13,
+        14,
         15
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 13 and 15 are a client's signed mandate and eNACH page (a name still legible) — withheld from the PDF.",
+      "reviewNote": "Slides 4, 6, 7, 9, 11, 13, 14, 15 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4646,13 +4789,18 @@
       "slides": 12,
       "imageOnlySlides": [],
       "withholdSlides": [
+        4,
+        5,
+        6,
         7,
+        9,
         10,
-        11
+        11,
+        12
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 7 shows a client's address and slides 10–11 the account holder's name, branch and account number — withheld.",
+      "reviewNote": "Slides 4, 5, 6, 7, 9, 10, 11, 12 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4693,13 +4841,19 @@
       "slides": 13,
       "imageOnlySlides": [],
       "withholdSlides": [
+        4,
+        5,
+        6,
         7,
+        9,
         10,
-        11
+        11,
+        12,
+        13
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 7 shows a client's address and slides 10–11 the account holder's name and account number — withheld.",
+      "reviewNote": "Slides 4, 5, 6, 7, 9, 10, 11, 12, 13 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4740,13 +4894,19 @@
       "slides": 13,
       "imageOnlySlides": [],
       "withholdSlides": [
+        4,
+        5,
+        6,
         7,
+        9,
         10,
-        11
+        11,
+        12,
+        13
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 7 shows a client's address and slides 10–11 the account holder's name and account number — withheld.",
+      "reviewNote": "Slides 4, 5, 6, 7, 9, 10, 11, 12, 13 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4791,11 +4951,15 @@
       "slides": 12,
       "imageOnlySlides": [],
       "withholdSlides": [
-        3
+        3,
+        4,
+        5,
+        6,
+        8
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 3 lists clients' names, PANs, mobiles and e-mails — withheld. Slide 10 shows a client's name in the NSE mail.",
+      "reviewNote": "Slides 3, 4, 5, 6, 8 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4840,11 +5004,14 @@
       "imageOnlySlides": [],
       "withholdSlides": [
         3,
-        6
+        4,
+        5,
+        6,
+        8
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 3 lists several clients' names, PANs, mobiles and e-mails and slide 6 shows an IIN and bank account number — withheld from the PDF. Slide 10 shows a client's name in the NSE e-mail — redact before uploading.",
+      "reviewNote": "Slides 3, 4, 5, 6, 8 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -4969,11 +5136,13 @@
       "imageOnlySlides": [],
       "withholdSlides": [
         3,
-        5
+        4,
+        5,
+        6
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slide 3 lists clients' names, PANs, mobiles and e-mails and slide 5 shows an IIN, folio and bank account number — withheld from the PDF. Slide 8 shows a client's name in the NSE e-mail — redact before uploading.",
+      "reviewNote": "Slides 3, 4, 5, 6 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5025,11 +5194,16 @@
         3,
         4,
         5,
-        9
+        6,
+        8,
+        9,
+        13,
+        14,
+        15
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 2–5 and 9 show clients' names, PANs, address, contact, NSE client code, folio and UMRN — withheld. Slides 12–15 show the client's name on the NSE Client Desk.",
+      "reviewNote": "Slides 2, 3, 4, 5, 6, 8, 9, 13, 14, 15 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5077,14 +5251,16 @@
         8
       ],
       "withholdSlides": [
+        3,
         4,
+        6,
         7
       ],
       "reviewedSlides": [
         8
       ],
       "flatten": true,
-      "reviewNote": "Slide 4 shows a client's name, PAN, address, mobile and e-mail and slide 7 the NSE client code, folio and UMRN — withheld.",
+      "reviewNote": "Slides 3, 4, 6, 7 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5133,11 +5309,16 @@
       "withholdSlides": [
         4,
         5,
-        10
+        9,
+        10,
+        13,
+        14,
+        15,
+        17
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 4–5 and 10 show a client's name, PAN, address, mobile, e-mail, NSE code and UMRN — withheld. Slides 12–17 show clients' names.",
+      "reviewNote": "Slides 4, 5, 9, 10, 13, 14, 15, 17 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5186,11 +5367,15 @@
       "withholdSlides": [
         4,
         5,
-        9
+        9,
+        12,
+        13,
+        14,
+        15
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 4–5 and 9 show a client's name, PAN, address, mobile, e-mail, folio, bank account and UMRN — withheld. The NSE mail slides show the client's name.",
+      "reviewNote": "Slides 4, 5, 9, 12, 13, 14, 15 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5295,11 +5480,15 @@
         4,
         5,
         6,
-        11
+        11,
+        14,
+        15,
+        16,
+        17
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 4–6 and 11 show clients' names, PANs, address, contact, NSE code, folio, bank account and UMRN — withheld. Slides 13–17 show the client's name.",
+      "reviewNote": "Slides 4, 5, 6, 11, 14, 15, 16, 17 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5347,11 +5536,13 @@
       "withholdSlides": [
         3,
         4,
+        6,
+        7,
         8
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 3, 4 and 8 show a client's name, PAN, address, mobile, e-mail, NSE code and folio — withheld.",
+      "reviewNote": "Slides 3, 4, 6, 7, 8 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5400,11 +5591,13 @@
       "withholdSlides": [
         2,
         3,
+        5,
+        6,
         8
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 2, 3 and 8 show clients' names, PANs, e-mails, contact, NSE code and folio — withheld.",
+      "reviewNote": "Slides 2, 3, 5, 6, 8 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5452,13 +5645,15 @@
       ],
       "withholdSlides": [
         3,
-        4
+        4,
+        5,
+        6
       ],
       "reviewedSlides": [
         7
       ],
       "flatten": true,
-      "reviewNote": "Slides 3–4 show clients' names, PANs, e-mails and contact — withheld.",
+      "reviewNote": "Slides 3, 4, 5, 6 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     },
     {
@@ -5504,12 +5699,14 @@
       "imageOnlySlides": [],
       "withholdSlides": [
         3,
+        4,
+        5,
         6,
         7
       ],
       "reviewedSlides": [],
       "flatten": true,
-      "reviewNote": "Slides 3, 6 and 7 show clients' names, PANs, e-mails, folio, bank and NSE code — withheld.",
+      "reviewNote": "Slides 3, 4, 5, 6, 7 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
     }
   ]
