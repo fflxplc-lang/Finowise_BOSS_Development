@@ -59660,8 +59660,10 @@ async function aiSend(){
     const upQ = !awaiting && riaUpFollowUp(q);
     const diagC = upQ || awaiting ? null : riaDiagClientFor(q);
     /* an SOP question gets the firm's own guide: its steps and its read-only deck */
-    const sopDoc = upQ || diagC || awaiting || !RIA_SOP_ASK.test(q) ? null : riaSopFor(q, await riaSopLoad());
-    const nav = upQ || diagC || sopDoc || awaiting || riaDetectClientOnboarding(q) ? null : bossPageOpenIntent(q);
+    /* (a client's details pasted to onboard them are not an SOP question, however many SOP words they hold) */
+    const onboarding = !awaiting && riaDetectClientOnboarding(q);
+    const sopDoc = upQ || diagC || awaiting || onboarding || q.length > 200 || !RIA_SOP_ASK.test(q) ? null : riaSopFor(q, await riaSopLoad());
+    const nav = upQ || diagC || sopDoc || awaiting || onboarding ? null : bossPageOpenIntent(q);
     const desk = nav || upQ || diagC || sopDoc ? null : await riaDeskHandle(q);
     out = upQ ? riaUpAnswer(q)
         : diagC ? riaDiagClientAnswer(diagC, q)
@@ -64448,14 +64450,18 @@ function riaSopScore(s, t){
   return score;
 }
 /* The guides a question points at, best first: one of its phrases (an alias) clears 12; with none, words from the
-   title and keywords may still pick a guide (5 or more) when it stands clear of the next, or ties at 7 or more.
+   title and keywords may still pick a guide (5 or more) when the question asks how / for the process and the
+   guide stands clear of the next, or ties at 7 or more.
    Close runners-up ride along as buttons. */
 function riaSopRank(q, list){
   const t = String(q || '');
   if(!RIA_SOP_ASK.test(t)) return [];
   const all = (list || riaSopList()).map(s=>({s, sc: riaSopScore(s, t)})).filter(x=>x.sc > 0).sort((a, b)=>b.sc - a.sc);
   const top = all[0];
-  if(!top || !(top.sc >= 12 || (top.sc >= 5 && (!all[1] || top.sc > all[1].sc || top.sc >= 7)))) return [];
+  /* without a phrase, only a question that plainly asks how / for the process may lean on loose words —
+     "kya buy, hold ya sell karna hai?" is a portfolio question, not the stock-order SOP */
+  const how = /\b(sop|process|procedure|steps?|kaise|kese|how to|guide)\b/i.test(t);
+  if(!top || !(top.sc >= 12 || (how && top.sc >= 5 && (!all[1] || top.sc > all[1].sc || top.sc >= 7)))) return [];
   return all.filter((x, i)=>i === 0 || (x.sc >= top.sc - 3 && (x.sc >= 9 || x.sc === top.sc))).slice(0, 4).map(x=>x.s);
 }
 function riaSopFor(q, list){ const r = riaSopRank(q, list); if(r.length){ r[0].__alts = r.slice(1).map(x=>x.id); return r[0]; } return null; }

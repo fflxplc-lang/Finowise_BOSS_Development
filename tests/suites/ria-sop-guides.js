@@ -162,12 +162,12 @@ suite(async t => {
       ['nj sip cancellation offline form', 'nj-sip-cancellation-stop-request-offline-sop'], ['nj sip cancel online process', 'sop-nj-sip-cancellation'],
       ['pms closure process', 'nj-pms-closure-offline-sop'], ['e-mandate aadhaar se kaise kare', 'mandate-registration-e-mandate-aadhar-card-1'],
       ['anand rathi redemption process', 'redemption'], ['lic family chart kaise banaye', 'lic-family-chart-sop'], ['sip pause kaise kare', 'sip-pause-through-finowise-platform'],
-      ['DWT dikhao', null], ['top 10 clients by AUM', null], ['how many sips were cancelled this month', null], ['show redemption of client Ramesh last month', null]];
+      ['DWT dikhao', null], ['top 10 clients by AUM', null], ['how many sips were cancelled this month', null], ['show redemption of client Ramesh last month', null], ['Signal Sharma ke portfolio mein kya buy, hold ya sell karna hai?', null]];
     const r = await t.eval(async (cases) => { const list = await riaSopLoad(true); return cases.map(([q, want]) => { const g = riaSopFor(q, list); return {q, want, got: g ? g.id : null}; }); }, CASES);
     const bad = r.filter(x => x.got !== x.want);
     if(bad.length) throw new Error(JSON.stringify(bad));
     const tie = await ask('sip kaise lagaye new scheme');
     if(!/^\*\*📘 SOP: SIP registration in a new scheme/.test(tie.content) || !tie.actions.some(l => /^📘 SIP registration in a new scheme/.test(l)) || !/Not the one\?/.test(tie.content)) throw new Error(JSON.stringify(tie).slice(0, 600));
-    return (r.length - 4) + ' phrasings → the right guide; 4 data questions → no SOP; a tie answers with the best and offers the other (' + tie.actions.find(l => /^📘/.test(l)) + ')';
+    return (r.length - 5) + ' phrasings → the right guide; 5 data questions → no SOP; a tie answers with the best and offers the other (' + tie.actions.find(l => /^📘/.test(l)) + ')';
   });
 });

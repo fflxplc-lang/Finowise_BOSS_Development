@@ -2670,10 +2670,8 @@
       ],
       "pdfFile": "NJ_Capital_LAS_Term_Loan_Demo_Presentation_SOP.pdf",
       "source": "NJ_Capital_LAS_Term_Loan_Demo_Presentation_SOP.pdf",
-      "slides": 83,
-      "imageOnlySlides": [
-        83
-      ],
+      "slides": 82,
+      "imageOnlySlides": [],
       "withholdSlides": [
         7,
         21,
@@ -2695,9 +2693,7 @@
         60,
         68
       ],
-      "reviewedSlides": [
-        83
-      ],
+      "reviewedSlides": [],
       "flatten": true,
       "reviewNote": "Slides 7, 21, 22, 40, 41, 42, 46, 47, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 68 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
