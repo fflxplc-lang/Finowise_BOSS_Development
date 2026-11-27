@@ -16,3 +16,7 @@ aadhaar-vault.key
 reminders.json
 reminders.json.tmp
 push-vapid.json
+
+# SOP source decks: their screenshots often show clients (names, PAN, Aadhaar). They stay out of git;
+# scripts/sops-build.js reads them from here (or --src) and writes PDFs to the server data folder.
+sops-src/

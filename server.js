@@ -1085,6 +1085,70 @@ function checkApiKey(req, res, next) {
   next();
 }
 
+/* SOP GUIDES — READ-ONLY VISUAL PDFs (27-11-2026)
+
+   RIA AI answers an SOP question with its steps (sop-registry.json) and,
+   where the deck's PDF is on the server, a "View Visual SOP Guide
+   (Read-Only)" button. The PDF is drawn page by page onto a canvas in the
+   page (pdf.js) — no browser PDF toolbar, no download or print button.
+
+   The bytes are only ever served here, to a signed-in user (the gate above
+   refuses /api/ without a session) with the API key, and only for a file
+   the registry names: inline, never cached, never sniffed. They are read
+   from CRM_SOP_DIR, else <data dir>/sops-pdf (beside data.json, outside
+   git — deploys never touch it), else the repo's sops-pdf/. An admin adds
+   or replaces a registered guide's PDF from RIA AI (PUT, ≤ 20 MB, must
+   start %PDF-), into the data folder: decks that show client data never
+   need to go into git. */
+const SOP_REGISTRY_FILE = path.join(__dirname, 'sop-registry.json');
+const SOP_DIRS = [process.env.CRM_SOP_DIR || path.join(path.dirname(DB_FILE), 'sops-pdf'), path.join(__dirname, 'sops-pdf')];
+const SOP_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9 ._()&+-]{0,150}\.pdf$/;
+function sopRegistry() {
+  try { const r = JSON.parse(fs.readFileSync(SOP_REGISTRY_FILE, 'utf8')); return Array.isArray(r.sops) ? r : { sops: [] }; }
+  catch (e) { return { sops: [] }; }
+}
+function sopPdfPath(file) {
+  if (!SOP_FILE_RE.test(file) || file.indexOf('..') >= 0) return null;
+  for (const d of SOP_DIRS) {
+    const base = path.resolve(d), p = path.resolve(base, file);
+    if (p.startsWith(base + path.sep) && fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+  }
+  return null;
+}
+const sopRegistered = file => sopRegistry().sops.some(s => s && s.pdfFile === file);
+app.get('/api/sops/registry', checkApiKey, (req, res) => {
+  const reg = sopRegistry();
+  res.set('Cache-Control', 'no-store').json({ sops: reg.sops.map(s => ({
+    id: s.id, title: s.title, category: s.category, docNo: s.docNo || '', date: s.date || '', owner: s.owner || '',
+    keywords: s.keywords || [], aliases: s.aliases || [], sopIds: s.sopIds || [], steps: s.steps || [],
+    pdfFile: s.pdfFile || '', available: !!(s.pdfFile && sopPdfPath(s.pdfFile)) })) });
+});
+app.get('/api/sops/pdf/:file', checkApiKey, (req, res) => {
+  const file = String(req.params.file || '');
+  if (!SOP_FILE_RE.test(file) || !sopRegistered(file)) return res.status(404).json({ error: 'not a registered SOP guide' });
+  const p = sopPdfPath(file);
+  if (!p) return res.status(404).json({ error: 'this SOP guide has no PDF yet' });
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="sop-guide.pdf"', 'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'no-store, private, max-age=0', 'Pragma': 'no-cache', 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': "default-src 'none'; sandbox" });
+  fs.createReadStream(p).on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); }).pipe(res);
+});
+app.put('/api/sops/pdf/:file', checkApiKey, express.raw({ type: 'application/pdf', limit: '20mb' }), (req, res) => {
+  const user = signedInUser(req);
+  if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Only an admin can add an SOP guide.' });
+  const file = String(req.params.file || '');
+  if (!SOP_FILE_RE.test(file) || !sopRegistered(file)) return res.status(404).json({ error: 'not a registered SOP guide' });
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || buf.length < 100 || buf.slice(0, 5).toString('latin1') !== '%PDF-') return res.status(400).json({ error: 'That is not a PDF.' });
+  try {
+    const dir = path.resolve(SOP_DIRS[0]);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = path.join(dir, '.' + file + '.' + process.pid + '.tmp');
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, path.join(dir, file));
+    res.json({ ok: true, file, bytes: buf.length });
+  } catch (e) { res.status(500).json({ error: 'The SOP guide could not be saved.' }); }
+});
+
 // GET /api/storage/:key -> { key, value } | 404
 app.get('/api/storage/:key', checkApiKey, (req, res) => {
   const value = store[req.params.key];

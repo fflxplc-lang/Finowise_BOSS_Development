@@ -1,0 +1,266 @@
+{
+  "version": 1,
+  "note": "SOP guides for RIA AI: the steps shown in chat, and the PDF its read-only viewer opens. Kept by scripts/sops-build.js; steps are hand-tidied (curated: true). PDFs are served only to signed-in users, from CRM_SOP_DIR, else <data dir>/sops-pdf, else sops-pdf/. withholdSlides are left out of the PDF (client documents in the source deck).",
+  "sops": [
+    {
+      "id": "nomination-sop",
+      "title": "Nominee updation / addition (CAMS nomination form)",
+      "category": "Account Changes",
+      "docNo": "OPN/COB/02/00",
+      "date": "10-02-2026",
+      "owner": "Deepak & Shubham",
+      "keywords": [
+        "nominee",
+        "nomination",
+        "cams",
+        "form",
+        "transmission",
+        "minor",
+        "major"
+      ],
+      "aliases": [
+        "nominee",
+        "nomination",
+        "nominee change",
+        "nominee update",
+        "nominee updation",
+        "add nominee",
+        "nominee addition",
+        "nomination form",
+        "cams nomination",
+        "nominee kaise"
+      ],
+      "sopIds": [
+        "nft-nominee"
+      ],
+      "steps": [
+        "Search \"CAMS Nomination Form\" on Google and open the nomination form.",
+        "Fill it in CAPITAL letters: fund house (e.g. HDFC Mutual Fund), folio number(s) — several folios can go in the same box — and the investor's name as per PAN.",
+        "Nominee details: each nominee's name (Mr / Ms), share (one nominee 100%; more than one — ask the client the percentage), date of birth (dd-mm-yyyy, as per proof of identity) and relationship with the applicant (tick the box).",
+        "Nominee identity: for a major, tick one ID type and give its number; for a minor, the guardian's. Address as per Aadhaar (a minor's guardian's), with PIN code.",
+        "Nominee's mobile and e-mail (a minor's guardian's); the guardian's name if the nominee is under 18.",
+        "Tick the boxes if the client wants the nominee's name and percentage printed on the statement of holding.",
+        "Take the client's signature(s) / thumb impression as per the mode of holding.",
+        "Documents: self-attested PAN and Aadhaar copies; do the OSV (original seen and verified)."
+      ],
+      "pdfFile": "Nomination_SOP.pdf",
+      "source": "Nomination_SOP.pptx",
+      "slides": 16,
+      "imageOnlySlides": [
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "withholdSlides": [
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "reviewNote": "Slides 12–16 are a real client's filled nomination form, Aadhaar card and PAN card — withheld from the PDF.",
+      "curated": true
+    },
+    {
+      "id": "pan-updation-sop",
+      "title": "PAN update / correction",
+      "category": "Account Changes",
+      "docNo": "OPN/COB/02/00",
+      "date": "14-02-2026",
+      "owner": "Deepak & Shubham",
+      "keywords": [
+        "pan",
+        "update",
+        "correction",
+        "updation",
+        "minor",
+        "major"
+      ],
+      "aliases": [
+        "pan update",
+        "pan correction",
+        "pan change",
+        "pan updation",
+        "wrong pan",
+        "pan galat",
+        "pan correct",
+        "pan update kaise"
+      ],
+      "sopIds": [
+        "nft-pan-correction"
+      ],
+      "steps": [
+        "Prepare a request letter to the respective AMC for updation / correction of the PAN.",
+        "In it, mention the investor's name, PAN and folio number(s) and the AMC's name; the investor signs it.",
+        "Attach a self-attested copy of the PAN card with the signed request letter.",
+        "The same documents serve the PAN step of the minor-to-major process."
+      ],
+      "pdfFile": "PAN_updation_SOP.pdf",
+      "source": "PAN_updation_SOP.pptx",
+      "slides": 7,
+      "imageOnlySlides": [
+        5,
+        6,
+        7
+      ],
+      "withholdSlides": [
+        5,
+        6,
+        7
+      ],
+      "reviewNote": "Slides 5–7 are copies of a client's request letter and PAN card — withheld from the PDF.",
+      "curated": true
+    },
+    {
+      "id": "nri-account-opening",
+      "title": "NRI account opening (Anand Rathi)",
+      "category": "KYC & Onboarding",
+      "docNo": "OPN/COB/02/00",
+      "date": "10/03/2026",
+      "owner": "Suraj Singh",
+      "keywords": [
+        "nri",
+        "account",
+        "opening",
+        "anand",
+        "rathi",
+        "documents",
+        "nro",
+        "nre"
+      ],
+      "aliases": [
+        "nri account",
+        "nri account opening",
+        "nri ac opening",
+        "nri account kholna",
+        "anand rathi nri",
+        "nri documents",
+        "nri demat"
+      ],
+      "sopIds": [
+        "onboard-nri",
+        "kyc-nri"
+      ],
+      "steps": [
+        "Log in to the Anand Rathi mailbox Finowise.ar@gmail.com and write to the Anand Rathi team.",
+        "To: suchitadandekar@rathi.com, saloneepawar@rathi.com and support.wm@rathi.com. CC: branch management and the team member.",
+        "Subject: \"For NRI Account opening\" — attach the client's documents and send.",
+        "Documents: PAN copy; Indian address proof (Aadhaar, passport, voter ID or driving licence); overseas address proof (utility bill, overseas bank statement, passport with the overseas address, or a government-issued ID).",
+        "Also: bank proof showing the NRO or NRE status (cancelled cheque, bank statement or passbook front page); passport copy; FATCA TIN document (mention the TIN number and type)."
+      ],
+      "pdfFile": "NRI_account_opening.pdf",
+      "source": "NRI_account_opening.pptx",
+      "slides": 4,
+      "imageOnlySlides": [],
+      "withholdSlides": [],
+      "curated": true
+    },
+    {
+      "id": "nri-onboarding-single-holding-moh",
+      "title": "NRI onboarding — single holding (NSE MF platform)",
+      "category": "KYC & Onboarding",
+      "docNo": "OPN/COB/02/02",
+      "date": "13-02-2026",
+      "owner": "Aman & Priya",
+      "keywords": [
+        "nri",
+        "onboarding",
+        "single",
+        "holding",
+        "ucc",
+        "nse",
+        "nro",
+        "nre",
+        "client",
+        "creation"
+      ],
+      "aliases": [
+        "nri onboarding",
+        "nri client creation",
+        "nri ucc",
+        "nri single holding",
+        "nri nse",
+        "nri client create",
+        "nro nre client"
+      ],
+      "sopIds": [
+        "onboard-nri"
+      ],
+      "steps": [
+        "Client Master → Create / Edit Client → Create Client.",
+        "Fill all mandatory fields and submit — \"Client Details Inserted Successfully\" appears.",
+        "Search the client by name, click the name and Search — the client dashboard opens.",
+        "Fill the mandatory fields: NRO / NRE, mode of holding (Single), whose e-mail and mobile they are, occupation, income source, address type and political relations — Submit.",
+        "Fill the NRI (overseas) address and the Indian address.",
+        "Nominee details: Yes → number of nominees (up to 3 or 10); nominee SOA \"Yes\", nominee type (minor / major) and relationship with the first holder — Submit.",
+        "Bank details: IFSC (bank name, branch and address fill in automatically), account number (cross-check), account holder name as per the cheque, account type NRE / NRO — Submit.",
+        "Account registration is done. For the mandate, follow the mandate registration SOP.",
+        "Authorization: NSE e-mails the client to activate the UCC; the client completes the OTP validation."
+      ],
+      "pdfFile": "NRI_onboarding_-Single_holding_MOH.pdf",
+      "source": "NRI_onboarding_-Single_holding_MOH.pptx",
+      "slides": 18,
+      "imageOnlySlides": [],
+      "withholdSlides": [],
+      "reviewNote": "Slides 3, 4, 8 and 17 are screenshots showing client names / e-mails (client list, search, NSE activation mail) — redact before uploading.",
+      "curated": true
+    },
+    {
+      "id": "onboarding-nj-e-wealth-mf-ac-single",
+      "title": "NJ E-Wealth MF account onboarding — individual, single holding",
+      "category": "NJ / PMS / AIF / Stocks",
+      "docNo": "OPN/COB/02/02",
+      "date": "23-02-2026",
+      "owner": "Souvik Sadhu & Tejaswini Torse",
+      "keywords": [
+        "nj",
+        "wealth",
+        "ewealth",
+        "onboarding",
+        "account",
+        "partner",
+        "desk",
+        "mandate",
+        "ucc"
+      ],
+      "aliases": [
+        "nj",
+        "nj e wealth",
+        "e wealth",
+        "ewealth",
+        "nj account opening",
+        "nj onboarding",
+        "nj partner desk",
+        "ewealth mf",
+        "nj mandate status",
+        "nj ucc",
+        "nj account kholna"
+      ],
+      "sopIds": [],
+      "steps": [
+        "Collect the CIF and required documents from the client and verify the details against them (onboarding checkpoints: OneDrive › Mumbai Internal Team).",
+        "Check KYC on CVL KRA (cvlkra.com › KYC Inquiry › PAN + captcha). Continue only if KYC is validated as per Aadhaar.",
+        "Upload the CIF, documents and the checkpoints list to the client's folder (OneDrive › Mumbai External › Client Documents).",
+        "Log in to NJ Partner Desk (partner ID, password, captcha) › Stock Exchange › E-Wealth Account Registration › Create Client.",
+        "Account type E-WEALTH MF, number of holders ONE HOLDER › Next.",
+        "Applicant details: tax status, PAN, name as per PAN, date of birth › Verify.",
+        "Contact details: mobile (as linked to Aadhaar) and e-mail › Next. The client gets authentication links by mail and WhatsApp — tell them NOT to click; they forward the message or a screenshot. Open the link in Chrome › Next › enter the OTP (the mobile shows verified).",
+        "Mobile and e-mail declaration (Self, Spouse, Sister…) and father's or spouse's name.",
+        "Preference declarations as per the CIF (WhatsApp services: Yes) › Next. FATCA: nationality, country / state / city of birth, country of tax residency (India for a resident individual) › Next.",
+        "Bank: IFSC and account number › Verify Bank (₹1 is credited to verify). Upload the client's signature (JPG) › Save.",
+        "Nominee: name, e-mail, mobile, date of birth, Aadhaar and relation › Next.",
+        "Mandate: authentication mode (e-Sign, Aadhaar OTP, net banking, debit card or scan — Aadhaar OTP preferred) and mandate limit › Submit. Scan mandate: download it, the client signs as per bank records, then upload via Partner Desk › Stock Exchange › Pending Scan Mandate.",
+        "Mandate status: Partner Desk › Stock Exchange › Mandate Status Report › enter the UCC (from Active EWA on the partner dashboard) › Apply. Once the mandate is approved, transactions can be placed."
+      ],
+      "pdfFile": "ONBOARDING_-_NJ_E_Wealth_MF_AC_-_Single.pdf",
+      "source": "ONBOARDING_-_NJ_E_Wealth_MF_AC_-_Single.pptx",
+      "slides": 30,
+      "imageOnlySlides": [],
+      "withholdSlides": [],
+      "reviewNote": "Slides 12–15 are photos of the platform showing a client's name; slides 27–29 show client names / UCCs — redact before uploading.",
+      "curated": true
+    }
+  ]
+}
