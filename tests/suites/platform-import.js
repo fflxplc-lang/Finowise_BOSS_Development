@@ -163,7 +163,7 @@ suite(async t => {
        dependency. Anything else pulled in would be a library. */
     /* book-aum.js: the Live AUM book, shared by the Dashboard and the server
        (RIA AI's total AUM) — this server's own file, not a library. */
-    const OURS = /^\/(config|appraisal-engine|multi-asset|book-aum|review\/review-report)\.js(\?|$)/;
+    const OURS = /^\/(config|appraisal-engine|multi-asset|book-aum|ria-quartiles|review\/review-report)\.js(\?|$)/;
     const r = await t.eval(()=>({supported: xlsxSupported(),
       lib: typeof window.XLSX,
       all: Array.from(document.querySelectorAll('script[src]')).map(s=>s.src),

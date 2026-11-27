@@ -25,6 +25,9 @@
      5. a PDF statement is read by the statement reader.
      6. Clear forgets the file; naming a client moves the conversation to
         the client; an unsupported or oversized file is refused plainly.
+     7. where the build has the client-wise importer (production): the
+        original file still loses 35 rows there as "Twice in file", and the
+        clean import file goes in whole — 36 holdings on the client's book.
 
    Synthetic data only; nothing leaves the browser. */
 const fs = require('fs');
@@ -56,12 +59,13 @@ suite(async t => {
   const sanjay = Array.from({length: 36}, (_, i) => { const units = 10 + i * 7, price = 100 + (i * 37) % 900, inv = Math.round(units * price * 0.8), cur = i === 6 ? 2600000 : units * price;
     return [SANJAY, 'Unclassified', '', '', units, price, inv, cur, '2024-0' + (1 + i % 9) + '-15', '']; });
   const sanjayTotal = sanjay.reduce((n, r) => n + r[7], 0);
-  let sanjayBook = null;
+  let sanjayBook = null, sanjayBytes = null, cleanImport = null;
 
   await t.step('1. the 36-row "Investment Details.xlsx" through 📎: all 36 kept, each flagged, the 35 "Twice in file" rejects counted', async () => {
     await fresh();
     const bytes = await t.eval((rows) => Array.from(xlsxBuild([{name: 'Investment Details', cols: ['Scheme / product', 'Asset class', 'Folio / account', 'ISIN', 'Units', 'NAV / price', 'Invested', 'Current value', 'Invested on', 'Note'], rows}])), sanjay);
-    const r = await upload('Investment Details.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', Buffer.from(bytes));
+    sanjayBytes = Buffer.from(bytes);
+    const r = await upload('Investment Details.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', sanjayBytes);
     const st = await t.eval(() => ({n: ai.upload && ai.upload.up.rows.length, subject: ai.subject, noName: ai.upload && ai.upload.up.rows.filter(r => r.noName).length,
       acts: ai.upload && [...new Set(ai.upload.up.rows.map(r => r.action))], w7: ai.upload && ai.upload.up.rows[6].weightPct, total: ai.upload && ai.upload.x.curKnown}));
     sanjayBook = st;
@@ -76,6 +80,7 @@ suite(async t => {
   await t.step('2. the downloads: research report and clean CRM import file, .xlsx and .csv', async () => {
     const rx = await download('📊 Research report (.xlsx)'), rc = await download('📑 Research report (.csv)');
     const ix = await download('📥 Clean import file (.xlsx)'), ic = await download('📥 Clean import file (.csv)');
+    cleanImport = ix;
     if(rx.buf.slice(0, 2).toString() !== 'PK' || ix.buf.slice(0, 2).toString() !== 'PK' || !/^RIA_Research_Investment_Details_.*\.xlsx$/.test(rx.name) || !/^CRM_Import_Investment_Details_.*\.csv$/.test(ic.name))
       throw new Error(JSON.stringify([rx.name, rc.name, ix.name, ic.name]));
     const R = await readXlsx(rx.buf), I = await readXlsx(ix.buf);
@@ -153,5 +158,34 @@ suite(async t => {
     if(!r.beforeClear || r.afterClear || !/reads \.xlsx, \.xls, \.csv and \.pdf files/.test(bad.content) || !/reads files up to 10 MB/.test(big.content) || !moved.a || moved.b || moved.subject !== 'client')
       throw new Error(JSON.stringify({r, bad: bad.content, big: big.content, moved}));
     return 'Clear forgets it; a named client takes over; .txt and an 11 MB file refused with a plain reason';
+  });
+
+  await t.step('7. production\'s client-wise importer: the original file loses 35 rows as "Twice in file"; the clean import file goes in whole', async () => {
+    if(!(await t.eval(() => typeof cwiOpen === 'function' && typeof cwiRead === 'function'))) return 'this build has no client-wise importer (TEST) — skipped';
+    const cid = await t.eval(async () => { const c = {id: uid('CMS'), cmsName: 'ZZ Sanjay Upload Test', pan: 'ZZSAN1234S', branch: (DB.config.branches || ['Varanasi'])[0], rmName: currentUser,
+      createdAt: new Date().toISOString(), createdBy: currentUser}; initState('CMS', c); DB.clients.push(c); await save('clients'); return c.id; });
+    const pick = async (buffer, name) => {
+      await t.eval((cid) => { cwiOpen(cid); }, cid); await t.wait(200);
+      await t.eval(() => { const sel = document.getElementById('cwiPlatform'); const o = [...sel.options].find(x => /pms/i.test(x.value + ' ' + x.text)) || [...sel.options].find(x => x.value === 'mf-finowise') || [...sel.options].find(x => x.value);
+        sel.value = o.value; cwi.platformId = o.value; document.getElementById('cwiKind').value = 'aum'; cwi.kind = 'aum'; });
+      await t.page.setInputFiles('#cwiFile', {name, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer});
+      await t.eval(async () => { await cwiRead(); });
+      for(let i = 0; i < 60; i++){ const s = await t.eval(() => cwi && !cwi.busy ? cwi.step : 'busy'); if(s !== 'busy') break; await t.wait(150); }
+      return t.eval(() => ({step: cwi.step, err: cwi.err, platform: cwi.platformId, n: cwi.rows.length, dup: cwi.rows.filter(r => r.status === 'dup').length, fresh: cwi.rows.filter(r => r.status === 'new').length,
+        invalid: cwi.rows.filter(r => r.status === 'invalid').length, needs: !!cwi.needsChoice}));
+    };
+    const orig = await pick(sanjayBytes, 'Investment Details.xlsx');
+    await t.eval(() => cwiClose());
+    const clean = await pick(cleanImport.buf, cleanImport.name);
+    if(orig.step !== 'preview' || orig.n !== 36 || orig.dup !== 35) throw new Error('the original file did not reproduce the 35 "Twice in file": ' + JSON.stringify(orig));
+    if(clean.step !== 'preview' || clean.n !== 36 || clean.dup || clean.invalid || clean.fresh !== 36) throw new Error('clean file: ' + JSON.stringify(clean));
+    if(clean.needs) await t.eval(() => { cwi.confirm = true; cwiDraw(); });
+    const can = await t.eval(() => cwiCanImport());
+    if(!can.ok) throw new Error('import blocked: ' + JSON.stringify(can));
+    await t.eval(async () => { await cwiImport(); }); await t.wait(500);
+    const book = await t.eval((cid) => { try { cwiClose(); } catch(e){} maInvalidate(); const st = maState(); const rows = st.holdings.filter(r => r._c.ck === 'c:' + cid);
+      return {n: rows.length, total: Math.round(rows.reduce((n, r) => n + Number(r.current_value || 0), 0)), names: rows.slice(0, 2).map(r => r.security_name)}; }, cid);
+    if(book.n !== 36 || book.total !== sanjayTotal) throw new Error('after import: ' + JSON.stringify(book) + ' want 36 / ' + sanjayTotal);
+    return 'original: 36 read, ' + orig.dup + ' "Twice in file" (the reported failure, reproduced) | clean file: 36 new, 0 twice, 0 incomplete → imported: ' + book.n + ' holdings, ₹' + book.total.toLocaleString('en-IN') + ' on the book (platform ' + clean.platform + ')';
   });
 });
