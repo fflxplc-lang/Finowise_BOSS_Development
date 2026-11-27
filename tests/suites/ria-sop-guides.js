@@ -1,12 +1,12 @@
 /* SOP GUIDES: STEPS IN CHAT, AND THE DECK IN A READ-ONLY VIEWER (27-11-2026).
 
-   sop-registry.json holds the firm's SOP decks (five so far) as steps; a
+   sop-registry.json holds the firm's SOP decks (over a hundred) as steps; a
    deck's PDF, once on the server, opens from RIA AI in an in-page viewer
    that draws each page on a canvas — no download, no print — and is only
    ever served to a signed-in user.
 
    Steps:
-     1. the registry loads (five guides, none with a PDF on a fresh server);
+     1. the registry loads (every guide, none with a PDF on a fresh server);
         "nomination ka process kya hai" is answered with the guide's numbered
         steps; with no PDF yet an admin is offered to add it.
      2. an admin adds the guide's PDF (a synthetic 3-page one); a file that
@@ -19,14 +19,21 @@
      4. the PDF and the registry are refused without a session (401); served
         to a signed-in user inline, nosniff, never cached; a path out of the
         folder or an unregistered name is a 404.
-     5. Self Service & SOPs › All SOP Guides lists the five, the filter finds
-        "PAN", and picking it answers with its steps; a model answer that
+     5. Self Service & SOPs › All SOP Guides lists them all, the filter finds
+        "PAN update", and picking it answers with its steps; a model answer that
         leaned on a mapped SOP (nft-nominee) offers the visual guide.
+     6. an admin adds several PDFs at once: each goes to the guide whose file
+        name it carries (case, spaces and _ / - ignored); an unknown name is
+        listed as not added; the list's admin button counts what is missing.
+     7. staff phrasing across the guides finds the right one (English and
+        Hinglish), and data questions ("DWT dikhao", "top 10 clients by AUM")
+        are not taken for an SOP.
 
    Synthetic PDF only — no real deck is in the repo or the tests. */
 const http = require('http');
 const {suite} = require('../lib/harness');
 const PORT = Number(process.env.BOSS_PORT || 3000);
+const N = require('../../sop-registry.json').sops.length;
 const get = (p) => new Promise((res, rej) => { http.get({host: '127.0.0.1', port: PORT, path: p}, r => { let b = ''; r.on('data', d => b += d); r.on('end', () => res({status: r.statusCode, body: b, headers: r.headers})); }).on('error', rej); });
 
 suite(async t => {
@@ -39,7 +46,7 @@ suite(async t => {
   await t.step('1. the registry, and an SOP question answered with the guide\'s steps', async () => {
     await fresh();
     const reg = await t.eval(async () => (await riaSopLoad(true)).map(s => ({id: s.id, file: s.pdfFile, on: s.available, steps: s.steps.length})));
-    if(reg.length !== 5 || reg.some(s => s.on) || !reg.some(s => s.file === 'Nomination_SOP.pdf')) throw new Error(JSON.stringify(reg));
+    if(reg.length !== N || N < 100 || reg.some(s => s.on) || !reg.some(s => s.file === 'Nomination_SOP.pdf')) throw new Error(JSON.stringify(reg));
     const r = await ask('nomination ka process kya hai');
     if(r.sopDoc !== 'nomination-sop' || !/^\*\*📘 SOP: Nominee updation \/ addition \(CAMS nomination form\)\*\*/.test(r.content) || !/\n1\. Search "CAMS Nomination Form"/.test(r.content) || !/\n8\. Documents: self-attested PAN and Aadhaar/.test(r.content)
       || r.actions.includes('📄 View Visual SOP Guide (Read-Only)') || !r.actions.includes('⬆ Add the visual guide (PDF)')) throw new Error(JSON.stringify(r).slice(0, 700));
@@ -118,15 +125,31 @@ suite(async t => {
       const box = [...document.querySelectorAll('#aiTurns .ria-soplist')].pop();
       const items = () => [...box.querySelectorAll('.ria-sop-item')].filter(b => !b.hidden).map(b => b.querySelector('.ria-sop-t').textContent);
       const all = items(), badges = [...box.querySelectorAll('.ria-sop-b.on')].length;
-      const f = box.querySelector('.ria-sop-filter'); f.value = 'pan'; f.dispatchEvent(new Event('input', {bubbles: true}));
-      const pan = items();
-      [...box.querySelectorAll('.ria-sop-item')].find(b => !b.hidden).click(); await new Promise(r => setTimeout(r, 200));
+      const f = box.querySelector('.ria-sop-filter'); f.value = 'pan update'; f.dispatchEvent(new Event('input', {bubbles: true}));
+      const pan = items(), cats = [...box.querySelectorAll('.ria-sop-cat')].filter(c => !c.hidden).length;
+      [...box.querySelectorAll('.ria-sop-item')].find(b => !b.hidden && /PAN update/.test(b.textContent)).click(); await new Promise(r => setTimeout(r, 200));
       const last = ai.turns[ai.turns.length - 1];
       const mapped = riaSopDocsFor({sops: [{id: 'nft-nominee'}]}).map(s => s.id), none = riaSopDocsFor({sops: [{id: 'kyc-fresh-ekyc'}]}).length;
-      return {label: cat.subs[k][1], all, badges, pan, answer: last.content.split('\n')[0], acts: (last.actions || []).map(a => a.label), mapped, none};
+      return {label: cat.subs[k][1], all, badges, pan, cats, answer: last.content.split('\n')[0], acts: (last.actions || []).map(a => a.label), mapped, none};
     });
-    if(r.label !== '📚 All SOP Guides (Read-Only)' || r.all.length !== 5 || r.badges !== 1 || r.pan.length !== 1 || !/PAN update/.test(r.pan[0]) || r.answer !== '**📘 SOP: PAN update / correction**'
+    if(r.label !== '📚 All SOP Guides (Read-Only)' || r.all.length !== N || r.badges !== 1 || !r.pan.length || r.pan.length > 4 || !r.pan.some(x => /PAN update/.test(x)) || r.answer !== '**📘 SOP: PAN update / correction**'
       || r.mapped.join() !== 'nomination-sop' || r.none) throw new Error(JSON.stringify(r));
-    return r.all.length + ' guides listed (1 with its PDF); filter "pan" → ' + r.pan[0] + ' → its steps; nft-nominee answers offer the nomination guide';
+    return r.all.length + ' guides listed (1 with its PDF); filter "pan update" → ' + r.pan.join(' / ') + ' → its steps; nft-nominee answers offer the nomination guide';
+  });
+
+  await t.step('6. several PDFs at once: matched by file name, an unknown one reported; the admin button counts what is missing', async () => {
+    const r = await t.eval(async () => {
+      const raw = pdfRender([{t: 'band', text: 'ZZ Synthetic SOP'}], {title: 'ZZ synthetic guide'});
+      const bytes = new Uint8Array(raw.length); for(let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i) & 0xFF;
+      const list = await riaSopLoad(true), a = list.find(s => s.id === 'pan-updation-sop'), b = list.find(s => s.id === 'nri-account-opening');
+      await riaSopBrowse(); const btn = ((ai.turns[ai.turns.length - 1].actions || [])[0] || {}).label || '';
+      const files = [new File([bytes], a.pdfFile.toLowerCase().replace(/_/g, ' '), {type: 'application/pdf'}), new File([bytes], b.pdfFile.replace(/_/g, '-'), {type: 'application/pdf'}), new File([bytes], 'ZZ Unknown Guide.pdf', {type: 'application/pdf'})];
+      await riaSopBulkUpload(files);
+      const after = await riaSopLoad(true), last = ai.turns[ai.turns.length - 1].content;
+      return {btn, last, on: after.filter(s => s.available).map(s => s.id).sort()};
+    });
+    if(!/^⬆ Add visual guides \(several PDFs\) — \d+ missing$/.test(r.btn) || !/^✅ Added 2 visual guides\. 3 of \d+ guides now have one\./.test(r.last) || !/ZZ Unknown Guide\.pdf — no guide has this file name/.test(r.last)
+      || r.on.join() !== 'nomination-sop,nri-account-opening,pan-updation-sop') throw new Error(JSON.stringify(r));
+    return r.btn + '; ' + r.last.split('\n')[0] + ' — the unknown file reported';
   });
 });
