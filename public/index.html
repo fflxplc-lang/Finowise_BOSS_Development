@@ -2884,6 +2884,75 @@ html,body{overflow-x:hidden;max-width:100%}
 #aiTurns .ria-tile-b{display:block!important;font-size:11px!important;color:var(--muted,#5F6B7A)!important;line-height:1.35!important}
 @media (max-width:360px){#aiTurns .ria-tiles{grid-template-columns:1fr!important}}
 html.dark #aiTurns .ria-tile{background:var(--card,#0d2430)!important;border-color:var(--line,#16323f)!important}
+/* RIA AI drawer polish (27-11-2026): header orb and context pill, one rounded composer card (chip strip, borderless textarea, toolbar),
+   a clear Attach button, a teal Send, card-like answers with a small RIA AI label. Ids, classes and hooks the tests use are unchanged. */
+.ria-head{align-items:center}
+.ria-head-id{display:flex;align-items:center;gap:10px;min-width:0}
+.ria-orb{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:10px;color:#fff;
+  background:linear-gradient(135deg,#0f5c6e 0%,#0d9488 55%,#5eead4 100%);box-shadow:0 4px 12px rgba(13,148,136,.28),inset 0 1px 0 rgba(255,255,255,.25)}
+.ria-head b{font-size:14.5px;letter-spacing:.01em;color:var(--ink,#0f172a)}
+.ria-ctx-pill{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;margin-top:3px;padding:2px 9px;border-radius:999px;
+  background:#f1f5f9;border:1px solid #e2e8f0;color:#475569;font-size:11px;font-weight:500}
+.ria-clear{border-radius:8px!important;font-weight:600!important;color:#0f766e!important}
+.ria-clear:hover{background:#f0fdfa!important}
+.ai-compose.ria-composer{display:flex;flex-direction:column;align-items:stretch;gap:0;margin:10px 14px 8px;padding:0;border:1px solid #cbd5e1;border-radius:14px;background:#fff;
+  box-shadow:0 2px 10px rgba(15,23,42,.06);transition:border-color .15s ease,box-shadow .15s ease}
+.ai-compose.ria-composer:focus-within{border-color:#0d9488;box-shadow:0 0 0 3px rgba(13,148,136,.12),0 2px 10px rgba(15,23,42,.06)}
+.ai-compose.ria-composer textarea{flex:none;width:100%;box-sizing:border-box;resize:none;border:none!important;outline:none!important;box-shadow:none!important;background:transparent;
+  padding:12px 14px 4px;min-height:46px;max-height:160px;font:inherit;font-size:13px;line-height:1.5;color:var(--ink,#0f172a)}
+.ai-compose.ria-composer textarea::placeholder{color:#94a3b8}
+.ai-compose.ria-composer textarea:disabled{background:transparent;color:#94a3b8}
+.ria-composer .ria-attach-bar{border-top:0;padding:10px 12px 0;gap:6px}
+.ria-composer-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px 8px 10px}
+.ria-composer-tools{display:flex;align-items:center;gap:6px}
+.ria-tool{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;min-width:34px;padding:0 10px;border-radius:9px;cursor:pointer;
+  font:inherit;font-size:12.5px;font-weight:600;line-height:1;transition:background .15s ease,border-color .15s ease,transform .1s ease}
+.ria-tool:active{transform:translateY(1px)}
+.ria-tool:disabled{opacity:.5;cursor:not-allowed}
+.ria-up-btn{color:#0f766e;background:#f0fdfa;border:1px solid #99f6e4}
+.ria-up-btn:hover:not(:disabled){background:#ccfbf1;border-color:#5eead4}
+.ria-up-btn svg{flex:0 0 auto}
+.ria-menu-btn.ria-tool{width:34px;padding:0;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;font-size:15px}
+.ria-menu-btn.ria-tool:hover:not(:disabled){background:#f1f5f9;border-color:#cbd5e1}
+.ria-tool:focus-visible,.ria-send:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(13,148,136,.25)}
+.ria-send{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 16px;border:0;border-radius:999px;cursor:pointer;color:#fff;font:inherit;font-size:12.5px;font-weight:700;
+  background:linear-gradient(135deg,#0f5c6e 0%,#0d9488 100%);box-shadow:0 3px 10px rgba(13,148,136,.28);transition:filter .15s ease,transform .1s ease,box-shadow .15s ease}
+.ria-send:hover:not(:disabled){filter:brightness(1.07);box-shadow:0 5px 14px rgba(13,148,136,.34)}
+.ria-send:active:not(:disabled){transform:translateY(1px)}
+.ria-send:disabled{background:#cbd5e1;box-shadow:none;cursor:not-allowed}
+.ria-attach-type{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.04em;background:#e2e8f0;color:#334155}
+.ria-ft-xlsx,.ria-ft-xls{background:#dcfce7;color:#166534}
+.ria-ft-csv{background:#e0f2fe;color:#075985}
+.ria-ft-pdf{background:#fee2e2;color:#991b1b}
+.ria-composer .ria-attach{background:#f8fafc;border-color:#e2e8f0}
+.ai-panel .ai-me .ai-bubble{background:#0f5c6e;color:#fff;border-radius:14px 14px 4px 14px;box-shadow:0 2px 8px rgba(15,92,110,.18)}
+.ai-panel .ai-me .ria-attach-badge{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22)}
+.ai-panel .ai-bot .ai-bubble{background:#fff;border:1px solid #e2e8f0;border-radius:4px 14px 14px 14px;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.ai-panel .ai-turn.ai-bot::before{content:'✦ RIA AI';display:inline-block;margin:0 0 4px;padding:1px 8px 1px 6px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.03em;
+  color:#0f766e;background:#f0fdfa;border:1px solid #ccfbf1}
+.ai-panel .ria-up{margin:2px 0 4px}
+.ai-panel .ria-acts{margin:6px 0 8px}
+html.dark .ai-blocked{background:rgba(245,158,11,.10)!important;border-color:rgba(245,158,11,.45)!important;color:#F8D9A0!important}
+html.dark .ria-head b{color:#EEE8E2}
+html.dark .ria-ctx-pill{background:#10303d;border-color:#16323f;color:#A9B8C2}
+html.dark .ria-clear{color:#5eead4!important}
+html.dark .ria-clear:hover{background:rgba(94,234,212,.08)!important}
+html.dark .ai-compose.ria-composer{background:#0d2430;border-color:#1f4a5a;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+html.dark .ai-compose.ria-composer:focus-within{border-color:#2dd4bf;box-shadow:0 0 0 3px rgba(45,212,191,.18)}
+html.dark .ai-compose.ria-composer textarea{color:#EEE8E2}
+html.dark .ai-compose.ria-composer textarea::placeholder{color:#6b8794}
+html.dark .ria-up-btn{color:#5eead4;background:rgba(45,212,191,.10);border-color:rgba(45,212,191,.35)}
+html.dark .ria-up-btn:hover:not(:disabled){background:rgba(45,212,191,.18);border-color:rgba(45,212,191,.55)}
+html.dark .ria-menu-btn.ria-tool{color:#cbd5e1;background:#10303d;border-color:#1f4a5a}
+html.dark .ria-send:disabled{background:#1f4a5a;color:#7d97a3}
+html.dark .ria-composer .ria-attach{background:#10303d;border-color:#1f4a5a}
+html.dark .ria-attach-type{background:#1f4a5a;color:#cbd5e1}
+html.dark .ria-ft-xlsx,html.dark .ria-ft-xls{background:rgba(34,197,94,.18);color:#86efac}
+html.dark .ria-ft-csv{background:rgba(14,165,233,.18);color:#7dd3fc}
+html.dark .ria-ft-pdf{background:rgba(239,68,68,.18);color:#fca5a5}
+html.dark .ai-panel .ai-me .ai-bubble{background:#0f766e}
+html.dark .ai-panel .ai-bot .ai-bubble{background:#0d2430;border-color:#16323f;box-shadow:none}
+html.dark .ai-panel .ai-turn.ai-bot::before{color:#5eead4;background:rgba(45,212,191,.10);border-color:rgba(45,212,191,.25)}
 /* RIA AI tables (27-11-2026): pipe tables in an answer, and the uploaded-file research view — always inside a sideways scroller, never wider than the drawer. */
 .ria-table-wrap{box-sizing:border-box;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px 0;border:1px solid var(--line);border-radius:10px;background:var(--card,#fff)}
 /* a bot turn shrink-wraps its parts; the research view and a bubble holding a table take the drawer's width instead, and the table scrolls inside it */
@@ -59315,13 +59384,16 @@ function aiDrawPanel(){
   host.innerHTML = `
     <div class="ai-scrim" onclick="aiCloseP()"></div>
     <aside class="ai-panel" role="dialog" aria-label="RIA AI Assistant">
-      <div class="ai-head">
-        <div>
-          <b>RIA AI Assistant</b>
-          <div class="ai-sub">${esc(aiContextLine(aiConvContext(''))||'Ask about anything you can already see.')}</div>
+      <div class="ai-head ria-head">
+        <div class="ria-head-id">
+          <span class="ria-orb" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l1.9 5.6L19.5 9.5l-5.6 1.9L12 17l-1.9-5.6L4.5 9.5l5.6-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" opacity=".85"/></svg></span>
+          <div style="min-width:0">
+            <b>RIA AI Assistant</b>
+            <div class="ai-sub"><span class="ria-ctx-pill" title="${esc(aiContextLine(aiConvContext(''))||'')}">${esc(aiContextLine(aiConvContext(''))||'Ask about anything you can already see.')}</span></div>
+          </div>
         </div>
         <div class="row" style="gap:6px">
-          <button class="btn sm ghost" onclick="aiClearTurns()" title="Start a fresh conversation">Clear</button>
+          <button class="btn sm ghost ria-clear" onclick="aiClearTurns()" title="Start a fresh conversation">Clear</button>
           <button class="btn sm ghost" onclick="aiCloseP()" aria-label="Close the assistant">✕</button>
         </div>
       </div>
@@ -59352,17 +59424,21 @@ function aiDrawPanel(){
               .map(q=>`<button class="quick-chip" onclick="aiReframe(${JSON.stringify(q).replace(/"/g,'&quot;')})">${esc(q)}</button>`).join('')}
           </div>
         </div>`:''}
-      ${ai.staged || ai.stageErr ? `<div class="ria-attach-bar">${ai.staged ? `<div class="ria-attach" id="riaAttach" title="${esc(ai.staged.name)}">
+      <div class="ai-compose ria-composer${ai.staged || ai.stageErr ? ' has-attach' : ''}">
+        ${ai.staged || ai.stageErr ? `<div class="ria-attach-bar">${ai.staged ? `<div class="ria-attach" id="riaAttach" title="${esc(ai.staged.name)}">
           <span class="ria-attach-ico">${riaUpIcon(ai.staged.kind)}</span><span class="ria-attach-name">${esc(ai.staged.name)}</span>
-          <span class="ria-attach-meta">${esc(String(ai.staged.kind || '').toUpperCase())} · ${esc(riaUpSize(ai.staged.size))}</span>
-          <button class="ria-attach-x" onclick="riaUpUnstage()" title="Remove the file" aria-label="Remove the attached file">✕</button></div>` : ''}${ai.stageErr ? `<div class="ria-attach-err" id="riaAttachErr">⚠ ${esc(ai.stageErr)}</div>` : ''}</div>` : ''}
-      <div class="ai-compose">
+          <span class="ria-attach-type ria-ft-${esc(String(ai.staged.kind || '').toLowerCase())}">${esc(String(ai.staged.kind || '').toUpperCase())}</span><span class="ria-attach-meta">${esc(riaUpSize(ai.staged.size))}</span>
+          <button type="button" class="ria-attach-x" onclick="riaUpUnstage()" title="Remove the file" aria-label="Remove the attached file">✕</button></div>` : ''}${ai.stageErr ? `<div class="ria-attach-err" id="riaAttachErr">⚠ ${esc(ai.stageErr)}</div>` : ''}</div>` : ''}
         <textarea id="aiInput" rows="2" placeholder="${ai.staged ? 'Ask about this file — or press Enter for the full research…' : blocked && !riaUpTyping() ? 'The assistant is not available' : 'Ask in English or Hinglish…'}"
           ${blocked && !riaUpTyping()?'disabled':''} onkeydown="aiComposeKey(event)">${esc(ai.draft||'')}</textarea>
-        <input type="file" id="riaUpFile" accept=".xlsx,.xls,.csv,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onchange="riaUpRead(this)">
-        <button class="btn ghost sm ria-up-btn" ${ai.busy?'disabled':''} onclick="riaUpPick()" title="Upload a statement or holdings sheet (.xlsx, .xls, .csv, .pdf) for RIA AI to research" aria-label="Upload a file">📎</button>
-        <button class="btn ghost sm ria-menu-btn" ${blocked||ai.busy?'disabled':''} onclick="riaShowMenu()" title="Main menu" aria-label="Main menu">☰</button>
-        <button class="btn primary sm" id="aiSendBtn" ${(blocked && !riaUpTyping())||ai.busy?'disabled':''} onclick="aiSend()">Send</button>
+        <div class="ria-composer-bar">
+          <div class="ria-composer-tools">
+            <input type="file" id="riaUpFile" accept=".xlsx,.xls,.csv,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onchange="riaUpRead(this)">
+            <button type="button" class="ria-tool ria-up-btn" ${ai.busy?'disabled':''} onclick="riaUpPick()" title="Attach statement (.xlsx, .csv, .pdf)" aria-label="Attach a statement (.xlsx, .xls, .csv, .pdf)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/></svg><span>Attach</span></button>
+            <button type="button" class="ria-tool ria-menu-btn" ${blocked||ai.busy?'disabled':''} onclick="riaShowMenu()" title="Quick prompts — main menu" aria-label="Main menu">☰</button>
+          </div>
+          <button type="button" class="ria-send" id="aiSendBtn" ${(blocked && !riaUpTyping())||ai.busy?'disabled':''} onclick="aiSend()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg><span>Send</span></button>
+        </div>
       </div>
       <div class="ai-foot">Answers are generated. Check anything you are going to act on — and nothing here changes a BOSS record.</div>
     </aside>`;
