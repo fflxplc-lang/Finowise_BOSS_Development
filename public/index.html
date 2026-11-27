@@ -36267,7 +36267,8 @@ function navigate(view, arg){
     ai.context = nc;
   }
   render();
-  if(typeof ai !== 'undefined' && ai.open && typeof aiDrawPanel === 'function') aiDrawPanel();
+  /* not while RIA AI is answering: the page it opened is drawn with its answer */
+  if(typeof ai !== 'undefined' && ai.open && !ai.busy && typeof aiDrawPanel === 'function') aiDrawPanel();
 }
 
 async function boot(){
