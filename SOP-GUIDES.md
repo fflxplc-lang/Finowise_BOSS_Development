@@ -35,9 +35,19 @@ viewer, hidden when printing. It cannot stop a screenshot or a phone camera.
    node scripts/sops-build.js --src sops-src
    ```
 
-   This drafts a registry entry for each new deck (steps from its slides,
-   `"curated": false`) and prints the warnings. For a slide to leave out, add
-   its number to the entry's `withholdSlides`.
+   This drafts a registry entry for each new deck (`.pptx`, `.pptm` or a
+   `.pdf`; steps from its slides, search phrases from its title and file
+   name, `"curated": false`) and prints the warnings. For a slide to leave
+   out, add its number to the entry's `withholdSlides`; once a picture slide
+   has been looked at and is fine, add it to `reviewedSlides` so the warning
+   stops.
+
+   **A box drawn over a screenshot hides nothing in a PDF.** PowerPoint keeps
+   the whole picture underneath the box (and the uncropped picture under a
+   crop), and any PDF tool lifts it out. Set `"flatten": true` on the entry:
+   each page is then rendered to a picture of itself (110 dpi JPEG), so a box
+   or crop really removes what it covers. Every guide in the registry is
+   flattened today.
 3. Convert, straight into the folder the server reads (on the server, or
    locally and copy them up):
 
@@ -47,10 +57,13 @@ viewer, hidden when printing. It cannot stop a screenshot or a phone camera.
 
    Withheld slides are never rendered into the PDF. A 3–4 MB deck comes out
    well under 1 MB.
-4. Or, for one guide at a time: in RIA AI, an **admin** asking for an SOP with
-   no PDF yet gets **⬆ Add the visual guide (PDF)** — the file goes to the
-   server's data folder, not git (≤ 20 MB, must be a PDF, only a registered
-   name).
+4. Or upload them in RIA AI. *All SOP Guides* shows an **admin** the button
+   **⬆ Add visual guides (several PDFs) — N missing**: pick all the PDFs at
+   once and each goes to the guide whose `pdfFile` it is named after (case,
+   spaces, `_` and `-` ignored); anything else is listed as not added. For
+   one guide, an admin asking for it gets **⬆ Add the visual guide (PDF)**.
+   Either way the file goes to the server's data folder, not git (≤ 20 MB,
+   must be a PDF, only a registered name).
 5. Tidy the drafted steps in `sop-registry.json` (set `"curated": true`),
    commit the registry, and check: `node scripts/sops-build.js --check`.
 

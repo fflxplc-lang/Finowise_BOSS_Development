@@ -11,7 +11,7 @@
      node scripts/sops-build.js --src ~/SOPs --convert --out /home/finowise-test/data/sops-pdf
      node scripts/sops-build.js --check               # every mapped pdfFile exists?
 
-   What it does, per deck (.pptx in --src):
+   What it does, per deck (.pptx / .pptm, or a .pdf, in --src):
      · reads every slide's text straight from the .pptx (a zip of XML), so a
        new deck gets a draft entry: title, document no., date, owner, category,
        keywords and steps ("curated": false until somebody tidies the steps);
@@ -23,7 +23,10 @@
        Aadhaar or mobile number or an e-mail address in the text, and every
        slide that is only a picture (a scanned PAN / Aadhaar card or a filled
        form cannot be seen in the text; open those slides and withhold or
-       redact them before the PDF is uploaded).
+       redact them before the PDF is uploaded). An entry marked "flatten" has every
+       page turned into a picture, because a box drawn over a screenshot in
+       PowerPoint hides nothing in a PDF — the screenshot is still underneath;
+       "reviewedSlides" lists picture slides somebody has looked at and cleared.
    And for the registry as a whole: a PDF placed in --out (or sops-pdf/) with
    no entry gets one; an existing entry's hand-edited fields are kept unless
    --refresh; every entry's pdfFile is checked to exist.
@@ -92,8 +95,22 @@ const CATEGORIES = [
   ['Reports & Tax', /\b(tax|report|statement|capital gain|cas)\b/i],
   ['Insurance', /\b(insurance|lic|quotation|policy|term plan|health)\b/i]];
 const categoryOf = t => (CATEGORIES.find(([, re])=>re.test(t)) || ['General'])[0];
-const slug = s => String(s).toLowerCase().replace(/\.(pptx|pdf)$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
-const STOP = new Set(['sop', 'the', 'and', 'of', 'for', 'to', 'a', 'an', 'process', 'single', 'standard', 'operating', 'procedure', 'pptx', 'pdf']);
+const slug = s => String(s).toLowerCase().replace(/\.(pptx|pptm|pdf)$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+const STOP = new Set(['sop', 'the', 'and', 'of', 'for', 'to', 'a', 'an', 'process', 'single', 'standard', 'operating', 'procedure', 'pptx', 'pptm', 'pdf', 'ppt', 'final', 'with', 'logo', 'br', 'in', 'on', 'through']);
+/* a deck's own boilerplate is not a step: the footer line, "Thank you", an index, a page number, a bare "Step 3" */
+const BOILER = /^(be wise\b.*|thank you\.?|index|contents?|\d{1,3}|step\s*[-:]?\s*\d+\s*[-:]?|standard operating procedure.*|follow the instructions?\.?|instructions?\s*-?|click here)$/i;
+/* the phrases a person would ask by: the title, and the file's name, without the SOP / PPT / FINAL noise or a date */
+function aliasesOf(title, base){
+  const clean = t => String(t || '').toLowerCase().replace(/\(.*?\)/g, ' ').replace(/\d{1,2}[-./]\d{1,2}[-./]\d{2,4}/g, ' ').replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/).filter(w=>w && !STOP.has(w) && !/^\d+$/.test(w)).join(' ').trim();
+  return [...new Set([clean(title), clean(base.replace(/[_-]+/g, ' '))])].filter(a=>a.split(' ').length >= 2 && a.length <= 70);
+}
+/* a PDF given as the source: its pages' text, through poppler's pdftotext when it is there */
+function pagesOfPdf(file){
+  try { return execFileSync('pdftotext', ['-layout', file, '-'], {maxBuffer: 64 * 1048576}).toString('utf8').split('\f')
+    .map(pg=>pg.split('\n').map(l=>l.replace(/\s{2,}/g, ' ').trim()).filter(Boolean)).filter((pg, i, a)=>i < a.length - 1 || pg.length); }
+  catch(e){ return []; }
+}
 /* the cover's fields: "SOP Title : X", "Document No. :", "Date :", "RESPONSIBILITY :" — the value on the same line or the next */
 function coverField(paras, label){
   for(let i = 0; i < paras.length; i++){
@@ -105,7 +122,7 @@ function coverField(paras, label){
 /* a draft entry from a deck's slides */
 function entryOf(file, slides){
   const cover = slides[0] || [];
-  const base = path.basename(file).replace(/\.pptx$/i, '');
+  const base = path.basename(file).replace(/\.(pptx|pptm|pdf)$/i, '');
   /* a placeholder title on the cover ("ABCD", "XYZ") gives way to its PURPOSE line */
   const named = coverField(cover, 'SOP Title');
   const title = ((named && named.length > 4 && !/^(abcd|xyz|title|na|tbd)$/i.test(named) ? named : '') || coverField(cover, 'PURPOSE') || base.replace(/[_-]+/g, ' ')).replace(/\s+/g, ' ').trim();
@@ -119,12 +136,14 @@ function entryOf(file, slides){
     const words = paras.filter(p=>!/^\d{1,3}$/.test(p));
     if(!words.length){ if(i > 0) imageOnly.push(n); return; }
     if(i === 0 || /^(index|contents?)$/i.test(words[0]) || /^thank you$/i.test(words[0])) return;
-    const line = words.join(' — ').replace(/\s+/g, ' ').trim();
-    if(line.length > 3) steps.push(line.length > 260 ? line.slice(0, 257) + '…' : line);
+    const kept = [...new Set(words.filter(w=>!BOILER.test(w.trim())))];
+    if(!kept.length) return;
+    const line = kept.join(' — ').replace(/\s+/g, ' ').trim();
+    if(line.length > 3 && !steps.includes(line)) steps.push(line.length > 260 ? line.slice(0, 257) + '…' : line);
   });
   const kw = [...new Set((title + ' ' + base).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w=>w.length > 2 && !STOP.has(w)))];
   return {id: slug(base), title, category: categoryOf(title + ' ' + base), docNo: coverField(cover, 'Document No'), date: coverField(cover, 'Date'),
-    owner: coverField(cover, 'RESPONSIBILITY'), keywords: kw, aliases: [], sopIds: [], steps, pdfFile: base.replace(/[^A-Za-z0-9 ._()&+-]+/g, '_') + '.pdf',
+    owner: coverField(cover, 'RESPONSIBILITY'), keywords: kw, aliases: aliasesOf(title, base), sopIds: [], steps, pdfFile: base.replace(/[^A-Za-z0-9 ._()&+-]+/g, '_') + '.pdf',
     source: path.basename(file), slides: slides.length, imageOnlySlides: imageOnly, withholdSlides: [], curated: false, _pii: pii};
 }
 
@@ -141,6 +160,55 @@ function keptRange(total, drop){
   if(a !== null) parts.push(a === b ? String(a) : a + '-' + b);
   return parts.join(',');
 }
+/* "flatten": every page becomes a picture of itself. A PowerPoint "redaction" — a box drawn over a
+   screenshot — is only a shape on top: the PDF still carries the whole screenshot underneath, and any PDF
+   tool lifts it out. Rendering each page to a JPEG and building the PDF from those pictures makes the box
+   part of the image, so what it covers is really gone. Needs poppler's pdftoppm; the PDF is written here. */
+function jpegSize(buf){
+  for(let i = 2; i < buf.length - 9;){
+    if(buf[i] !== 0xFF){ i++; continue; }
+    const m = buf[i + 1], len = buf.readUInt16BE(i + 2);
+    if(m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) return {h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7)};
+    i += 2 + len;
+  }
+  throw new Error('not a JPEG');
+}
+function pdfOfJpegs(jpegs, dpi){
+  const objs = [], pages = [];
+  const add = body => { objs.push(body); return objs.length; };
+  const catalog = add(null), pagesObj = add(null);
+  jpegs.forEach(buf=>{
+    const {w, h} = jpegSize(buf), pw = +(w * 72 / dpi).toFixed(2), ph = +(h * 72 / dpi).toFixed(2);
+    const img = add(Buffer.concat([Buffer.from('<< /Type /XObject /Subtype /Image /Width ' + w + ' /Height ' + h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + buf.length + ' >>\nstream\n'), buf, Buffer.from('\nendstream')]));
+    const draw = 'q ' + pw + ' 0 0 ' + ph + ' 0 0 cm /Im Do Q';
+    const content = add('<< /Length ' + draw.length + ' >>\nstream\n' + draw + '\nendstream');
+    pages.push(add('<< /Type /Page /Parent ' + pagesObj + ' 0 R /MediaBox [0 0 ' + pw + ' ' + ph + '] /Resources << /XObject << /Im ' + img + ' 0 R >> >> /Contents ' + content + ' 0 R >>'));
+  });
+  objs[catalog - 1] = '<< /Type /Catalog /Pages ' + pagesObj + ' 0 R >>';
+  objs[pagesObj - 1] = '<< /Type /Pages /Kids [' + pages.map(n=>n + ' 0 R').join(' ') + '] /Count ' + pages.length + ' >>';
+  const parts = [Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'latin1')], offsets = [];
+  let at = parts[0].length;
+  objs.forEach((o, i)=>{ const b = Buffer.concat([Buffer.from((i + 1) + ' 0 obj\n'), Buffer.isBuffer(o) ? o : Buffer.from(o), Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+  parts.push(Buffer.from('xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' + offsets.map(o=>String(o).padStart(10, '0') + ' 00000 n \n').join('') + 'trailer\n<< /Size ' + (objs.length + 1) + ' /Root ' + catalog + ' 0 R >>\nstartxref\n' + at + '\n%%EOF\n'));
+  return Buffer.concat(parts);
+}
+function flattenPdf(pdf){
+  const dpi = 110, tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sopflat-'));
+  execFileSync('pdftoppm', ['-r', String(dpi), '-jpeg', '-jpegopt', 'quality=72', pdf, path.join(tmp, 'p')], {stdio: 'ignore', timeout: 300000});
+  const jpegs = fs.readdirSync(tmp).filter(f=>/\.jpg$/.test(f)).sort().map(f=>fs.readFileSync(path.join(tmp, f)));
+  if(!jpegs.length) throw new Error('pdftoppm made no pages');
+  fs.writeFileSync(pdf, pdfOfJpegs(jpegs, dpi));
+  fs.rmSync(tmp, {recursive: true, force: true});
+}
+/* a PDF source is used as it is (flattened when the entry asks; slides cannot be withheld from it — say so) */
+function copyPdf(file, entry){
+  if((entry.withholdSlides || []).length) throw new Error(entry.id + ': withholdSlides cannot be applied to a PDF source — export the deck instead');
+  fs.mkdirSync(OUT, {recursive: true});
+  const out = path.join(OUT, entry.pdfFile);
+  fs.copyFileSync(file, out);
+  if(entry.flatten) flattenPdf(out);
+  return fs.statSync(out).size;
+}
 function convert(file, entry){
   fs.mkdirSync(OUT, {recursive: true});
   const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sop-'));
@@ -148,10 +216,11 @@ function convert(file, entry){
   const range = drop.size ? keptRange(entry.slides || 0, drop) : '';
   if(drop.size && !range) throw new Error(entry.id + ': every slide is withheld');
   execFileSync('soffice', ['--headless', '--norestore', '--convert-to', pdfExport(range), '--outdir', tmp, file], {stdio: 'ignore', timeout: 300000});
-  const made = path.join(tmp, path.basename(file).replace(/\.pptx$/i, '.pdf'));
+  const made = path.join(tmp, path.basename(file).replace(/\.(pptx|pptm)$/i, '.pdf'));
   if(!fs.existsSync(made)) throw new Error('LibreOffice made no PDF for ' + path.basename(file));
   fs.copyFileSync(made, path.join(OUT, entry.pdfFile));
   fs.rmSync(tmp, {recursive: true, force: true});
+  if(entry.flatten) flattenPdf(path.join(OUT, entry.pdfFile));
   return fs.statSync(path.join(OUT, entry.pdfFile)).size;
 }
 
@@ -160,12 +229,13 @@ const reg = fs.existsSync(REGISTRY) ? JSON.parse(fs.readFileSync(REGISTRY, 'utf8
 reg.sops = reg.sops || [];
 const byId = new Map(reg.sops.map(s=>[s.id, s]));
 const warnings = [];
-const decks = fs.existsSync(SRC) ? fs.readdirSync(SRC).filter(f=>/\.pptx$/i.test(f) && !f.startsWith('~$')).sort() : [];
+const decks = fs.existsSync(SRC) ? fs.readdirSync(SRC).filter(f=>/\.(pptx|pptm|pdf)$/i.test(f) && !f.startsWith('~$')).sort() : [];
 if(flag('convert') && decks.length && !which('soffice')) { console.error('--convert needs LibreOffice (soffice) on this machine.'); process.exit(2); }
 for(const f of decks){
   const file = path.join(SRC, f);
   let draft;
-  try { draft = entryOf(file, slidesOf(file)); } catch(e){ warnings.push(f + ': could not be read (' + e.message + ')'); continue; }
+  const isPdf = /\.pdf$/i.test(f);
+  try { draft = entryOf(file, isPdf ? pagesOfPdf(file) : slidesOf(file)); } catch(e){ warnings.push(f + ': could not be read (' + e.message + ')'); continue; }
   const pii = draft._pii; delete draft._pii;
   const had = byId.get(draft.id) || reg.sops.find(s=>s.source === f);
   let entry;
@@ -175,7 +245,7 @@ for(const f of decks){
   const unreviewed = (entry.imageOnlySlides || []).filter(n=>!(entry.withholdSlides || []).includes(n) && !(entry.reviewedSlides || []).includes(n));
   if(unreviewed.length) warnings.push(f + ' — picture-only slides ' + unreviewed.join(', ') + ': open them; a scanned PAN / Aadhaar / form must be withheld (withholdSlides) or redacted');
   if(flag('convert')){
-    try { const bytes = convert(file, entry); console.log('converted  ' + f + ' → ' + entry.pdfFile + ' (' + Math.round(bytes / 1024) + ' KB' + (entry.withholdSlides.length ? ', slides ' + entry.withholdSlides.join(', ') + ' withheld' : '') + ')'); }
+    try { const bytes = isPdf ? copyPdf(file, entry) : convert(file, entry); console.log('converted  ' + f + ' → ' + entry.pdfFile + ' (' + Math.round(bytes / 1024) + ' KB' + (entry.withholdSlides.length ? ', slides ' + entry.withholdSlides.join(', ') + ' withheld' : '') + (entry.flatten ? ', flattened to images' : '') + ')'); }
     catch(e){ warnings.push(f + ': not converted — ' + e.message); }
   }
 }

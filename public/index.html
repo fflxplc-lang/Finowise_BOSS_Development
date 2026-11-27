@@ -63421,6 +63421,7 @@ function riaFollow(ti, k){
   if(a.act.t==='updl') return riaUpDownload(ti, a.act.file, a.act.fmt);
   if(a.act.t==='sopview') return riaSopView(a.act.id);
   if(a.act.t==='sopup') return riaSopUploadPick(a.act.id);
+  if(a.act.t==='sopbulk') return riaSopBulkPick();
   if(a.act.t==='sopall'){ riaPushUser(a.label.replace(/^\W+\s*/, '')); return riaSopBrowse().then(riaDone); }
   return riaRun(a.act, a.label).catch(aiIgnoreStale);
 }
@@ -64470,7 +64471,9 @@ function riaSopDocsFor(t){
 /* All SOP Guides: every guide, grouped, with a filter. */
 async function riaSopBrowse(){
   const list = await riaSopLoad();
-  riaPushBot({content: '**📚 All SOP Guides (Read-Only)** — ' + riaN(list.length) + ' guide' + (list.length === 1 ? '' : 's') + ', ' + riaN(list.filter(s=>s.available).length) + ' with a visual guide. Type to filter; pick one for its steps.', ui: {kind: 'soplist'}});
+  const admin = typeof isAdmin === 'function' && isAdmin(), missing = list.filter(s=>!s.available && s.pdfFile).length;
+  riaPushBot({content: '**📚 All SOP Guides (Read-Only)** — ' + riaN(list.length) + ' guide' + (list.length === 1 ? '' : 's') + ', ' + riaN(list.filter(s=>s.available).length) + ' with a visual guide. Type to filter; pick one for its steps.', ui: {kind: 'soplist'},
+    actions: admin ? [{label: '⬆ Add visual guides (several PDFs)' + (missing ? ' — ' + riaN(missing) + ' missing' : ''), act: {t: 'sopbulk'}}] : undefined});
   return {};
 }
 function riaSopListHtml(ti){
@@ -64508,6 +64511,36 @@ function riaSopUploadPick(id){
     riaDone();
   };
   inp.click();
+}
+/* An admin adds many guides at once: each PDF goes to the guide whose pdfFile has its name (case and _ / - / space ignored). */
+const riaSopFileKey = n => String(n || '').toLowerCase().replace(/\.pdf$/, '').replace(/[^a-z0-9]+/g, '');
+function riaSopBulkPick(){
+  if(!(typeof isAdmin === 'function' && isAdmin())) return;
+  const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.accept = 'application/pdf,.pdf';
+  inp.onchange = ()=>riaSopBulkUpload([...(inp.files || [])]);
+  inp.click();
+}
+async function riaSopBulkUpload(files){
+  if(!files.length || !(typeof isAdmin === 'function' && isAdmin())) return;
+  const byKey = {}; riaSopList().forEach(s=>{ if(s.pdfFile) byKey[riaSopFileKey(s.pdfFile)] = s; });
+  const done = [], skipped = [];
+  riaPushBot({content: '⏳ Adding ' + riaN(files.length) + ' PDF' + (files.length === 1 ? '' : 's') + '…'});
+  riaDone();
+  for(const f of files){
+    const s = byKey[riaSopFileKey(f.name)];
+    if(!s){ skipped.push(f.name + ' — no guide has this file name'); continue; }
+    if(f.size > 20 * 1048576){ skipped.push(f.name + ' — over 20 MB'); continue; }
+    try {
+      const r = await fetch('/api/sops/pdf/' + encodeURIComponent(s.pdfFile), {method: 'PUT', headers: Object.assign({'Content-Type': 'application/pdf'}, apiHeaders()), credentials: 'same-origin', body: f});
+      const j = await r.json().catch(()=>({}));
+      if(r.ok) done.push(s.title); else skipped.push(f.name + ' — ' + (j.error || 'refused'));
+    } catch(e){ skipped.push(f.name + ' — the upload failed'); }
+  }
+  const list = await riaSopLoad(true);
+  riaPushBot({content: '✅ Added ' + riaN(done.length) + ' visual guide' + (done.length === 1 ? '' : 's') + '. ' + riaN(list.filter(s=>s.available).length) + ' of ' + riaN(list.length) + ' guides now have one.'
+    + (skipped.length ? '\n\nNot added (' + riaN(skipped.length) + '):\n' + skipped.slice(0, 30).map(x=>'• ' + x).join('\n') + (skipped.length > 30 ? '\n• …and ' + riaN(skipped.length - 30) + ' more' : '') : ''),
+    actions: [{label: '📚 All SOP Guides (Read-Only)', act: {t: 'sopall'}}]});
+  riaDone();
 }
 /* ---- the read-only viewer ---- */
 const riaSopV = {pdf: null, page: 1, pages: 0, scale: null, id: null, keys: null, rendering: null};
