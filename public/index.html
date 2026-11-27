@@ -59615,9 +59615,11 @@ async function aiSend(){
     const awaiting = !!(ai.flow && ai.flow.step==='await_value');
     /* a question about the file just read stays on the file */
     const upQ = !awaiting && riaUpFollowUp(q);
-    const nav = upQ || awaiting || riaDetectClientOnboarding(q) ? null : bossPageOpenIntent(q);
-    const desk = nav || upQ ? null : await riaDeskHandle(q);
+    const diagC = upQ || awaiting ? null : riaDiagClientFor(q);
+    const nav = upQ || diagC || awaiting || riaDetectClientOnboarding(q) ? null : bossPageOpenIntent(q);
+    const desk = nav || upQ || diagC ? null : await riaDeskHandle(q);
     out = upQ ? riaUpAnswer(q)
+        : diagC ? riaDiagClientAnswer(diagC, q)
         : desk ? desk
         : nav ? bossOpenNow(q, nav)
         : riaTotalAumIntent(q) && !ai.forceClient ? await riaTotalAumTurn()
@@ -63784,17 +63786,21 @@ const riaRedactAadhaar = t => String(t || '').replace(/(aadhaa?r[^0-9\n]{0,20})(
 const RIA_UP_MAX_BYTES = 10 * 1024 * 1024, RIA_UP_MAX_ROWS = 5000;
 const RIA_UP_EXT = /\.(xlsx|xls|csv|pdf)$/i;
 const RIA_UP_COLS = {
-  name: ['scheme / product', 'scheme product', 'scheme name', 'scheme', 'fund name', 'fund', 'security name', 'security', 'scrip name', 'scrip', 'stock name', 'stock',
-    'instrument', 'instrument name', 'company name', 'company', 'holding', 'holding name', 'description', 'particulars', 'name', 'asset name', 'investment', 'product', 'product name'],
+  /* broker and demat exports too ("dmart latest 1.xls", NSDL / CDSL / ICICI): Stock Name / Company / Script / Security, Sector, Qty, Avg. Buy Price, LTP, Cost Value, Market Value, DP */
+  name: ['scheme / product', 'scheme product', 'scheme name', 'scheme', 'fund name', 'fund', 'security name', 'security', 'scrip name', 'scrip', 'script name', 'script', 'stock name', 'stock',
+    'share name', 'instrument', 'instrument name', 'company name', 'company', 'holding', 'holding name', 'description', 'particulars', 'name', 'asset name', 'investment', 'product', 'product name'],
   assetClass: ['asset class', 'asset type', 'class', 'instrument type', 'type', 'asset'],
-  category: ['category', 'sub category', 'sub-category', 'scheme category', 'sector'],
-  folio: ['folio / account', 'folio account', 'folio no', 'folio number', 'folio', 'account', 'account no', 'account number', 'demat account'],
+  category: ['category', 'sub category', 'sub-category', 'scheme category'],
+  sector: ['sector', 'industry', 'sector name', 'industry name'],
+  folio: ['folio / account', 'folio account', 'folio no', 'folio number', 'folio', 'folio / dp', 'folio dp', 'dp', 'dp id', 'dp id client id', 'client id', 'bo id', 'account', 'account no', 'account number', 'demat account', 'demat'],
   isin: ['isin', 'isin code', 'isin no', 'isin number'],
-  units: ['units', 'unit', 'quantity', 'qty', 'balance units', 'no of shares', 'shares', 'holding qty', 'closing units', 'unit balance', 'quantity held'],
-  price: ['nav / price', 'nav price', 'nav', 'price', 'current price', 'market price', 'ltp', 'closing price', 'current nav', 'market rate', 'rate', 'cmp'],
-  invested: ['invested', 'invested amount', 'invested value', 'investment amount', 'investment value', 'cost', 'cost value', 'purchase value', 'total cost', 'amount invested',
+  units: ['units', 'unit', 'quantity', 'qty', 'quantity qty', 'balance units', 'no of shares', 'shares', 'holding qty', 'closing units', 'unit balance', 'quantity held', 'free qty', 'net qty'],
+  avg: ['avg buy price', 'average buy price', 'avg price', 'average price', 'avg cost', 'average cost', 'avg cost price', 'cost price', 'buy price', 'purchase price', 'avg rate', 'buy avg',
+    'avg nav', 'average nav', 'purchase nav', 'cost'],
+  price: ['nav / price', 'nav price', 'ltp', 'current price', 'nav', 'price', 'market price', 'closing price', 'close price', 'last price', 'current nav', 'market rate', 'rate', 'cmp'],
+  invested: ['invested', 'invested amount', 'invested value', 'investment amount', 'investment value', 'cost value', 'buy value', 'purchase value', 'total cost', 'amount invested',
     'book value', 'acquisition cost', 'cost of acquisition', 'purchase amount'],
-  current: ['current value', 'market value', 'current market value', 'valuation', 'value', 'present value', 'closing value', 'mkt value', 'current amount', 'holding value', 'market value rs'],
+  current: ['current value', 'current amount', 'market value', 'current market value', 'valuation', 'value', 'present value', 'closing value', 'mkt value', 'holding value', 'market value rs'],
   date: ['invested on', 'purchase date', 'date of purchase', 'investment date', 'start date', 'acquisition date', 'date of investment', 'date'],
   note: ['note', 'notes', 'remarks', 'remark', 'comment', 'comments'],
   symbol: ['symbol', 'ticker', 'scrip code', 'nse symbol', 'bse code', 'trading symbol'],
@@ -63847,13 +63853,15 @@ function riaUpRowsFromSheet(rows, head, fileName, sheetName){
     const name = cell(r, 'name') == null ? '' : String(cell(r, 'name')).replace(/\s+/g, ' ').trim();
     const first = String(r.find(v=>v !== null && v !== undefined && String(v).trim() !== '') || '').trim();
     if(RIA_UP_TOTAL.test(name) || RIA_UP_TOTAL.test(first)) continue;
-    const units = riaUpNum(cell(r, 'units')), price = riaUpNum(cell(r, 'price'));
-    let current = riaUpNum(cell(r, 'current')); const invested = riaUpNum(cell(r, 'invested'));
+    const units = riaUpNum(cell(r, 'units')), price = riaUpNum(cell(r, 'price')), avg = riaUpNum(cell(r, 'avg'));
+    let current = riaUpNum(cell(r, 'current')), invested = riaUpNum(cell(r, 'invested'));
+    /* what the statement leaves out, worked from what it gives: Qty × LTP, Qty × Avg price */
     if(current === null && units !== null && price !== null) current = Math.round(units * price * 100) / 100;
+    if(invested === null && units !== null && avg !== null) invested = Math.round(units * avg * 100) / 100;
     if(current === null && invested === null && units === null) continue;
     out.push({src: (sheetName ? sheetName + ' row ' : 'Row ') + (i + 1), name, assetClass: String(cell(r, 'assetClass') || '').trim(), category: String(cell(r, 'category') || '').trim(),
       folio: String(cell(r, 'folio') == null ? '' : cell(r, 'folio')).trim(), isin: String(cell(r, 'isin') || '').trim().toUpperCase(), symbol: String(cell(r, 'symbol') || '').trim(),
-      units, price, invested, current, date: riaUpDate(cell(r, 'date')), note: String(cell(r, 'note') || '').trim()});
+      sector: String(cell(r, 'sector') || '').trim(), units, avg, price, invested, current, date: riaUpDate(cell(r, 'date')), note: String(cell(r, 'note') || '').trim()});
   }
   return out;
 }
@@ -63872,7 +63880,7 @@ async function riaUpParse(file){
     (got.notes || []).forEach(n=>notes.push(n));
     rows = (got.holdings || []).filter(h=>h.level !== 'summary').map((h, i)=>({src: 'PDF line ' + (i + 1), name: h.security_name === MA_UNNAMED_HOLDING ? '' : String(h.security_name || '').trim(),
       assetClass: h.asset_class || '', category: h.category || '', folio: String(h.identifier || '').trim(), isin: String(h.isin || '').toUpperCase(), symbol: '',
-      units: h.quantity, price: h.current_price, invested: h.invested, current: h.current_value != null ? h.current_value : (h.quantity != null && h.current_price != null ? h.quantity * h.current_price : null),
+      units: h.quantity, avg: h.avg_cost, price: h.current_price, invested: h.invested != null ? h.invested : (h.quantity != null && h.avg_cost != null ? h.quantity * h.avg_cost : null), current: h.current_value != null ? h.current_value : (h.quantity != null && h.current_price != null ? h.quantity * h.current_price : null),
       date: h.start_date || '', note: ''}));
     if(!rows.length) notes.push('No holdings table could be read from this PDF' + ((got.notes || []).some(n=>/scanned/i.test(n)) ? ' (it is a scanned image)' : '') + '. Upload the Excel export of the same statement for a full read.');
   } else {
@@ -63913,100 +63921,314 @@ function riaUpClassOf(r){
   }
   return {cls: 'Unclassified', isMf};
 }
-/* The research: totals, mix, concentration, data quality and an action for every row. */
-function riaUpAnalyse(up){
+/* =====================================================================
+   PORTFOLIO DIAGNOSTICS — PILLARS, CLUTTER, DRIFT, TAX (27-11-2026)
+
+   For an uploaded statement (stocks, demat, mutual funds) and for a CRM
+   client, the research now works the way the firm's restructuring reports
+   do, and still only ever says Hold / Reduce / Switch / Review:
+     · Pillar tier by weight — Anchor over 25% (Reduce: single-position
+       risk), Core 5–25%, Mid 1–5%, Micro-tail under 1% or under ₹50,000
+       (consolidation: Reduce where it is losing or unclassified, Review
+       otherwise; a bottom-quartile fund stays a Switch).
+     · Direct stocks, which the quartile sheet does not cover, by P&L and
+       weight health: in profit or modest loss → Hold; a deep loss (over
+       20%) or no cost to judge by → Review.
+     · Seven buckets against an indicative balanced target, each with a
+       ±5% band: drift beyond it is "Rebalancing required"; no debt /
+       liquid at all is called out as a missing buffer.
+     · Unrealized gains and losses, the ₹1,25,000 LTCG exemption (₹2.5 L
+       across two family PANs), and duplicate categories / folios to
+       consolidate.
+   ===================================================================== */
+const RIA_TAIL_VALUE = 50000, RIA_TAIL_PCT = 1;
+const RIA_BUCKETS = ['Core / Equity MF', 'Mid & Small Cap MF', 'Direct Stocks', 'Hybrid / BAF', 'Debt / Liquid / Arbitrage', 'Gold / Silver ETFs', 'Unclassified'];
+const RIA_BUCKET_TARGET = {'Core / Equity MF': 35, 'Mid & Small Cap MF': 15, 'Direct Stocks': 10, 'Hybrid / BAF': 15, 'Debt / Liquid / Arbitrage': 20, 'Gold / Silver ETFs': 5, 'Unclassified': 0};
+const RIA_MANDATE = {Hold: 'Retain — a consistent record or healthy position that suits the client',
+  Reduce: 'Trim concentration over 25%, de-risk high-beta for a mature client, consolidate the micro-tail',
+  Switch: 'Move a bottom-quartile fund to the top-ranked peer of its category',
+  Review: 'Identify or verify first — missing names / ISINs, too new, deep loss, or conflicting signals'};
+function riaDiagBucket(r){
+  const id = r.cat && r.cat.id ? String(r.cat.id) : '';
+  const a = (id + ' ' + (r.assetClass || '') + ' ' + (r.category || '') + ' ' + (r.noName ? '' : r.name || '')).toLowerCase();
+  if(/\b(gold|silver)\b/.test(a)) return 'Gold / Silver ETFs';
+  if(r.isMf){
+    if(/arbitrage|liquid|overnight|money market|\bdebt\b|bond|gilt|duration|credit risk|banking and psu|corporate|ultra short|floater|g-?sec/.test(a)) return 'Debt / Liquid / Arbitrage';
+    if(/\bbaf\b|balanced|hybrid|multi asset|equity savings|dynamic asset/.test(a)) return 'Hybrid / BAF';
+    if(/mid ?cap|small ?cap/.test(a)) return 'Mid & Small Cap MF';
+    if(r.cls === 'Debt' || r.cls === 'Liquid/Cash') return 'Debt / Liquid / Arbitrage';
+    if(r.cls === 'Hybrid') return 'Hybrid / BAF';
+    if(r.cls === 'Gold/Commodities') return 'Gold / Silver ETFs';
+    return 'Core / Equity MF';
+  }
+  if(r.cls === 'Debt' || r.cls === 'Liquid/Cash') return 'Debt / Liquid / Arbitrage';
+  if(r.cls === 'Gold/Commodities') return 'Gold / Silver ETFs';
+  if(r.cls === 'Hybrid') return 'Hybrid / BAF';
+  if(!r.noName && (r.cls === 'Equity' || /^INE/.test(r.isin || '') || r.sector)) return 'Direct Stocks';
+  return 'Unclassified';
+}
+const riaTierOf = r => r.weightPct > 25 ? 'Anchor' : (r.weightPct < RIA_TAIL_PCT || (r.cur < RIA_TAIL_VALUE && r.weightPct < 5)) ? 'Micro-tail' : r.weightPct >= 5 ? 'Core' : 'Mid';
+/* The research on a set of holdings (an uploaded statement, or a CRM client's positions): every row's class, weight, tier,
+   P&L and action, and the book's mix, concentration, clutter, drift, tax and data quality. ctx: {age, yearsToGoal}. */
+function riaUpAnalyse(up, ctx){
+  ctx = ctx || {};
   const rows = up.rows, val = r => r.current != null ? Number(r.current) : (r.invested != null ? Number(r.invested) : 0);
   const total = rows.reduce((n, r)=>n + Math.max(0, val(r)), 0), invested = rows.reduce((n, r)=>n + (Number(r.invested) || 0), 0);
   const curKnown = rows.reduce((n, r)=>n + (r.current != null ? Number(r.current) : 0), 0);
   const mix = {};
   rows.forEach(r=>{
-    const c = riaUpClassOf(r); r.cls = c.cls; r.isMf = c.isMf;
-    r.weightPct = total ? Math.round(Math.max(0, val(r)) / total * 1000) / 10 : 0;
-    mix[r.cls] = (mix[r.cls] || 0) + Math.max(0, val(r));
+    const c = riaUpClassOf(r); r.cls = c.cls; r.isMf = c.isMf; r.cat = c.cat || r.cat || null;
+    /* a broker export's sector ("Banking", "IT") says a direct equity where the name alone cannot */
+    if(r.cls === 'Unclassified' && !r.isMf && !r.noName && r.sector && !/mutual|fund|gold|silver|debt|bond|liquid|etf/i.test(r.sector)) r.cls = 'Equity';
+    r.cur = Math.max(0, val(r));
+    r.weightPct = total ? Math.round(r.cur / total * 1000) / 10 : 0;
+    r.pnl = r.current != null && r.invested != null ? Number(r.current) - Number(r.invested) : null;
+    r.pnlPct = r.pnl != null && Number(r.invested) ? Math.round(r.pnl / Number(r.invested) * 1000) / 10 : null;
+    r.bucket = riaDiagBucket(r);
+    r.tier = riaTierOf(r);
+    mix[r.cls] = (mix[r.cls] || 0) + r.cur;
     let a;
-    if(r.noName) a = riaHoldingAction({name: ''}, {}, r.weightPct, null);
-    else if(!r.isMf){
-      a = r.weightPct > RIA_CONC_LIMIT ? {action: 'Reduce', why: r.weightPct + '% of the portfolio in this one holding, above the ' + RIA_CONC_LIMIT + '% limit — trim toward ' + RIA_CONC_LIMIT + '% and spread the excess.', record: ''}
-        : {action: 'Review', why: (r.cls === 'Unclassified' ? 'Asset class not given and not recognisable from the name' : 'Direct equity / PMS / non-fund holding') + ' — the quartile sheet covers mutual funds only; review against the firm’s view before acting.', record: ''};
-    } else a = riaHoldingAction({name: r.name, current: val(r), isin: r.isin}, {}, r.weightPct);
+    if(r.noName) a = riaHoldingAction({name: ''}, ctx, r.weightPct, null);
+    else if(r.isMf) a = riaHoldingAction({name: r.name, current: r.cur, isin: r.isin}, ctx, r.weightPct);
+    else if(r.weightPct > RIA_CONC_LIMIT) a = {action: 'Reduce', why: r.weightPct + '% of the portfolio in this one holding, above the ' + RIA_CONC_LIMIT + '% limit — severe single-position risk; trim toward ' + RIA_CONC_LIMIT + '%.'};
+    else if(r.pnlPct == null) a = {action: 'Review', why: (r.cls === 'Unclassified' ? 'Asset class not given and not recognisable from the name' : 'Direct equity / non-fund holding with no cost to judge P&L by') + ' — review against the firm’s view before acting.'};
+    else if(r.pnlPct < -20) a = {action: 'Review', why: 'Deep unrealized loss (' + r.pnlPct + '%) — review the thesis; harvest the loss against gains if it no longer fits.'};
+    else a = {action: 'Hold', why: (r.pnlPct >= 0 ? 'In profit (' + r.pnlPct + '%)' : 'Modest loss (' + r.pnlPct + '%)') + ' at ' + r.weightPct + '% weight — within limits; retain and monitor.'};
     r.action = a.action; r.why = a.why; r.target = a.target || ''; r.record = a.record || '';
+    /* the micro-tail: consolidate it, unless it is a bottom-quartile fund (a Switch) or has no name to act on */
+    if(r.tier === 'Micro-tail' && !r.noName && r.action !== 'Switch'){
+      r.action = (r.pnl != null && r.pnl < 0) || r.cls === 'Unclassified' ? 'Reduce' : 'Review';
+      r.why = 'Micro-tail: ' + riaUpMoney(r.cur) + ' (' + r.weightPct + '% of capital' + (r.pnlPct != null ? ', P&L ' + (r.pnlPct > 0 ? '+' : '') + r.pnlPct + '%' : '') + ') — consolidate into core holdings to cut monitoring clutter.';
+    }
   });
-  /* rows the CRM import would call the same investment (same name, folio and ISIN) although their amounts differ */
   const key = r => [riaUpNorm(r.name), riaUpNorm(r.folio), r.isin].join('|');
   const groups = {}; rows.forEach(r=>{ (groups[key(r)] = groups[key(r)] || []).push(r); });
   const alike = Object.values(groups).filter(g=>g.length > 1);
   alike.forEach(g=>g.forEach((r, k)=>{ r.lot = k + 1; r.lots = g.length; }));
   const count = {Hold: 0, Reduce: 0, Switch: 0, Review: 0}; rows.forEach(r=>{ count[r.action]++; });
   const conc = rows.filter(r=>r.weightPct > RIA_CONC_LIMIT).sort((a, b)=>b.weightPct - a.weightPct);
-  return {total, invested, curKnown, gain: curKnown && invested ? curKnown - invested : null, mix, count, conc, alike,
+  return {total, invested, curKnown, gain: curKnown && invested ? curKnown - invested : null, mix, count, conc, alike, diag: riaDiagOf(rows, total, invested, curKnown),
     quality: {noName: rows.filter(r=>r.noName).length, noIsin: rows.filter(r=>!r.isin).length, noFolio: rows.filter(r=>!r.folio).length,
-      unclassified: rows.filter(r=>r.cls === 'Unclassified').length, givenUnclassified: rows.filter(r=>/unclassified/i.test(r.assetClass)).length,
+      unclassified: rows.filter(r=>r.cls === 'Unclassified').length, givenUnclassified: rows.filter(r=>/unclassified/i.test(r.assetClass || '')).length,
       noValue: rows.filter(r=>r.current == null).length, alikeRows: alike.reduce((n, g)=>n + g.length, 0), wouldReject: alike.reduce((n, g)=>n + g.length - 1, 0)}};
 }
-/* The two files: the research report, and a sheet the CRM's client-wise import takes without a "Twice in file". */
+/* The book-level diagnostics. */
+function riaDiagOf(rows, total, invested, curKnown){
+  const byW = rows.slice().sort((a, b)=>b.weightPct - a.weightPct);
+  const tail = rows.filter(r=>r.tier === 'Micro-tail'), tailVal = tail.reduce((n, r)=>n + r.cur, 0);
+  const tiers = ['Anchor', 'Core', 'Mid', 'Micro-tail'].map(t=>{ const g = rows.filter(r=>r.tier === t), v = g.reduce((n, r)=>n + r.cur, 0); return {tier: t, n: g.length, value: v, pct: riaPct(v, total)}; });
+  const buckets = RIA_BUCKETS.map(b=>{ const g = rows.filter(r=>r.bucket === b), v = g.reduce((n, r)=>n + r.cur, 0), pct = riaPct(v, total), tgt = RIA_BUCKET_TARGET[b];
+    const drift = Math.round((pct - tgt) * 10) / 10; return {bucket: b, n: g.length, value: v, pct, target: tgt, band: Math.max(0, tgt - 5) + '–' + (tgt + 5) + '%', drift, flag: Math.abs(drift) > 5}; })
+    .filter(b=>b.n || b.target);
+  const gains = rows.reduce((n, r)=>n + (r.pnl > 0 ? r.pnl : 0), 0), losses = rows.reduce((n, r)=>n + (r.pnl < 0 ? -r.pnl : 0), 0);
+  /* the same fund category held more than once, and the same scheme in more than one folio */
+  const byCat = {};
+  rows.filter(r=>r.isMf && r.cat && r.cat.id && !r.noName).forEach(r=>{ (byCat[r.cat.id] = byCat[r.cat.id] || []).push(r); });
+  const dupCats = Object.keys(byCat).map(id=>{ const g = byCat[id], names = [...new Set(g.map(r=>riaUpNorm(r.name)))]; if(names.length < 2) return null;
+      const keep = g.find(r=>r.action === 'Hold') || g.slice().sort((a, b)=>b.cur - a.cur)[0];
+      const peer = typeof riaQBestOfCat === 'function' ? riaQBestOfCat(id) : null;
+      return {category: g[0].cat.label || id, schemes: g.map(r=>r.name), value: g.reduce((n, r)=>n + r.cur, 0), keep: peer ? riaShortFund(peer.r.name) : keep.name}; }).filter(Boolean);
+  const byName = {};
+  rows.filter(r=>r.isMf && !r.noName).forEach(r=>{ (byName[riaUpNorm(r.name)] = byName[riaUpNorm(r.name)] || []).push(r); });
+  const dupFolios = Object.values(byName).filter(g=>new Set(g.map(r=>riaUpNorm(r.folio))).size > 1).map(g=>({scheme: g[0].name, folios: g.map(r=>r.folio || '—'), value: g.reduce((n, r)=>n + r.cur, 0)}));
+  return {top1: byW[0] ? {name: byW[0].noName ? 'Unidentified holding ' + String(byW[0].n).padStart(2, '0') : byW[0].name, pct: byW[0].weightPct} : null,
+    top5: Math.round(byW.slice(0, 5).reduce((n, r)=>n + r.weightPct, 0) * 10) / 10,
+    tail: {n: tail.length, value: tailVal, pct: riaPct(tailVal, total)}, tiers, buckets, rebalance: buckets.some(b=>b.flag),
+    noDebt: !buckets.some(b=>b.bucket === 'Debt / Liquid / Arbitrage' && b.value > 0),
+    tax: {gains, losses, net: gains - losses, harvest: Math.min(gains, 125000), known: rows.some(r=>r.pnl != null)},
+    dupCats, dupFolios, invested, current: curKnown, gainPct: invested && curKnown ? Math.round((curKnown - invested) / invested * 1000) / 10 : null};
+}
+/* A CRM client's positions as rows for the same research. */
+function riaDiagRowsOfClient(c){
+  return riaPositions(c).filter(p=>p.current > 0 || p.invested > 0).map((p, i)=>({n: i + 1, src: 'Position ' + (i + 1), name: p.scheme || '', noName: riaNoName(p.scheme) || /platform sleeve|unclassified holdings/i.test(p.scheme || ''),
+    assetClass: p.cls || '', category: p.cat ? p.cat.label || '' : '', cat: p.cat || null, sector: '', folio: p.folio || '', isin: p.isin || '', symbol: '',
+    units: p.units != null ? p.units : null, avg: null, price: null, invested: p.invested || null, current: p.current || null, date: p.start || '', note: ''}));
+}
+const riaFv = (pv, r, y) => Math.round(pv * Math.pow(1 + r, y));
+/* The 3-tab research workbook, its CSV (the holdings tab) and the Executive PDF. */
 function riaUpFiles(up, x){
   const day = new Date().toISOString().slice(0, 10), stem = up.name.replace(RIA_UP_EXT, '').replace(/[^\w\d \-]+/g, ' ').trim().replace(/\s+/g, '_').slice(0, 50) || 'statement';
-  /* an unnamed row is credited to the statement its name column points at ("Statement - … .pdf"), else to the file uploaded */
   const label = r => r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') + ' (from ' + (/\.(pdf|xlsx?|csv)$/i.test(r.name || '') ? r.name : up.name) + ')' : r.name;
   const r2 = n => n == null || n === '' ? '' : Math.round(Number(n) * 100) / 100;
-  const research = {title: 'RIA AI research — ' + up.name, file: 'RIA_Research_' + stem + '_' + day,
-    cols: ['#', 'Holding', 'Asset class', 'Folio / account', 'ISIN', 'Units', 'NAV / price', 'Invested', 'Current value', 'Weight %', 'Quartile / risk note', 'Recommendation', 'Switch to', 'Data note'],
-    rows: up.rows.map(r=>[r.n, label(r), r.cls, r.folio, r.isin, r2(r.units), r2(r.price), r2(r.invested), r2(r.current), r.weightPct, r.record ? 'Quartile: ' + r.record : r.why,
-      r.action, r.target || '', [r.noName ? 'No scheme / scrip name in the source' : '', !r.isin ? 'No ISIN' : '', /unclassified/i.test(r.assetClass) ? 'Asset class given as Unclassified' : '',
-        r.lots ? 'Looks like ' + (r.lots - 1) + ' other row(s) but differs in units / value — kept separately' : ''].filter(Boolean).join('; ')])};
-  const imp = {title: 'Clean import — ' + up.name, file: 'CRM_Import_' + stem + '_' + day, cols: RIA_UP_IMPORT_COLS.slice(),
+  const d = x.diag, n = up.rows.length;
+  const holdCols = ['S.No', 'Scheme / Stock Name', 'Asset Class / Sector', 'Pillar Tier', 'Qty / Units', 'Invested (₹)', 'Current Value (₹)', 'Unrealized P&L (%)', 'Weight (%)', 'Quartile / Quality Note', 'Action', 'Switch Target / Rationale'];
+  const holdRows = up.rows.map(r=>[r.n, label(r), [r.bucket, r.sector].filter(Boolean).join(' · '), r.tier, r2(r.units), r2(r.invested), r2(r.current), r.pnlPct == null ? '' : r.pnlPct, r.weightPct,
+    r.record ? 'Quartile: ' + r.record : [r.noName ? 'No scheme / scrip name in the source' : '', !r.isin ? 'No ISIN' : '', r.lots ? 'Looks like ' + (r.lots - 1) + ' other row(s), kept separately' : ''].filter(Boolean).join('; ') || '—',
+    r.action, r.action === 'Switch' && r.target ? 'Switch to ' + r.target + ' — ' + r.why : r.why]);
+  const acts = RIA_ACTIONS.map(a=>{ const g = up.rows.filter(r=>r.action === a), v = g.reduce((s, r)=>s + r.cur, 0); return [a, g.length, Math.round(v), riaPct(v, x.total), RIA_MANDATE[a]]; });
+  const sum = [['RIA AI — Executive Summary', up.name], ['Prepared', day + (up.client ? ' · CRM client' : ' · read in the browser, not stored')], [],
+    ['Key figures', ''], ['Total invested (₹)', Math.round(d.invested || 0)], ['Total current value (₹)', Math.round(d.current || 0)],
+    ['Unrealized gain (₹)', x.gain == null ? '' : Math.round(x.gain)], ['Unrealized gain (%)', d.gainPct == null ? '' : d.gainPct], ['Total holdings', n],
+    ['Top-1 single position risk (%)', d.top1 ? d.top1.pct + ' — ' + d.top1.name : ''], ['Top-5 weight (%)', d.top5],
+    ['Micro-tail clutter (<₹50k / <1%)', d.tail.n + ' holdings · ' + d.tail.pct + '% of capital (' + Math.round(d.tail.value) + ')'], [],
+    ['Action summary'], ['Action', 'Holdings', 'Value (₹)', 'Weight (%)', 'Strategic mandate'], ...acts, [],
+    ['Asset class exposure & drift'], ['Bucket', 'Current value (₹)', 'Current weight (%)', 'Target band (%)', 'Drift (%)', 'Rebalancing'],
+    ...d.buckets.map(b=>[b.bucket, Math.round(b.value), b.pct, b.band, (b.drift > 0 ? '+' : '') + b.drift, b.flag ? 'Rebalancing required' : 'Within ±5%'])];
+  const sectors = {}; up.rows.filter(r=>r.sector).forEach(r=>{ sectors[r.sector] = (sectors[r.sector] || 0) + r.cur; });
+  const secRows = Object.keys(sectors).sort((a, b)=>sectors[b] - sectors[a]).map(k=>[k, Math.round(sectors[k]), riaPct(sectors[k], x.total)]);
+  const bold = [0, 3, 13, 14, 20, 21];
+  if(secRows.length){ bold.push(sum.length + 1, sum.length + 2); sum.push([], ['Sector exposure'], ['Sector', 'Value (₹)', 'Weight (%)'], ...secRows); }
+  if(d.noDebt) sum.push([], ['Note', 'No debt / liquid / arbitrage holding: no emergency buffer in this portfolio.']);
+  sum.push([], ['Indicative balanced target; recommendations are for the advisor to review — human advisor & client approval is mandatory before any transaction.']);
+  const plan = riaDiagPlan(up, x);
+  const research = {file: 'RIA_Research_' + stem + '_' + day,
+    sheets: [{name: 'Executive Summary', rows: sum, boldRows: bold, autoWidth: true}, {name: 'Holdings & Signals', rows: [holdCols].concat(holdRows), autoWidth: true},
+      {name: 'Action & Cleanup Plan', rows: [['Priority', 'Action', 'Holding / Item', 'Value (₹)', 'Weight (%)', 'Rationale']].concat(plan.map(p=>[p.priority, p.action, p.item, p.value == null ? '' : Math.round(p.value), p.pct == null ? '' : p.pct, p.why])), autoWidth: true}],
+    cols: holdCols, rows: holdRows};
+  const files = {research, pdf: {file: 'RIA_Executive_Diagnostic_' + stem + '_' + day + '.pdf', blocks: riaDiagPdfBlocks(up, x, plan)}};
+  if(!up.client) files.import = {title: 'Clean import — ' + up.name, file: 'CRM_Import_' + stem + '_' + day, cols: RIA_UP_IMPORT_COLS.slice(),
     rows: up.rows.map(r=>{
-      /* a named holding that repeats with no folio or ISIN to tell it apart gets "(lot k of n)": still one name, now distinct rows */
       const nm = r.noName ? label(r) : (r.lots && !r.folio && !r.isin ? r.name + ' (lot ' + r.lot + ' of ' + r.lots + ')' : r.name);
       const note = [r.note, r.noName ? 'Scrip / scheme name missing in the source (' + r.src.toLowerCase() + ' of ' + up.name + (r.units != null ? ', units ' + r2(r.units) : '') + (r.price != null ? ', price ' + r2(r.price) : '') + ') — rename it from the statement' : '',
         r.lots && (r.folio || r.isin) ? 'Same folio / ISIN as ' + (r.lots - 1) + ' other row(s) with different amounts: tick "Import duplicate rows too" when importing' : '',
         r.cls === 'Unclassified' ? 'Asset class not known' : ''].filter(Boolean).join('; ');
       return [nm, r.cls === 'Unclassified' ? 'Unclassified' : r.cls.replace('/Commodities', '').replace('/Cash', ''), r.folio, r.isin, r2(r.units), r2(r.price), r2(r.invested), r2(r.current), r.date || '', note];
     })};
-  return {research, import: imp};
+  return files;
+}
+/* The phased roadmap, in the four words only. */
+function riaDiagPlan(up, x){
+  const d = x.diag, out = [], nm = r => r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name;
+  up.rows.filter(r=>r.action === 'Reduce' && r.tier !== 'Micro-tail').sort((a, b)=>b.weightPct - a.weightPct)
+    .forEach(r=>out.push({priority: 'Priority 1 — concentration & de-risk', action: 'Reduce', item: nm(r), value: r.cur, pct: r.weightPct, why: r.why}));
+  up.rows.filter(r=>r.tier === 'Micro-tail' && (r.action === 'Reduce' || r.action === 'Review')).sort((a, b)=>a.cur - b.cur)
+    .forEach(r=>out.push({priority: 'Priority 2 — micro-tail & tail cleanup', action: r.action, item: nm(r), value: r.cur, pct: r.weightPct, why: r.why}));
+  up.rows.filter(r=>r.action === 'Switch').sort((a, b)=>b.cur - a.cur)
+    .forEach(r=>out.push({priority: 'Priority 3 — quartile switches & consolidation', action: 'Switch', item: nm(r) + (r.target ? ' → ' + r.target : ''), value: r.cur, pct: r.weightPct, why: r.why}));
+  d.dupCats.forEach(g=>out.push({priority: 'Priority 3 — quartile switches & consolidation', action: 'Switch', item: g.category + ': ' + g.schemes.join(' + ') + ' → ' + g.keep, value: g.value, pct: riaPct(g.value, x.total),
+    why: 'The same category held ' + g.schemes.length + ' ways — consolidate into the top-ranked peer to cut overlap.'}));
+  d.dupFolios.forEach(g=>out.push({priority: 'Priority 3 — quartile switches & consolidation', action: 'Review', item: g.scheme + ' (folios ' + g.folios.join(', ') + ')', value: g.value, pct: riaPct(g.value, x.total),
+    why: 'One scheme across several folios — consolidate the folios.'}));
+  up.rows.filter(r=>r.action === 'Review' && r.tier !== 'Micro-tail').forEach(r=>out.push({priority: 'Priority 3 — quartile switches & consolidation', action: 'Review', item: nm(r), value: r.cur, pct: r.weightPct, why: r.why}));
+  const t = d.tax;
+  [['Tax: LTCG ₹1.25 L harvest check', t.known ? 'Unrealized gains ' + riaUpMoney(t.gains) + ', losses ' + riaUpMoney(t.losses) + '. Book up to ' + riaUpMoney(t.harvest) + ' of long-term equity gains tax-free this year (₹1,25,000 per PAN, ₹2.5 L across two family PANs); use losses to offset gains. Check holding periods (over 12 months) first.' : 'Cost not in the file — confirm gains before harvesting.'],
+   ['Emergency fund (6 months of expenses)', d.noDebt ? 'No debt / liquid / arbitrage holding — build a 6-month buffer in liquid / arbitrage first.' : 'Confirm 6 months of expenses sit in liquid / arbitrage.'],
+   ['Term insurance', 'Confirm cover of 10–15× annual income.'], ['Health insurance', 'Confirm family floater + top-up.'], ['KYC & nominee status', 'Confirm KYC is validated and a nominee is on every folio / demat.']]
+    .forEach(([item, why])=>out.push({priority: 'Priority 4 — tax & protection checklist', action: 'Review', item, value: null, pct: null, why}));
+  return out;
+}
+/* The Executive Diagnostic PDF. */
+function riaDiagPdfBlocks(up, x, plan){
+  const d = x.diag, C = typeof PDF_DECK !== 'undefined' ? PDF_DECK : {}, n = up.rows.length, M = v => riaUpMoney(v);
+  const nm = r => r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name;
+  const b = [{t: 'banner', kicker: 'RIA AI · EXECUTIVE PORTFOLIO DIAGNOSTIC', title: (up.client ? '' : 'Statement: ') + up.name,
+    subtitle: 'Prepared ' + new Date().toLocaleDateString('en-IN') + ' · ' + n + ' holdings · Hold / Reduce / Switch / Review', chips: RIA_ACTIONS.map(a=>a + ' ' + x.count[a])}];
+  b.push({t: 'cards', items: [{label: 'Current value', value: riaCompact2(d.current || x.total), note: 'invested ' + riaCompact2(d.invested || 0), accent: C.teal},
+    {label: 'Unrealized gain', value: d.gainPct == null ? '—' : (d.gainPct >= 0 ? '+' : '') + d.gainPct + '%', note: x.gain == null ? 'cost not given' : M(x.gain), accent: C.emerald},
+    {label: 'Max single position', value: d.top1 ? d.top1.pct + '%' : '—', note: d.top1 ? d.top1.name : '', accent: d.top1 && d.top1.pct > 25 ? C.amber : C.blue},
+    {label: 'Active holdings', value: String(n), note: d.tail.n + ' micro-tail (' + d.tail.pct + '% of capital)', accent: d.tail.n ? C.amber : C.teal}]});
+  const finding = [];
+  if(x.conc.length) finding.push('Concentration: ' + x.conc.map(r=>nm(r) + ' ' + r.weightPct + '%').join(', ') + ' — above the 25% single-position limit.');
+  if(d.tail.n) finding.push('Micro-tail clutter: ' + d.tail.n + ' holdings under ₹50,000 or 1% make up only ' + d.tail.pct + '% of capital — monitoring clutter to consolidate.');
+  const gaps = [x.quality.noName ? x.quality.noName + ' without a scheme / scrip name' : '', x.quality.noIsin && !up.client ? x.quality.noIsin + ' without an ISIN' : ''].filter(Boolean);
+  if(gaps.length) finding.push('Data gaps: ' + gaps.join(', ') + '.');
+  if(d.rebalance) finding.push('Allocation drift beyond ±5% in ' + d.buckets.filter(k=>k.flag).map(k=>k.bucket).join(', ') + ' — rebalancing required.');
+  if(d.noDebt) finding.push('No debt / liquid / arbitrage holding — no emergency buffer.');
+  b.push({t: 'panel', title: 'Critical audit findings', tone: C.amber || C.gold, badge: finding.length ? finding.length + ' to act on' : 'none', lines: finding.length ? finding : ['No concentration, clutter, data or drift issue found.']});
+  b.push({t: 'band', text: 'Pillar allocation vs clutter', sub: 'Anchor over 25% · Core 5–25% · Mid 1–5% · Micro-tail under 1% or ₹50,000.'});
+  b.push({t: 'table', cols: [{label: 'Pillar tier', w: 2, bold: true}, {label: 'Holdings'}, {label: 'Value'}, {label: 'Weight'}],
+    rows: d.tiers.map(t=>[t.tier, String(t.n), M(t.value), t.pct + '%'])});
+  b.push({t: 'band', text: 'Current vs target allocation', sub: 'Indicative balanced target, each with a ±5% band.' + (d.rebalance ? ' Rebalancing required.' : ' Within bands.')});
+  b.push({t: 'table', cols: [{label: 'Bucket', w: 2.2, bold: true}, {label: 'Current'}, {label: 'Weight'}, {label: 'Target band'}, {label: 'Drift'}, {label: 'Status', w: 1.6}],
+    rows: d.buckets.map(k=>[k.bucket, M(k.value), k.pct + '%', k.band, (k.drift > 0 ? '+' : '') + k.drift + '%', k.flag ? 'Rebalancing required' : 'Within ±5%'])});
+  b.push({t: 'band', text: 'Execution playbook — Hold / Reduce / Switch / Review'});
+  const ord = {Switch: 0, Reduce: 1, Review: 2, Hold: 3};
+  b.push({t: 'table', size: 8, cols: [{label: 'Action', w: 0.9, bold: true}, {label: 'Holding', w: 2.4}, {label: 'Value'}, {label: 'Weight', w: 0.8}, {label: 'Rationale / switch target', w: 3.4}],
+    rows: up.rows.slice().sort((a, c)=>(ord[a.action] - ord[c.action]) || (c.weightPct - a.weightPct)).slice(0, 45)
+      .map(r=>[r.action, nm(r), M(r.cur), r.weightPct + '%', (r.action === 'Switch' && r.target ? 'Switch to ' + riaShortFund(r.target) + '. ' : '') + String(r.why || '').slice(0, 220)])});
+  b.push({t: 'band', text: 'Phased implementation plan'});
+  ['Priority 1 — concentration & de-risk', 'Priority 2 — micro-tail & tail cleanup', 'Priority 3 — quartile switches & consolidation', 'Priority 4 — tax & protection checklist'].forEach(ph=>{
+    const items = plan.filter(p=>p.priority === ph);
+    if(items.length) b.push({t: 'panel', title: ph, tone: /1/.test(ph) ? C.amber : /2/.test(ph) ? C.blue : /3/.test(ph) ? C.teal : C.emerald, badge: items.length + ' item' + (items.length === 1 ? '' : 's'),
+      lines: items.slice(0, 14).map(p=>p.action + ' — ' + p.item + (p.value != null ? ' (' + M(p.value) + (p.pct != null ? ', ' + p.pct + '%' : '') + ')' : '') + ': ' + String(p.why || '').slice(0, 180))});
+  });
+  const t = d.tax;
+  b.push({t: 'panel', title: 'Tax harvesting', tone: C.emerald, rows: [['Unrealized gains', M(t.gains)], ['Unrealized losses', M(t.losses)], ['Net', M(t.net)],
+    ['Tax-free LTCG this year', 'up to ' + M(t.harvest) + ' (₹1,25,000 per PAN; ₹2.5 L across two family PANs)']], lines: ['Long-term only (equity held over 12 months); losses offset gains. Confirm holding periods before acting.']});
+  const pv = d.current || x.total;
+  b.push({t: 'band', text: '10-year indicative growth projection', sub: 'Today’s value grown at 8% / 10% / 12% a year, no fresh money. Illustrative, not a promise of returns.'});
+  b.push({t: 'table', cols: [{label: 'Years', bold: true}, {label: 'At 8%'}, {label: 'At 10%'}, {label: 'At 12%'}],
+    rows: [1, 3, 5, 7, 10].map(y=>[String(y), M(riaFv(pv, 0.08, y)), M(riaFv(pv, 0.10, y)), M(riaFv(pv, 0.12, y))])});
+  b.push({t: 'band', text: 'Note', sub: 'RIA AI provides analytical suggestions for the advisor to review; human advisor & client approval is mandatory before executing any transaction. ' + (up.client ? '' : 'The statement was read in the browser and not stored.')});
+  return b;
 }
 function riaUpMoney(n){ return n == null ? '—' : money(Math.round(n)); }
-/* The answer under the file. */
+/* The answer under the file (or the client): what was asked, with the research view and the downloads. */
 function riaUpTurn(up, x, focus){
-  const q = x.quality, n = up.rows.length;
-  const mix = Object.keys(x.mix).sort((a, b)=>x.mix[b] - x.mix[a]).map(k=>k + ' ' + riaPct(x.mix[k], x.total) + '% (' + riaUpMoney(x.mix[k]) + ')').join(', ');
-  const L = ['**📎 Research: ' + up.name + '**',
-    'Read **' + riaN(n) + ' row' + (n === 1 ? '' : 's') + '**, kept **' + riaN(n) + '** — none merged' + (q.alikeRows ? ': ' + riaN(q.alikeRows) + ' rows look alike (same name, folio and ISIN) but differ in units / price / value, so each stays a holding of its own.' : '.'),
-    '', '**Asset mix:** ' + (mix || '—'),
-    '**Concentration (over ' + RIA_CONC_LIMIT + '% in one holding):** ' + (x.conc.length ? x.conc.slice(0, 5).map(r=>(r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name) + ' ' + r.weightPct + '% → ' + r.action + (r.noName ? ' (identify it first)' : '')).join(', ') : 'none'),
-    '**Hold / Reduce / Switch:** ' + RIA_ACTIONS.map(k=>k + ' ' + x.count[k]).join(' · ')];
-  const dq = [];
-  if(q.noName) dq.push(riaN(q.noName) + ' row' + (q.noName === 1 ? ' has' : 's have') + ' no scheme / scrip name' + (up.rows.some(r=>r.noName && r.name) ? ' (the name column holds "' + up.rows.find(r=>r.noName && r.name).name + '")' : '') + ' — identify them from the statement before importing');
-  if(q.noIsin) dq.push(riaN(q.noIsin) + ' without an ISIN, ' + riaN(q.noFolio) + ' without a folio / account');
-  if(q.givenUnclassified || q.unclassified) dq.push(riaN(q.unclassified) + ' row' + (q.unclassified === 1 ? '' : 's') + ' with no known asset class' + (q.givenUnclassified ? ' (' + riaN(q.givenUnclassified) + ' given as "Unclassified")' : ''));
-  if(q.wouldReject) dq.push('The CRM import would keep 1 of each look-alike group and reject **' + riaN(q.wouldReject) + '** as "Twice in file" — the clean import file below labels each row so all ' + riaN(n) + ' go in');
-  if(q.noValue) dq.push(riaN(q.noValue) + ' row' + (q.noValue === 1 ? '' : 's') + ' with no current value (invested used for weights)');
-  (up.notes || []).forEach(t=>dq.push(t));
-  if(dq.length) L.push('', '**Data quality:**', ...dq.map(t=>'- ' + t));
-  const acts = up.rows.filter(r=>r.action !== 'Hold').sort((a, b)=>({Switch: 0, Reduce: 1, Review: 2}[a.action] - {Switch: 0, Reduce: 1, Review: 2}[b.action]) || (b.weightPct - a.weightPct));
-  L.push('', 'The table shows each holding with its action; downloads below it: the **research report** (every holding with its weight, note and recommendation) and a **clean CRM import file** (' + RIA_UP_IMPORT_COLS.join(', ') + ').',
-    'Read in your browser: the file was not uploaded or stored, and Clear forgets it. Recommendations are for the advisor to review — human advisor & client approval is mandatory before any transaction.');
+  const q = x.quality, n = up.rows.length, d = x.diag, M = riaUpMoney;
+  const mix = Object.keys(x.mix).sort((a, b)=>x.mix[b] - x.mix[a]).map(k=>k + ' ' + riaPct(x.mix[k], x.total) + '% (' + M(x.mix[k]) + ')').join(', ');
+  const nm = r => r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name;
+  const head = up.client ? '**📊 Diagnostics: ' + up.name + '**' : '**📎 Research: ' + up.name + '**';
+  let L;
+  if(focus === 'clutter'){
+    const tail = up.rows.filter(r=>r.tier === 'Micro-tail').sort((a, b)=>a.cur - b.cur);
+    L = ['**🧹 Micro-tail clutter — ' + up.name + '**',
+      tail.length ? '**' + riaN(tail.length) + ' holding' + (tail.length === 1 ? '' : 's') + ' under ₹50,000 or 1%** make up only **' + d.tail.pct + '% of capital** (' + M(d.tail.value) + ') — monitoring clutter.' : 'No holding under ₹50,000 or 1% of capital — no micro-tail clutter.',
+      tail.length ? 'Consolidate them into core holdings: **Reduce** ' + tail.filter(r=>r.action === 'Reduce').length + ' (losing or unclassified), **Review** ' + tail.filter(r=>r.action === 'Review').length + ', **Switch** ' + tail.filter(r=>r.action === 'Switch').length + ' (bottom-quartile funds).' : ''];
+  } else if(focus === 'tax'){
+    const t = d.tax;
+    L = ['**🧾 Tax harvesting & LTCG — ' + up.name + '**', '', '| Item | Amount |', '|---|---|', '| Unrealized gains | ' + M(t.gains) + ' |', '| Unrealized losses | ' + M(t.losses) + ' |', '| Net | ' + M(t.net) + ' |',
+      '| Tax-free LTCG this year | up to ' + M(t.harvest) + ' |', '',
+      t.known ? 'Book up to **' + M(t.harvest) + '** of long-term equity gains tax-free this financial year — **₹1,25,000 per PAN**, ₹2.5 L across two family PANs (e.g. a couple). Long-term means equity held over 12 months; check holding periods first. Losses of ' + M(t.losses) + ' can offset gains.' : 'The cost of these holdings is not given, so gains cannot be worked out — add invested amounts to plan the harvest.'];
+    if(d.dupCats.length || d.dupFolios.length) L.push('', '**Consolidation:**', ...d.dupCats.map(g=>'- **Switch** — ' + g.category + ' held ' + g.schemes.length + ' ways (' + g.schemes.join(', ') + ') → consolidate into ' + g.keep),
+      ...d.dupFolios.map(g=>'- **Review** — ' + g.scheme + ' across folios ' + g.folios.join(', ') + ' → consolidate the folios'));
+  } else if(focus === 'drift'){
+    L = ['**⚖️ Current vs target allocation — ' + up.name + '**', '', '| Bucket | Current | Weight | Target band | Drift | Status |', '|---|---|---|---|---|---|',
+      ...d.buckets.map(k=>'| ' + k.bucket + ' | ' + M(k.value) + ' | ' + k.pct + '% | ' + k.band + ' | ' + (k.drift > 0 ? '+' : '') + k.drift + '% | ' + (k.flag ? '⚠ Rebalancing required' : 'Within ±5%') + ' |'), '',
+      d.rebalance ? '**Rebalancing required** — ' + d.buckets.filter(k=>k.flag).map(k=>k.bucket + ' ' + (k.drift > 0 ? '+' : '') + k.drift + '%').join(', ') + ' outside the ±5% band.' : 'Every bucket is within ±5% of the indicative balanced target.',
+      d.noDebt ? '⚠ **No debt / liquid / arbitrage** — there is no emergency buffer in this portfolio.' : '', 'Indicative balanced target; set the client’s own target from their risk profile.'];
+  } else if(focus === 'projection'){
+    const pv = d.current || x.total;
+    L = ['**📈 10-year projection & protection checklist — ' + up.name + '**', '', '| Years | At 8% | At 10% | At 12% |', '|---|---|---|---|',
+      ...[1, 3, 5, 7, 10].map(y=>'| ' + y + ' | ' + M(riaFv(pv, 0.08, y)) + ' | ' + M(riaFv(pv, 0.10, y)) + ' | ' + M(riaFv(pv, 0.12, y)) + ' |'), '',
+      'Today’s ' + M(pv) + ' grown with no fresh money — illustrative, not a promise of returns.', '', '**Protection checklist:**',
+      '- **Emergency fund** — 6 months of expenses in liquid / arbitrage' + (d.noDebt ? ' (none in this portfolio yet)' : ''), '- **Term insurance** — cover of 10–15× annual income',
+      '- **Health insurance** — family floater plus a top-up', '- **KYC & nominees** — KYC validated, a nominee on every folio / demat'];
+  } else {
+    L = [head, up.client ? 'Read **' + riaN(n) + ' holding' + (n === 1 ? '' : 's') + '** from the client’s records.' : 'Read **' + riaN(n) + ' row' + (n === 1 ? '' : 's') + '**, kept **' + riaN(n) + '** — none merged' + (q.alikeRows ? ': ' + riaN(q.alikeRows) + ' rows look alike (same name, folio and ISIN) but differ in units / price / value, so each stays a holding of its own.' : '.'),
+      '', '**Asset mix:** ' + (mix || '—'),
+      '**Concentration (over 25% in one holding):** ' + (x.conc.length ? x.conc.slice(0, 5).map(r=>nm(r) + ' ' + r.weightPct + '% → ' + r.action + (r.noName ? ' (identify it first)' : '')).join(', ') : 'none'),
+      '**Top-5 weight:** ' + d.top5 + '% · **Micro-tail:** ' + d.tail.n + ' holdings, ' + d.tail.pct + '% of capital' + (d.rebalance ? ' · **Rebalancing required** (drift over ±5%)' : ''),
+      '**Hold / Reduce / Switch:** ' + RIA_ACTIONS.map(k=>k + ' ' + x.count[k]).join(' · ')];
+    const dq = [];
+    if(q.noName) dq.push(riaN(q.noName) + ' row' + (q.noName === 1 ? ' has' : 's have') + ' no scheme / scrip name' + (up.rows.some(r=>r.noName && r.name) ? ' (the name column holds "' + up.rows.find(r=>r.noName && r.name).name + '")' : '') + ' — identify them from the statement before importing');
+    if(q.noIsin && !up.client) dq.push(riaN(q.noIsin) + ' without an ISIN, ' + riaN(q.noFolio) + ' without a folio / account');
+    if(q.givenUnclassified || q.unclassified) dq.push(riaN(q.unclassified) + ' row' + (q.unclassified === 1 ? '' : 's') + ' with no known asset class' + (q.givenUnclassified ? ' (' + riaN(q.givenUnclassified) + ' given as "Unclassified")' : ''));
+    if(q.wouldReject && !up.client) dq.push('The CRM import would keep 1 of each look-alike group and reject **' + riaN(q.wouldReject) + '** as "Twice in file" — the clean import file below labels each row so all ' + riaN(n) + ' go in');
+    if(q.noValue) dq.push(riaN(q.noValue) + ' row' + (q.noValue === 1 ? '' : 's') + ' with no current value (invested used for weights)');
+    (up.notes || []).forEach(t=>dq.push(t));
+    if(dq.length) L.push('', '**Data quality:**', ...dq.map(t=>'- ' + t));
+  }
+  L.push('', 'The table shows each holding with its tier and action; downloads below it: the **research workbook** (Executive Summary, Holdings & Signals, Action & Cleanup Plan), the **Executive PDF**' + (up.client ? '' : ' and a **clean CRM import file** (' + RIA_UP_IMPORT_COLS.join(', ') + ')') + '.',
+    (up.client ? 'Read from the client’s records. ' : 'Read in your browser: the file was not uploaded or stored, and Clear forgets it. ') + 'Recommendations are for the advisor to review — human advisor & client approval is mandatory before any transaction.');
   const ord = {Switch: 0, Reduce: 1, Review: 2, Hold: 3};
   const pickRows = focus === 'concentration' ? up.rows.slice().sort((a, b)=>b.weightPct - a.weightPct)
+    : focus === 'clutter' ? up.rows.filter(r=>r.tier === 'Micro-tail').sort((a, b)=>a.cur - b.cur)
     : focus === 'quality' ? up.rows.filter(r=>r.noName || !r.isin || r.cls === 'Unclassified')
+    : focus === 'tax' ? up.rows.filter(r=>r.pnl != null).sort((a, b)=>b.pnl - a.pnl)
+    : focus === 'drift' ? up.rows.slice().sort((a, b)=>RIA_BUCKETS.indexOf(a.bucket) - RIA_BUCKETS.indexOf(b.bucket) || b.cur - a.cur)
     : focus === 'actions' ? up.rows.slice().sort((a, b)=>(ord[a.action] - ord[b.action]) || (b.weightPct - a.weightPct)) : up.rows;
   const show = pickRows.slice(0, 40);
   const files = riaUpFiles(up, x);
-  const issues = up.rows.filter(r=>r.noName || !r.isin || r.cls === 'Unclassified').length;
-  return {content: L.join('\n'), upFiles: files,
-    upView: {file: up.name, title: (focus === 'concentration' ? 'Largest holdings' : focus === 'quality' ? 'Rows that need enrichment' : focus === 'actions' ? 'Hold / Reduce / Switch — by action' : 'Holdings') + ' — ' + up.name,
-      total: pickRows.length, all: n,
+  const issues = up.rows.filter(r=>r.noName || (!up.client && !r.isin) || r.cls === 'Unclassified').length;
+  const titles = {concentration: 'Largest holdings', clutter: 'Micro-tail holdings (under ₹50,000 or 1%)', quality: 'Rows that need enrichment', tax: 'Holdings by unrealized P&L', drift: 'Holdings by allocation bucket',
+    actions: 'Hold / Reduce / Switch — by action', projection: 'Holdings', import: 'Holdings', summary: 'Holdings'};
+  const actions = [{label: '📊 Research workbook (.xlsx)', act: {t: 'updl', file: 'research', fmt: 'xlsx'}}, {label: '📑 Research report (.csv)', act: {t: 'updl', file: 'research', fmt: 'csv'}}];
+  if(files.import) actions.push({label: '📥 Clean import file (.xlsx)', act: {t: 'updl', file: 'import', fmt: 'xlsx'}}, {label: '📥 Clean import file (.csv)', act: {t: 'updl', file: 'import', fmt: 'csv'}});
+  actions.push({label: '📄 Download Executive PDF', act: {t: 'updl', file: 'pdf', fmt: 'pdf'}}, {label: '☰ Main Menu', act: {t: 'menu'}});
+  return {content: L.filter(l=>l !== null && l !== undefined).join('\n'), upFiles: files,
+    upView: {file: up.name, client: !!up.client, title: (titles[focus] || 'Holdings') + ' — ' + up.name, total: pickRows.length, all: n,
       strip: {holdings: n, invested: x.invested || null, current: x.curKnown || null, gainPct: x.gain != null && x.invested ? Math.round(x.gain / x.invested * 1000) / 10 : null, conc: x.conc.length, issues},
-      rows: show.map(r=>({n: r.n, name: r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name, noName: r.noName, cls: r.cls, isin: r.isin, current: r.current, weight: r.weightPct,
+      rows: show.map(r=>({n: r.n, name: nm(r), noName: r.noName, cls: r.bucket || r.cls, tier: r.tier, isin: r.isin, current: r.current != null ? r.current : r.cur, weight: r.weightPct,
         action: r.action, why: r.why, target: r.target, record: r.record}))},
-    actions: [{label: '📊 Research report (.xlsx)', act: {t: 'updl', file: 'research', fmt: 'xlsx'}}, {label: '📑 Research report (.csv)', act: {t: 'updl', file: 'research', fmt: 'csv'}},
-      {label: '📥 Clean import file (.xlsx)', act: {t: 'updl', file: 'import', fmt: 'xlsx'}}, {label: '📥 Clean import file (.csv)', act: {t: 'updl', file: 'import', fmt: 'csv'}},
-      {label: '☰ Main Menu', act: {t: 'menu'}}]};
+    actions};
 }
 function riaUpDownload(ti, which, fmt){
   const t = ai.turns[ti], f = t && t.upFiles && t.upFiles[which]; if(!f) return null;
+  if(which === 'pdf'){ downloadPdf(f.blocks, f.file, {title: 'Finowise · Freedom LifeX — Executive Portfolio Diagnostic', footer: typeof RIA_PDF_FOOT !== 'undefined' ? RIA_PDF_FOOT : ''}); return {filename: f.file, blocks: f.blocks.length}; }
   if(fmt === 'csv'){ aiDownload(aiCsvOf(f.rows.map(x=>Object.fromEntries(f.cols.map((c, k)=>[c, x[k]]))), f.cols), f.file + '.csv', 'text/csv'); return {filename: f.file + '.csv', rows: f.rows.length}; }
-  aiDownload(xlsxBuild([{name: (which === 'import' ? 'Investment Details' : 'Research').slice(0, 31), cols: f.cols, rows: f.rows}]), f.file + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  if(f.sheets){ aiDownload(xlsxWrite(f.sheets), f.file + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); return {filename: f.file + '.xlsx', sheets: f.sheets.length}; }
+  aiDownload(xlsxBuild([{name: 'Investment Details', cols: f.cols, rows: f.rows}]), f.file + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   return {filename: f.file + '.xlsx', rows: f.rows.length};
 }
 /* 📎 stages the file beside the input, like any chat: the advisor types what they want of it (or nothing, for the full research) and sends both together. */
@@ -64058,7 +64280,7 @@ function riaUpViewHtml(v){
   const st = v.strip || {};
   const rows = (v.rows || []).map(r=>{
     const why = r.action === 'Switch' && r.target ? `<b>→ ${esc(riaShortFund(r.target))}</b><div class="ria-up-sub">${esc(r.record ? 'Quartile: ' + r.record : short(r.why))}</div>` : esc(short(r.why));
-    const sub = [r.cls, r.noName ? '<span class="ria-up-warn">⚠ name missing</span>' : !r.isin ? 'no ISIN' : ''].filter(Boolean).map(x=>x.indexOf('<span') === 0 ? x : esc(x)).join(' · ');
+    const sub = [r.cls, r.tier, r.noName ? '<span class="ria-up-warn">⚠ name missing</span>' : !r.isin && !v.client ? 'no ISIN' : ''].filter(Boolean).map(x=>x.indexOf('<span') === 0 ? x : esc(x)).join(' · ');
     return `<tr><td class="ria-up-name">${esc(r.name)}<div class="ria-up-sub">${sub}</div></td><td class="num">${r.current == null ? '—' : esc(riaUpMoney(r.current))}</td>
       <td class="num">${esc(String(r.weight))}%</td><td>${pill(r.action)}</td><td class="ria-up-why">${why}</td></tr>`;
   }).join('');
@@ -64077,7 +64299,12 @@ function riaUpViewHtml(v){
   </div>`;
 }
 /* A question about the file just read — while it is the subject and no client is named. */
-const RIA_UP_WORDS = /\b(file|upload\w*|statement|sheet|excel|csv|pdf|import|iska|iski|iske|isme|ismein|is file|this file|concentration|weight\w*|hold|reduce|switch|review|analysis|verdict\w*|research|quality|missing|isin|unclassified|clean|total|aum|invested|current value|mix|allocation|summary|report|download|holdings?|naam|names?)\b/i;
+const RIA_UP_WORDS = /\b(file|upload\w*|statement|sheet|excel|csv|pdf|import|iska|iski|iske|isme|ismein|is file|this file|concentration|weight\w*|hold|reduce|switch|review|analysis|verdict\w*|research|quality|missing|isin|unclassified|clean|total|aum|invested|current value|mix|allocation|summary|report|download|holdings?|naam|names?|micro\w*|clutter|chote|chhote|tail|tax|harvest\w*|ltcg|stcg|target|drift|rebalanc\w*|projection|protection|checklist|emergency|insurance|nominee\w*|years?)\b/i;
+/* The four diagnostic questions, for a file or a client. */
+const riaDiagFocus = t => /\b(micro\w*|clutter|chote|chhote|tail|tiny)\b|small holdings|chhoti holdings/i.test(t) ? 'clutter'
+  : /\b(tax|harvest\w*|ltcg|stcg|capital gains?)\b/i.test(t) ? 'tax'
+  : /\b(drift|rebalanc\w*|bucket\w*)\b|target allocation|current vs target|vs target/i.test(t) ? 'drift'
+  : /\b(projection|protection|checklist|emergency|insurance|nominee\w*)\b|10[ -]?year|10 saal/i.test(t) ? 'projection' : null;
 function riaUpFollowUp(q){
   if(!ai.upload || ai.subject !== 'upload') return false;
   if(typeof bossClientsNamedIn === 'function' && bossClientsNamedIn(q).length) return false;
@@ -64085,8 +64312,8 @@ function riaUpFollowUp(q){
 }
 function riaUpAnswer(q){
   const t = String(q || ''), {up, x} = ai.upload;
-  const focus = /\b(import|clean|crm)\b/i.test(t) ? 'import' : /\b(concentration|weight\w*|25)\b/i.test(t) ? 'concentration'
-    : /\b(quality|missing|isin|unclassified|naam|names?|enrich\w*)\b/i.test(t) ? 'quality' : /\b(hold|reduce|switch|review|analysis|verdict\w*|recommend\w*|suggest\w*|research|action\w*)\b/i.test(t) ? 'actions' : 'summary';
+  const focus = riaDiagFocus(t) || (/\b(import|clean|crm)\b/i.test(t) ? 'import' : null) || (/\b(concentration|weight\w*|25)\b/i.test(t) ? 'concentration' : null) || (
+    /\b(quality|missing|isin|unclassified|naam|names?|enrich\w*)\b/i.test(t) ? 'quality' : /\b(hold|reduce|switch|review|analysis|verdict\w*|recommend\w*|suggest\w*|research|action\w*)\b/i.test(t) ? 'actions' : 'summary');
   const turn = riaUpTurn(up, x, focus);
   if(focus === 'import'){
     const q2 = x.quality;
@@ -64094,8 +64321,31 @@ function riaUpAnswer(q){
       + (q2.noName ? ' ' + riaN(q2.noName) + ' rows with no scrip / scheme name are labelled "Unidentified holding NN (from ' + up.name + ')" with their units and price in Note, so none is rejected as "Twice in file"; rename them from the statement when you can.' : '')
       + (q2.wouldReject ? ' Without this, the import would reject ' + riaN(q2.wouldReject) + ' row(s) as "Twice in file".' : '')
       + ' No folio or ISIN has been made up.\n\n' + turn.content.split('\n').slice(2).join('\n');
-    turn.actions = [turn.actions[2], turn.actions[3], turn.actions[0], turn.actions[1], turn.actions[4]];
+    turn.actions = [turn.actions[2], turn.actions[3], turn.actions[0], turn.actions[1], turn.actions[4], turn.actions[5]].filter(Boolean);
   }
+  riaPushBot(turn);
+  return {};
+}
+/* The same four questions about a CRM client ("Pradeep ki micro-cap clutter dikhao", "iska drift check karo", "tax harvesting aur LTCG
+   calculation do", "10 year projection aur protection checklist do") are answered from the client's positions with the same research,
+   workbook and Executive PDF. Only the questions that are plainly these diagnostics are taken here; "tax harvesting for X" alone keeps
+   its portfolio-intelligence answer. */
+function riaDiagClientFor(q){
+  const t = String(q || '');
+  if(!riaDiagFocus(t) || !/\b(clutter|micro\w*|chote|chhote|tail|drift|ltcg|protection|checklist)\b|target allocation|current vs target/i.test(t)) return null;
+  if(typeof bossClientsNamedIn !== 'function') return null;
+  const named = bossClientsNamedIn(t);
+  const ctx = typeof aiContextOf === 'function' ? aiContextOf() : ai.context;
+  const c = named.length === 1 ? named[0] : (!named.length ? ((typeof riaFollowUpClient === 'function' && riaFollowUpClient(t))
+    || (ctx && ctx.module === 'CMS' && ctx.recordId && ctx.recordId !== ai.droppedRecord ? (riaPersonById(ctx.recordId) || null) : null)) : null);
+  return c && bossCanSeeClient(c) && riaPositions(c).some(p=>p.current > 0 || p.invested > 0) ? c : null;
+}
+function riaDiagClientAnswer(c, q){
+  riaSetActiveClient(c);
+  const up = {name: clientDisplayName(c), kind: 'crm', client: true, rows: riaDiagRowsOfClient(c), notes: []};
+  const x = riaUpAnalyse(up, riaClientHorizon(c));
+  const turn = riaUpTurn(up, x, riaDiagFocus(String(q || '')) || 'summary');
+  turn.clients = [{id: c.id, name: clientDisplayName(c)}];
   riaPushBot(turn);
   return {};
 }

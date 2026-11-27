@@ -20,7 +20,7 @@
         do", "concentration check karo", "clean import sheet bana do".
      4. a mutual fund statement (.csv): DSP Midcap → Switch to the sheet's
         top peer, a 45% holding → Reduce, a consistent fund → Hold, a
-        direct stock → Review; two lots of one fund in different folios
+        direct stock in profit → Hold (P&L and weight health); two lots of one fund in different folios
         stay two rows.
      5. a PDF statement is read by the statement reader.
      6. Clear forgets the file; naming a client moves the conversation to
@@ -83,6 +83,8 @@ suite(async t => {
   /* an .xlsx read back the way the page reads one */
   const readXlsx = (buf) => t.eval(async (b64) => { const bin = atob(b64), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
     const s = await xlsxSheets(u.buffer); return s[0].rows.map(r => Array.from(r, v => v == null ? '' : v)); }, buf.toString('base64'));
+  const readXlsxAll = (buf) => t.eval(async (b64) => { const bin = atob(b64), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    const s = await xlsxSheets(u.buffer); return s.map(x => ({name: x.name, rows: x.rows.map(r => Array.from(r, v => v == null ? '' : v))})); }, buf.toString('base64'));
   const csvRows = (buf) => buf.toString('utf8').replace(/^﻿/, '').trim().split(/\r?\n/);
 
   /* Sanjay's 36 rows, as the import read them */
@@ -102,7 +104,7 @@ suite(async t => {
     const d = await drawn();
     if(!/Investment Details\.xlsx/.test(d.meBadge) || !/Research this file/.test(d.meText) || d.strip.length !== 4 || !/^Total holdings 36/i.test(d.strip[0]) || !/Over 25% · data issues 1 · 36/i.test(d.strip[3])
       || d.head.join('|') !== 'Scheme / Product|Current value|Weight %|Action|Rationale / Switch target' || d.rows !== 36 || d.pills.some(p => p !== 'ria-pill-review:Review') || !d.wrapped || d.wrapOverflow !== 'auto'
-      || !d.buttonsAfter || d.buttons.slice(0, 4).join('|') !== '📊 Research report (.xlsx)|📑 Research report (.csv)|📥 Clean import file (.xlsx)|📥 Clean import file (.csv)' || d.wrapW > d.drawerW)
+      || !d.buttonsAfter || d.buttons.slice(0, 5).join('|') !== '📊 Research workbook (.xlsx)|📑 Research report (.csv)|📥 Clean import file (.xlsx)|📥 Clean import file (.csv)|📄 Download Executive PDF' || d.wrapW > d.drawerW)
       throw new Error('drawn: ' + JSON.stringify(d));
     const st = await t.eval(() => ({n: ai.upload && ai.upload.up.rows.length, subject: ai.subject, noName: ai.upload && ai.upload.up.rows.filter(r => r.noName).length,
       acts: ai.upload && [...new Set(ai.upload.up.rows.map(r => r.action))], w7: ai.upload && ai.upload.up.rows[6].weightPct, total: ai.upload && ai.upload.x.curKnown}));
@@ -111,22 +113,22 @@ suite(async t => {
     if(st.n !== 36 || st.noName !== 36 || st.subject !== 'upload' || st.acts.join() !== 'Review' || Math.round(st.total) !== sanjayTotal
       || !/Read \*\*36 rows\*\*, kept \*\*36\*\* — none merged: 36 rows look alike/.test(c) || !/36 rows have no scheme \/ scrip name \(the name column holds "Statement - SANJAY NARAYAN SONAWANE\.pdf"\)/.test(c)
       || !/reject \*\*35\*\* as "Twice in file"/.test(c) || !/36 rows? with no known asset class \(36 given as "Unclassified"\)/.test(c) || !/Review 36/.test(c) || !/Unidentified holding 07 [\d.]+% → Review/.test(c)
-      || BAD.test(c) || !r.view || r.view.rows.length !== 36 || r.files.join() !== 'research,import' || r.actions.length !== 5) throw new Error(JSON.stringify({st, c: c.slice(0, 1400), view: r.view && r.view.rows.length, actions: r.actions}));
+      || BAD.test(c) || !r.view || r.view.rows.length !== 36 || r.files.join() !== 'research,pdf,import' || r.actions.length !== 6) throw new Error(JSON.stringify({st, c: c.slice(0, 1400), view: r.view && r.view.rows.length, actions: r.actions}));
     return 'staged as a chip (nothing sent, input focused); Send with no prompt → full research: strip "' + d.strip[0] + '", 36-row table with Review pills in a scroller, 4 downloads under it; 35 would-be "Twice in file" rejects counted';
   });
 
   await t.step('2. the downloads: research report and clean CRM import file, .xlsx and .csv', async () => {
-    const rx = await download('📊 Research report (.xlsx)'), rc = await download('📑 Research report (.csv)');
+    const rx = await download('📊 Research workbook (.xlsx)'), rc = await download('📑 Research report (.csv)');
     const ix = await download('📥 Clean import file (.xlsx)'), ic = await download('📥 Clean import file (.csv)');
     cleanImport = ix;
     if(rx.buf.slice(0, 2).toString() !== 'PK' || ix.buf.slice(0, 2).toString() !== 'PK' || !/^RIA_Research_Investment_Details_.*\.xlsx$/.test(rx.name) || !/^CRM_Import_Investment_Details_.*\.csv$/.test(ic.name))
       throw new Error(JSON.stringify([rx.name, rc.name, ix.name, ic.name]));
-    const R = await readXlsx(rx.buf), I = await readXlsx(ix.buf);
-    const rHead = R[0], iHead = I[0];
-    if(rHead.join('|') !== '#|Holding|Asset class|Folio / account|ISIN|Units|NAV / price|Invested|Current value|Weight %|Quartile / risk note|Recommendation|Switch to|Data note' || R.length !== 37)
-      throw new Error('research: ' + JSON.stringify(R.slice(0, 2)));
-    const rec = R.slice(1).map(r => r[11]);
-    if(rec.some(a => !['Hold', 'Reduce', 'Switch', 'Review'].includes(a)) || BAD.test(JSON.stringify(R)) || Math.abs(R.slice(1).reduce((n, r) => n + Number(r[9]), 0) - 100) > 0.5)
+    const W = await readXlsxAll(rx.buf), I = await readXlsx(ix.buf);
+    const R = (W.find(x => x.name === 'Holdings & Signals') || {rows: []}).rows, iHead = I[0];
+    if(W.map(x => x.name).join('|') !== 'Executive Summary|Holdings & Signals|Action & Cleanup Plan' || R[0].join('|') !== 'S.No|Scheme / Stock Name|Asset Class / Sector|Pillar Tier|Qty / Units|Invested (₹)|Current Value (₹)|Unrealized P&L (%)|Weight (%)|Quartile / Quality Note|Action|Switch Target / Rationale' || R.length !== 37)
+      throw new Error('research: ' + JSON.stringify({sheets: W.map(x => x.name), head: R[0], n: R.length}));
+    const rec = R.slice(1).map(r => r[10]);
+    if(rec.some(a => !['Hold', 'Reduce', 'Switch', 'Review'].includes(a)) || BAD.test(JSON.stringify(W)) || Math.abs(R.slice(1).reduce((n, r) => n + Number(r[8]), 0) - 100) > 0.5)
       throw new Error('research rows: ' + JSON.stringify(R.slice(1, 4)));
     if(iHead.join('|') !== 'Scheme / product|Asset class|Folio / account|ISIN|Units|NAV / price|Invested|Current value|Invested on|Note' || I.length !== 37) throw new Error('import: ' + JSON.stringify(I.slice(0, 2)));
     /* the CRM's own test for "the same investment": folio + ISIN, or folio + name when there is no ISIN */
@@ -134,8 +136,8 @@ suite(async t => {
     const ids = new Set(I.slice(1).map(id));
     if(ids.size !== 36 || I.slice(1).some(r => r[2] !== '' || r[3] !== '') || !/^Unidentified holding 01 \(from Statement - SANJAY NARAYAN SONAWANE\.pdf\)$/.test(I[1][0]) || !/units 10, price 100/.test(I[1][9])
       || Number(I[7][7]) !== 2600000) throw new Error('import rows: ' + JSON.stringify({unique: ids.size, first: I[1], seventh: I[7]}));
-    if(csvRows(rc.buf).length !== 37 || csvRows(ic.buf).length !== 37 || !/Recommendation/.test(csvRows(rc.buf)[0]) || !/Scheme \/ product/.test(csvRows(ic.buf)[0])) throw new Error('csv lengths');
-    return 'research ' + rx.buf.length + ' B / ' + rc.buf.length + ' B (36 rows, weights total 100%, only the four actions); import ' + ix.buf.length + ' B / ' + ic.buf.length + ' B: CRM columns, 36 distinct investments, no folio or ISIN invented';
+    if(csvRows(rc.buf).length !== 37 || csvRows(ic.buf).length !== 37 || !/Pillar Tier.*Action/.test(csvRows(rc.buf)[0]) || !/Scheme \/ product/.test(csvRows(ic.buf)[0])) throw new Error('csv lengths');
+    return 'research workbook ' + rx.buf.length + ' B (3 tabs) / csv ' + rc.buf.length + ' B (36 rows, weights total 100%, only the four actions); import ' + ix.buf.length + ' B / ' + ic.buf.length + ' B: CRM columns, 36 distinct investments, no folio or ISIN invented';
   });
 
   await t.step('3. follow-ups stay on the file: analysis, concentration, the clean import sheet', async () => {
@@ -152,7 +154,7 @@ suite(async t => {
     return 'analysis, "Largest holdings" (row 7 first) and the clean import answer — all about the file, no model call';
   });
 
-  await t.step('4. a mutual fund statement (.csv): Switch to the sheet\'s peer, Reduce over 25%, Hold, Review for a stock; two lots kept', async () => {
+  await t.step('4. a mutual fund statement (.csv): Switch to the sheet\'s peer, Reduce over 25%, Hold (a stock in profit too), Review; two lots kept', async () => {
     const csv = ['Investor Name,Scheme Name,Folio No,ISIN,Units,NAV,Invested Amount,Current Value',
       'ZZ Csv Investor,DSP Midcap Fund Regular Growth,F-101,,1000,120,100000,120000',
       'ZZ Csv Investor,Kotak Flexi Cap Fund Regular Growth,F-102,,5000,90,300000,450000',
@@ -169,7 +171,7 @@ suite(async t => {
     const rows = await t.eval(() => ai.upload.up.rows.map(r => ({n: r.name.split(' ').slice(0, 2).join(' '), a: r.action, w: r.weightPct, to: r.target, why: r.why})));
     const by = n => rows.filter(r => r.n === n);
     if(rows.length !== 6 || by('DSP Midcap')[0].a !== 'Switch' || !/Nippon India Gr Mid Cap/.test(by('DSP Midcap')[0].to) || by('Kotak Flexi')[0].a !== 'Reduce' || by('Kotak Flexi')[0].w !== 45
-      || by('HDFC Bank')[0].a !== 'Review' || !/quartile sheet covers mutual funds only/.test(by('HDFC Bank')[0].why) || by('Motilal Oswal').length !== 2 || by('ICICI Prudential')[0].a !== 'Hold'
+      || by('HDFC Bank')[0].a !== 'Hold' || !/In profit \(25%\) at 15% weight/.test(by('HDFC Bank')[0].why) || by('Motilal Oswal').length !== 2 || by('ICICI Prudential')[0].a !== 'Hold'
       || !/Read \*\*6 rows\*\*, kept \*\*6\*\* — none merged\./.test(r.content) || !/Kotak Flexi Cap Fund Regular Growth 45% → Reduce/.test(r.content) || BAD.test(r.content))
       throw new Error(JSON.stringify({rows, c: r.content.slice(0, 900)}));
     return 'file + "isko Hold / Reduce / Switch analysis do" in one bubble; pills Switch first: ' + d.pills.map(p => p.split(':')[1]).join(', ') + ' | ' + rows.map(x => x.n + ' ' + x.a + ' (' + x.w + '%)').join(', ') + '; the Total line skipped';
