@@ -109,8 +109,9 @@ suite(async t => {
     if(r.pos.reduce((n, p) => n + p.v, 0) !== 1210000) throw new Error('value counted twice or lost: ' + JSON.stringify(r.pos));
     if(!r.pos.every(p => /^F-ZZ-/.test(p.folio))) throw new Error('folio lost: ' + JSON.stringify(r.pos));
     if(r.sig.length !== 3 || r.sig.some(s => /^—/.test(s))) throw new Error('policy signals: ' + JSON.stringify(r.sig));
-    const bss = r.lines.find(l => /^Buy \/ sell \/ switch:/.test(l)) || '';
-    if(!/Switch \(quartile\) 2/.test(bss) || /No scheme-level signals/.test(bss) || !r.lines.some(l => /^Switch — DSP Midcap/.test(l))) throw new Error('RIA Insight: ' + JSON.stringify(r.lines));
+    const bss = r.lines.find(l => /^Hold \/ Reduce \/ Switch:/.test(l)) || '';
+    if(!/^Hold \/ Reduce \/ Switch: Hold 0, Reduce 1, Switch 2, Review 0/.test(bss) || !r.lines.some(l => /^Switch — DSP Midcap/.test(l)) || !r.lines.some(l => /^Reduce — Kotak Flexi Cap/.test(l))
+      || r.lines.some(l => /\b(Buy|Sell)\b/.test(l))) throw new Error('RIA Insight: ' + JSON.stringify(r.lines));
     if(r.sw.length !== 2 || !r.sw.some(s => /DSP Midcap/.test(s))) throw new Error('quartile switches: ' + JSON.stringify(r.sw));
     if(!/DSP Midcap/.test(r.dossier)) throw new Error('the dossier for the model lacks the schemes: ' + r.dossier.slice(0, 300));
     return '3 schemes, ₹12.10 L, folios kept; policy signals on 3 schemes; Insight "' + bss + '"; quartile switches: ' + r.sw.join(', ');

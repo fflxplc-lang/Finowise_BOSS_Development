@@ -373,14 +373,15 @@ function describeIntel(x) {
   }
   const a = x.actions;
   if (a) {
-    const c = Object.keys(a.counts || {}).map((k) => k + ' ' + a.counts[k]).join(', ');
-    L.push('**2. Buy / Sell / Hold / Switch**');
-    L.push('- ' + (c ? 'Signals: ' + c + '.' : 'No scheme-level holdings to read signals from.'));
+    const n = Object.values(a.counts || {}).reduce((t, v) => t + (Number(v) || 0), 0);
+    const c = ['Hold', 'Reduce', 'Switch', 'Review'].map((k) => k + ' ' + ((a.counts || {})[k] || 0)).join(', ');
+    L.push('**2. Hold / Reduce / Switch**');
+    L.push('- ' + (n ? 'Actions: ' + c + '.' : 'No scheme-level holdings to read actions from.'));
     (a.list || []).slice(0, 5).forEach((r) => L.push('- ' + r.action + ': ' + r.scheme + (x.scope.kind === 'book' ? ' (' + r.client + ')' : '') + ' — ' + r.why));
     const r = a.riskySafe;
     if (r) L.push('- Risky to safe: small / mid / thematic ' + pct(r.riskyPct) + ' against a ' + r.capPct + '% ceiling. ' + (r.switchAmount
-      ? 'Switch about ' + money(r.switchAmount) + ' into ' + r.to.map((z) => z.category + ' ' + money(z.amount)).join(', ') + '; exit load about ' + money(r.exitLoad) + ', capital gains tax about ' + money(r.tax) + '.'
-      : 'Nothing above the ceiling to switch.'));
+      ? 'Reduce about ' + money(r.switchAmount) + ' into ' + r.to.map((z) => z.category + ' ' + money(z.amount)).join(', ') + '; exit load about ' + money(r.exitLoad) + ', capital gains tax about ' + money(r.tax) + '.'
+      : 'Nothing above the ceiling to reduce.'));
     L.push('- ' + a.governance, '');
   }
   const t = x.tax;
@@ -599,12 +600,11 @@ function describeSchemeSignals(s) {
   const rs = (x) => '₹' + Number(Math.round(x || 0)).toLocaleString('en-IN');
   const out = ['**🔎 Scheme signals: ' + ((s.client || {}).name || '') + '** _(' + (s.source || 'firm quartile matrix') + ')_'];
   const block = (title, list) => { if (list && list.length) { out.push('', title); list.forEach((x) => out.push('- ' + x.signal)); } };
-  block('**🔴 Switch alerts (' + (s.switches || []).length + '):**', s.switches);
-  block('**🟡 De-risk (' + (s.deRisk || []).length + '):**', s.deRisk);
-  block('**🟡 Watch (' + (s.watch || []).length + '):**', s.watch);
-  if ((s.holds || []).length) out.push('', '**🟢 Core holds (' + s.holds.length + '):** ' + s.holds.map((h) => h.scheme + ' (' + rs(h.current) + ')').join(', '));
-  if ((s.notCovered || []).length) out.push('', '⚪ Not in the matrix (review vs peers): ' + s.notCovered.join(', '));
-  if (!(s.switches || []).length && !(s.deRisk || []).length && !(s.watch || []).length && !(s.holds || []).length) out.push('', 'None of this client’s schemes is covered by the firm’s quartile matrix.');
+  block('**🔴 Switch (' + (s.switches || []).length + '):**', s.switches);
+  block('**🟠 Reduce (' + (s.reduce || []).length + '):**', s.reduce);
+  block('**⚪ Review (' + (s.review || []).length + '):**', s.review);
+  if ((s.holds || []).length) out.push('', '**🟢 Hold (' + s.holds.length + '):** ' + s.holds.map((h) => h.scheme + ' (' + rs(h.current) + ')').join(', '));
+  if (![].concat(s.switches || [], s.reduce || [], s.review || [], s.holds || []).length) out.push('', 'No holdings to read for this client.');
   if (s.freshAllocation) out.push('', '💡 ' + s.freshAllocation);
   out.push('Indicative — review suitability with the client before acting.');
   return out;

@@ -1,0 +1,157 @@
+/* RIA AI READS AN UPLOADED STATEMENT: RESEARCH IN CHAT, AND FILES TO DOWNLOAD (27-11-2026).
+
+   The case it was built for: Sanjay Sonawane's "Investment Details.xlsx"
+   (from "Statement - SANJAY NARAYAN SONAWANE.pdf", a Piper Serica PMS
+   statement). Its 36 rows all had "Scheme / product" = the PDF's file
+   name, asset class "Unclassified", no folio and no ISIN — but different
+   units, prices and values. The CRM import kept 1 and rejected 35 as
+   "Twice in file".
+
+   Steps:
+     1. the 36-row file through 📎: 36 rows read and kept, every one flagged
+        for its missing name, the 35 the import would reject counted,
+        Review for each (no name to judge), totals and weights correct.
+     2. the four downloads: the research report (.xlsx / .csv) has every
+        row with weight, note and only Hold / Reduce / Switch / Review; the
+        clean import file (.xlsx / .csv) has the CRM's columns, all 36 rows,
+        and no two rows the CRM would call the same investment — with no
+        folio or ISIN made up.
+     3. follow-ups stay on the file: "iska Hold / Reduce / Switch analysis
+        do", "concentration check karo", "clean import sheet bana do".
+     4. a mutual fund statement (.csv): DSP Midcap → Switch to the sheet's
+        top peer, a 45% holding → Reduce, a consistent fund → Hold, a
+        direct stock → Review; two lots of one fund in different folios
+        stay two rows.
+     5. a PDF statement is read by the statement reader.
+     6. Clear forgets the file; naming a client moves the conversation to
+        the client; an unsupported or oversized file is refused plainly.
+
+   Synthetic data only; nothing leaves the browser. */
+const fs = require('fs');
+const {suite} = require('../lib/harness');
+const BAD = /\b(Buy|BUY|Sell|SELL)\b/;
+
+suite(async t => {
+  await t.home();
+  const fresh = () => t.eval(async () => { aiCloseP(); navigate('dashboard'); ai.turns = []; aiClearDesk(); aiTogglePanel(); try { await aiRefreshStatus(true); } catch(e){} aiClearTurns(); });
+  const ask = (q) => t.eval(async (q) => { const el = document.getElementById('aiInput'); if(el){ el.disabled = false; el.value = q; } ai.draft = q; await aiSend(); }, q);
+  const last = () => t.eval(() => { const x = ai.turns[ai.turns.length - 1] || {}; return {content: x.content || '', table: x.table || null, actions: (x.actions || []).map(a => a.label), files: x.upFiles ? Object.keys(x.upFiles) : []}; });
+  const upload = async (name, mimeType, buffer) => {
+    await t.page.setInputFiles('#riaUpFile', {name, mimeType, buffer});
+    for(let i = 0; i < 80; i++){ const busy = await t.eval(() => ai.busy); if(!busy) break; await new Promise(r => setTimeout(r, 250)); }
+    return last();
+  };
+  const download = async (label) => {
+    const dl = t.page.waitForEvent('download', {timeout: 15000});
+    await t.eval((label) => { const b = [...document.querySelectorAll('#aiTurns .ria-act')].reverse().find(x => x.textContent.trim().indexOf(label) === 0); if(!b) throw new Error('no button ' + label); b.click(); }, label);
+    const d = await dl; return {name: d.suggestedFilename(), buf: fs.readFileSync(await d.path())};
+  };
+  /* an .xlsx read back the way the page reads one */
+  const readXlsx = (buf) => t.eval(async (b64) => { const bin = atob(b64), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    const s = await xlsxSheets(u.buffer); return s[0].rows.map(r => Array.from(r, v => v == null ? '' : v)); }, buf.toString('base64'));
+  const csvRows = (buf) => buf.toString('utf8').replace(/^﻿/, '').trim().split(/\r?\n/);
+
+  /* Sanjay's 36 rows, as the import read them */
+  const SANJAY = 'Statement - SANJAY NARAYAN SONAWANE.pdf';
+  const sanjay = Array.from({length: 36}, (_, i) => { const units = 10 + i * 7, price = 100 + (i * 37) % 900, inv = Math.round(units * price * 0.8), cur = i === 6 ? 2600000 : units * price;
+    return [SANJAY, 'Unclassified', '', '', units, price, inv, cur, '2024-0' + (1 + i % 9) + '-15', '']; });
+  const sanjayTotal = sanjay.reduce((n, r) => n + r[7], 0);
+  let sanjayBook = null;
+
+  await t.step('1. the 36-row "Investment Details.xlsx" through 📎: all 36 kept, each flagged, the 35 "Twice in file" rejects counted', async () => {
+    await fresh();
+    const bytes = await t.eval((rows) => Array.from(xlsxBuild([{name: 'Investment Details', cols: ['Scheme / product', 'Asset class', 'Folio / account', 'ISIN', 'Units', 'NAV / price', 'Invested', 'Current value', 'Invested on', 'Note'], rows}])), sanjay);
+    const r = await upload('Investment Details.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', Buffer.from(bytes));
+    const st = await t.eval(() => ({n: ai.upload && ai.upload.up.rows.length, subject: ai.subject, noName: ai.upload && ai.upload.up.rows.filter(r => r.noName).length,
+      acts: ai.upload && [...new Set(ai.upload.up.rows.map(r => r.action))], w7: ai.upload && ai.upload.up.rows[6].weightPct, total: ai.upload && ai.upload.x.curKnown}));
+    sanjayBook = st;
+    const c = r.content;
+    if(st.n !== 36 || st.noName !== 36 || st.subject !== 'upload' || st.acts.join() !== 'Review' || Math.round(st.total) !== sanjayTotal
+      || !/Read \*\*36 rows\*\*, kept \*\*36\*\* — none merged: 36 rows look alike/.test(c) || !/36 rows have no scheme \/ scrip name \(the name column holds "Statement - SANJAY NARAYAN SONAWANE\.pdf"\)/.test(c)
+      || !/reject \*\*35\*\* as "Twice in file"/.test(c) || !/36 rows? with no known asset class \(36 given as "Unclassified"\)/.test(c) || !/Review 36/.test(c) || !/Unidentified holding 07 [\d.]+% → Review/.test(c)
+      || BAD.test(c) || !r.table || r.table.rows.length !== 25 || r.files.join() !== 'research,import' || r.actions.length !== 5) throw new Error(JSON.stringify({st, c: c.slice(0, 1400), table: r.table && r.table.rows.length, actions: r.actions}));
+    return '36 read, 36 kept, 36 flagged (no name), 35 would-be "Twice in file" rejects counted; row 7 at ' + st.w7 + '% shown with its action (Review: identify it first)';
+  });
+
+  await t.step('2. the downloads: research report and clean CRM import file, .xlsx and .csv', async () => {
+    const rx = await download('📊 Research report (.xlsx)'), rc = await download('📑 Research report (.csv)');
+    const ix = await download('📥 Clean import file (.xlsx)'), ic = await download('📥 Clean import file (.csv)');
+    if(rx.buf.slice(0, 2).toString() !== 'PK' || ix.buf.slice(0, 2).toString() !== 'PK' || !/^RIA_Research_Investment_Details_.*\.xlsx$/.test(rx.name) || !/^CRM_Import_Investment_Details_.*\.csv$/.test(ic.name))
+      throw new Error(JSON.stringify([rx.name, rc.name, ix.name, ic.name]));
+    const R = await readXlsx(rx.buf), I = await readXlsx(ix.buf);
+    const rHead = R[0], iHead = I[0];
+    if(rHead.join('|') !== '#|Holding|Asset class|Folio / account|ISIN|Units|NAV / price|Invested|Current value|Weight %|Quartile / risk note|Recommendation|Switch to|Data note' || R.length !== 37)
+      throw new Error('research: ' + JSON.stringify(R.slice(0, 2)));
+    const rec = R.slice(1).map(r => r[11]);
+    if(rec.some(a => !['Hold', 'Reduce', 'Switch', 'Review'].includes(a)) || BAD.test(JSON.stringify(R)) || Math.abs(R.slice(1).reduce((n, r) => n + Number(r[9]), 0) - 100) > 0.5)
+      throw new Error('research rows: ' + JSON.stringify(R.slice(1, 4)));
+    if(iHead.join('|') !== 'Scheme / product|Asset class|Folio / account|ISIN|Units|NAV / price|Invested|Current value|Invested on|Note' || I.length !== 37) throw new Error('import: ' + JSON.stringify(I.slice(0, 2)));
+    /* the CRM's own test for "the same investment": folio + ISIN, or folio + name when there is no ISIN */
+    const id = r => String(r[2]).toLowerCase() + '|' + (String(r[3]).toUpperCase() || String(r[0]).toLowerCase());
+    const ids = new Set(I.slice(1).map(id));
+    if(ids.size !== 36 || I.slice(1).some(r => r[2] !== '' || r[3] !== '') || !/^Unidentified holding 01 \(from Statement - SANJAY NARAYAN SONAWANE\.pdf\)$/.test(I[1][0]) || !/units 10, price 100/.test(I[1][9])
+      || Number(I[7][7]) !== 2600000) throw new Error('import rows: ' + JSON.stringify({unique: ids.size, first: I[1], seventh: I[7]}));
+    if(csvRows(rc.buf).length !== 37 || csvRows(ic.buf).length !== 37 || !/Recommendation/.test(csvRows(rc.buf)[0]) || !/Scheme \/ product/.test(csvRows(ic.buf)[0])) throw new Error('csv lengths');
+    return 'research ' + rx.buf.length + ' B / ' + rc.buf.length + ' B (36 rows, weights total 100%, only the four actions); import ' + ix.buf.length + ' B / ' + ic.buf.length + ' B: CRM columns, 36 distinct investments, no folio or ISIN invented';
+  });
+
+  await t.step('3. follow-ups stay on the file: analysis, concentration, the clean import sheet', async () => {
+    await ask('iska Hold / Reduce / Switch analysis do');
+    const a = await last();
+    await ask('concentration check karo');
+    const b = await last();
+    await ask('clean import sheet bana do');
+    const c = await last();
+    if(!/^\*\*📎 Research: Investment Details\.xlsx\*\*/.test(a.content) || !/Hold \/ Reduce \/ Switch:\*\* Hold 0 · Reduce 0 · Switch 0 · Review 36/.test(a.content)
+      || !b.table || !/^Largest holdings/.test(b.table.title) || b.table.rows[0][0] !== 7
+      || !/^\*\*📥 Clean CRM import file — Investment Details\.xlsx\*\*/.test(c.content) || !/All \*\*36\*\* rows/.test(c.content) || !/reject 35 row\(s\) as "Twice in file"/.test(c.content) || !/^📥 Clean import file \(\.xlsx\)/.test(c.actions[0])
+      || [a, b, c].some(x => BAD.test(x.content))) throw new Error(JSON.stringify({a: a.content.slice(0, 300), b: b.table && b.table.title, c: c.content.slice(0, 400), ca: c.actions}));
+    return 'analysis, "Largest holdings" (row 7 first) and the clean import answer — all about the file, no model call';
+  });
+
+  await t.step('4. a mutual fund statement (.csv): Switch to the sheet\'s peer, Reduce over 25%, Hold, Review for a stock; two lots kept', async () => {
+    const csv = ['Investor Name,Scheme Name,Folio No,ISIN,Units,NAV,Invested Amount,Current Value',
+      'ZZ Csv Investor,DSP Midcap Fund Regular Growth,F-101,,1000,120,100000,120000',
+      'ZZ Csv Investor,Kotak Flexi Cap Fund Regular Growth,F-102,,5000,90,300000,450000',
+      'ZZ Csv Investor,Motilal Oswal Midcap Fund Regular Growth,F-103,,1000,80,60000,80000',
+      'ZZ Csv Investor,Motilal Oswal Midcap Fund Regular Growth,F-104,,1250,80,80000,100000',
+      'ZZ Csv Investor,ICICI Prudential Balanced Advantage Fund Growth,F-105,,2000,50,90000,100000',
+      'ZZ Csv Investor,HDFC Bank Ltd,DP-1,INE040A01034,100,1500,120000,150000',
+      'Total,,,,,,750000,1000000'].join('\n');
+    const r = await upload('MF statement.csv', 'text/csv', Buffer.from(csv));
+    const rows = await t.eval(() => ai.upload.up.rows.map(r => ({n: r.name.split(' ').slice(0, 2).join(' '), a: r.action, w: r.weightPct, to: r.target, why: r.why})));
+    const by = n => rows.filter(r => r.n === n);
+    if(rows.length !== 6 || by('DSP Midcap')[0].a !== 'Switch' || !/Nippon India Gr Mid Cap/.test(by('DSP Midcap')[0].to) || by('Kotak Flexi')[0].a !== 'Reduce' || by('Kotak Flexi')[0].w !== 45
+      || by('HDFC Bank')[0].a !== 'Review' || !/quartile sheet covers mutual funds only/.test(by('HDFC Bank')[0].why) || by('Motilal Oswal').length !== 2 || by('ICICI Prudential')[0].a !== 'Hold'
+      || !/Read \*\*6 rows\*\*, kept \*\*6\*\* — none merged\./.test(r.content) || !/Kotak Flexi Cap Fund Regular Growth 45% → Reduce/.test(r.content) || BAD.test(r.content))
+      throw new Error(JSON.stringify({rows, c: r.content.slice(0, 900)}));
+    return rows.map(x => x.n + ' ' + x.a + ' (' + x.w + '%)').join(', ') + '; the Total line skipped';
+  });
+
+  await t.step('5. a PDF statement is read by the statement reader', async () => {
+    const bytes = await t.eval(() => { const raw = pdfRender([{t: 'h2', text: 'Holding Statement'}, {t: 'table', cols: [{label: 'Scheme Name', w: 3}, {label: 'ISIN', w: 2}, {label: 'Units', w: 1}, {label: 'NAV', w: 1}, {label: 'Current Value', w: 1}],
+        rows: [['DSP Midcap Fund Regular Growth', 'INF740K01797', '1000', '120', '120000'], ['Kotak Flexi Cap Fund Regular Growth', 'INF174K01336', '5000', '90', '450000'], ['HDFC Liquid Fund Regular Growth', 'INF179K01UY4', '100', '4500', '450000']]}], {title: 'ZZ statement'});
+      return Array.from(raw, ch => ch.charCodeAt(0) & 0xFF); });
+    const r = await upload('ZZ Holding Statement.pdf', 'application/pdf', Buffer.from(bytes));
+    const rows = await t.eval(() => ai.upload && ai.upload.up.name === 'ZZ Holding Statement.pdf' ? ai.upload.up.rows.map(r => ({n: r.name, a: r.action, v: r.current})) : null);
+    if(!rows || rows.length !== 3 || !rows.some(x => /DSP Midcap/.test(x.n) && x.a === 'Switch') || !/Read \*\*3 rows\*\*/.test(r.content)) throw new Error(JSON.stringify({rows, c: r.content.slice(0, 600)}));
+    return rows.map(x => x.n.split(' ').slice(0, 2).join(' ') + ' ' + x.a).join(', ');
+  });
+
+  await t.step('6. Clear forgets the file; naming a client moves on; an unsupported or oversized file is refused plainly', async () => {
+    const r = await t.eval(async () => {
+      const out = {};
+      out.beforeClear = riaUpFollowUp('concentration check karo');
+      aiClearTurns();
+      out.afterClear = riaUpFollowUp('concentration check karo') || !!ai.upload;
+      return out;
+    });
+    const bad = await upload('notes.txt', 'text/plain', Buffer.from('hello'));
+    const big = await upload('big.csv', 'text/csv', Buffer.alloc(11 * 1024 * 1024, 65));
+    const moved = await t.eval(() => { ai.upload = {up: {rows: [], name: 'x'}, x: {}}; ai.subject = 'upload'; const a = riaUpFollowUp('iska analysis do'); const c = DB.clients.find(x => !x.deletedAt);
+      riaSetActiveClient(c); return {a, b: riaUpFollowUp('iska analysis do'), subject: ai.subject}; });
+    if(!r.beforeClear || r.afterClear || !/reads \.xlsx, \.xls, \.csv and \.pdf files/.test(bad.content) || !/reads files up to 10 MB/.test(big.content) || !moved.a || moved.b || moved.subject !== 'client')
+      throw new Error(JSON.stringify({r, bad: bad.content, big: big.content, moved}));
+    return 'Clear forgets it; a named client takes over; .txt and an 11 MB file refused with a plain reason';
+  });
+});

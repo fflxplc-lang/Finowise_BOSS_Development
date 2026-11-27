@@ -1,7 +1,9 @@
 /* LEXI signals: each holding read against the firm's investment policy
    (recommended list, risk-profile allocation, market valuation zone),
    valued at the AMFI NAV the server fetches, on the client's page, on
-   Analytics, and handed to LEXI AI for a buy / sell / hold question. */
+   Analytics, and handed to LEXI AI for a buy / sell / hold question.
+   Since 27-11-2026 every action is Hold / Reduce / Switch / Review (never Buy or Sell): the quartile
+   sheet, the recommended list, concentration and the client's horizon decide it together. */
 const http = require('http');
 const {suite} = require('../lib/harness');
 
@@ -50,17 +52,18 @@ suite(async t => {
   });
 
   t.section('the policy read against each holding');
-  await t.step('the recommended list decides hold or switch', async () => {
+  await t.step('the quartile sheet and the recommended list decide Hold / Reduce / Switch / Review', async () => {
     const r = await t.eval((id) => {
       const s = lexiClientSignals(DB.clients.find(c=>c.id===id));
-      return s.rows.map(x=>({scheme:x.scheme, action:x.action, to:x.switchTo, cat:x.cat}));
+      return s.rows.map(x=>({scheme:x.scheme, action:x.action, to:x.switchTo, cat:x.cat, why:x.why}));
     }, cid);
     const by = Object.fromEntries(r.map(x=>[x.scheme.split(' ')[0], x]));
-    if(by.HDFC.action !== 'Hold' || by.HDFC.cat !== 'Mid cap') throw new Error('HDFC ' + JSON.stringify(by.HDFC));
-    if(by.Quant.action !== 'Switch' || !/ICICI/.test(by.Quant.to)) throw new Error('Quant ' + JSON.stringify(by.Quant));
-    if(by.Axis.action !== 'Switch' || !/Nippon India Large Cap/.test(by.Axis.to)) throw new Error('Axis ' + JSON.stringify(by.Axis));
+    if(r.some(x => !['Hold', 'Reduce', 'Switch', 'Review'].includes(x.action))) throw new Error('an action outside the four: ' + JSON.stringify(r));
+    if(by.HDFC.action !== 'Review' || by.HDFC.cat !== 'Mid cap' || !/Weak in the last 3 years/.test(by.HDFC.why)) throw new Error('HDFC ' + JSON.stringify(by.HDFC));
+    if(by.Quant.action !== 'Review' || !/disagree/.test(by.Quant.why) || /switch to/i.test(by.Quant.why)) throw new Error('Quant ' + JSON.stringify(by.Quant));
+    if(by.Axis.action !== 'Switch' || !/Union Large Cap/.test(by.Axis.to) || !/above the 25% limit/.test(by.Axis.why)) throw new Error('Axis ' + JSON.stringify(by.Axis));
     if(by.Aditya.action !== 'Hold' || by.Aditya.cat !== 'Liquid') throw new Error('ABSL ' + JSON.stringify(by.Aditya));
-    return 'hold HDFC Mid Cap and ABSL Liquid; switch Quant Multi Asset and Axis Bluechip';
+    return 'Review HDFC Mid Cap (weak lately) and Quant Multi Asset (sheet Hold vs policy); Switch Axis Bluechip (Bottom 2021, 2022; 56% of the portfolio); Hold ABSL Liquid';
   });
   await t.step('the server marks units to the AMFI NAV', async () => {
     const r = await t.eval(async () => {
@@ -84,11 +87,11 @@ suite(async t => {
       return {pct: s.pct, moves: s.moves, live: s.live, total: s.total, card: /RIA AI SIGNALS/.test(card) && /Switch/.test(card), zoneWhy: (z.moves[0]||{}).why || ''};
     }, cid);
     if(!r.live || r.total !== 150000 + 100000 + 300000 + 20000) throw new Error('valuation ' + JSON.stringify(r));
-    const sell = r.moves.find(m=>m.action==='Sell' && m.asset==='Equity');
-    if(!sell || r.pct[0] <= 80) throw new Error('moves ' + JSON.stringify(r));
+    const sell = r.moves.find(m=>m.action==='Reduce' && m.asset==='Equity');
+    if(!sell || r.pct[0] <= 80 || r.moves.some(m => /^(Buy|Sell)$/.test(m.action))) throw new Error('moves ' + JSON.stringify(r));
     if(!r.card) throw new Error('signals card not on the client page');
     if(!/Expensive/.test(r.zoneWhy) || !/arbitrage/.test(r.zoneWhy)) throw new Error('zone ' + r.zoneWhy);
-    return 'equity ' + r.pct[0] + '%: sell about ₹' + sell.amount;
+    return 'equity ' + r.pct[0] + '%: reduce about ₹' + sell.amount;
   });
 
   await t.step('the Nifty 50 PE sets the zone through the firm\'s bands', async () => {

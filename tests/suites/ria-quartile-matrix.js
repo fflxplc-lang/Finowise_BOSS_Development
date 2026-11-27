@@ -1,4 +1,4 @@
-/* THE FIRM'S QUARTILE RANKING SHEET: HOLD / SWITCH / WATCH / DE-RISK PER SCHEME.
+/* THE FIRM'S QUARTILE RANKING SHEET: HOLD / REDUCE / SWITCH / REVIEW PER SCHEME (never Buy or Sell).
 
    Every verdict is read from the firm's Mutual Fund Quartile Ranking Sheet
    (public/ria-quartiles.js, generated from the uploaded sheet: each
@@ -7,12 +7,13 @@
      1. the verdicts, against the sheet: DSP Midcap (Bottom 2021-23) ->
         Switch to the best Mid Cap peer; Motilal Oswal BAF -> Switch to
         ICICI Pru BAF; Parag Parikh Flexi Cap (Bottom 2022, 2023) -> Switch;
-        Kotak Flexi Cap -> Watch; Motilal Oswal Midcap -> Hold; "Axis
+        Kotak Flexi Cap -> Review (weak lately); Motilal Oswal Midcap -> Hold; "Axis
         Bluechip" found as Axis Large Cap; "ICICI Prudential Balanced
         Advantage" as "ICICI Pru Balanced Advtg"; "Motilal Oswal Large &
         Midcap" not taken for the Midcap fund; a midcap for a 61-year-old ->
-        De-risk; an unknown scheme -> not in the sheet
-     2. RIA AI's "Buy / sell / switch" finding counts the sheet's verdicts
+        Reduce (de-risk); an unknown scheme -> Review (not in the sheet)
+     2. RIA AI's "Hold / Reduce / Switch" finding counts one action per holding (Kotak Flexi
+        at 38% of the portfolio is Reduce, over the 25% limit)
         instead of "No scheme-level signals"
      3. the chat's data: one client's scheme signals, the goal gap from the
         mapped goals (and "map goals first" without them), and the mature
@@ -63,9 +64,9 @@ suite(async t => {
         src: (riaQ() || {}).source};
     });
     const want = [['dspMid', 'SWITCH', /^🔴 Switch to Nippon India Gr Mid Cap — Bottom 2021, 2022, 2023 YTD$/], ['moBaf', 'SWITCH', /^🔴 Switch to ICICI Pru Balanced Advtg — Bottom 2021, 2022$/],
-      ['ppfas', 'SWITCH', /^🔴 Switch to Quant Flexi Cap — Bottom 2022, 2023 YTD$/], ['kotakFlexi', 'WATCH', /^🟡 Watch — 2021 Bottom, 2023 YTD LM$/],
+      ['ppfas', 'SWITCH', /^🔴 Switch to Quant Flexi Cap — Bottom 2022, 2023 YTD$/], ['kotakFlexi', 'REVIEW', /^🟡 Review — weak lately: 2021 Bottom, 2023 YTD LM$/],
       ['moMid', 'HOLD', /^🟢 Hold — Top \/ Upper Mid in 4 of the last 5 years$/], ['axisBlue', 'SWITCH', /^🔴 Switch to /], ['iciciBaf', 'HOLD', /^🟢 Hold/],
-      ['moLargeMid', 'REVIEW', /^⚪ Mixed record/], ['seniorMid', 'DERISK', /^🟡 De-risk to Corporate Bond \/ BAF \(age 61\)$/], ['unknown', 'REVIEW', /^⚪ Not in the quartile sheet/]];
+      ['moLargeMid', 'REVIEW', /^⚪ Review — mixed record/], ['seniorMid', 'REDUCE', /^🟠 Reduce — de-risk to Corporate Bond \/ BAF \(age 61\)$/], ['unknown', 'REVIEW', /^⚪ Review — not in the quartile sheet/]];
     const bad = want.filter(([k, st, re]) => !r[k] || r[k].status !== st || !re.test(r[k].cardText));
     if(bad.length) throw new Error(JSON.stringify(bad.map(([k]) => [k, r[k] && r[k].status, r[k] && r[k].cardText])));
     if(!/2021 Bottom · 2022 Bottom · 2023 YTD Bottom/.test(r.dspMid.signal) || !/Nippon India Gr Mid Cap Fund Gr Gr \(Top \/ Upper Mid in \d of the last 5 years/.test(r.dspMid.signal)
@@ -73,26 +74,28 @@ suite(async t => {
     return want.length + ' verdicts from the sheet, each with its record; "Axis Bluechip" found as Axis Large Cap, "Motilal Oswal Large & Midcap" not taken for the Midcap fund, an unknown scheme left for review';
   });
 
-  await t.step('2. RIA AI’s "Buy / sell / switch" finding counts the sheet’s verdicts', async () => {
-    const r = await t.eval((id) => { const c = riaPersonById(id); const x = riaIntel('complete portfolio analysis', [c]); const f = riaFindings(x).find(([k]) => k === 'Buy / sell / switch');
-      return {f: f && f[1], list: (x.actions.list || []).filter(a => a.action === 'Switch').map(a => a.scheme + ' → ' + a.to)}; }, ids.p);
-    const quart = r.list.filter(x => !/undefined$/.test(x));
-    if(!r.f || /No scheme-level signals/.test(r.f) || !/Switch \(quartile\) 2/.test(r.f) || !/Watch \(quartile\) 2/.test(r.f) || quart.length < 2
-      || !quart.some(x => /DSP Midcap .* → Nippon India Gr Mid Cap/.test(x))) throw new Error(JSON.stringify(r));
-    return '"' + r.f.slice(0, 120) + '"; sheet switches / watches: ' + quart.join('; ');
+  await t.step('2. RIA AI’s "Hold / Reduce / Switch" finding counts one action per holding', async () => {
+    const r = await t.eval((id) => { const c = riaPersonById(id); const x = riaIntel('complete portfolio analysis', [c]); const f = riaFindings(x).find(([k]) => k === 'Hold / Reduce / Switch');
+      return {f: f && f[1], keys: Object.keys(x.actions.counts), acts: [...new Set((x.actions.list || []).map(a => a.action))],
+        list: (x.actions.list || []).filter(a => a.action === 'Switch').map(a => a.scheme + ' → ' + a.to), kotak: ((x.actions.list || []).find(a => /Kotak Flexi/.test(a.scheme)) || {})}; }, ids.p);
+    const quart = r.list.filter(x => !/undefined$|null$/.test(x));
+    if(!r.f || !/^Hold 0, Reduce 1, Switch 2, Review 2/.test(r.f) || r.keys.join() !== 'Hold,Reduce,Switch,Review' || r.acts.some(a => !['Reduce', 'Switch', 'Review'].includes(a))
+      || quart.length !== 2 || !quart.some(x => /DSP Midcap .* → Nippon India Gr Mid Cap/.test(x)) || r.kotak.action !== 'Reduce' || !/38\.3% of the portfolio .* above the 25% limit/.test(r.kotak.why || ''))
+      throw new Error(JSON.stringify(r));
+    return '"' + r.f.slice(0, 120) + '"; switches: ' + quart.join('; ') + '; Kotak Flexi → Reduce (38.3%, over 25%)';
   });
 
   await t.step('3. the chat’s data: scheme signals, the goal gap, and the mature clients to de-risk', async () => {
     const r = await t.eval((ids) => {
       const s = bossSchemeSignals(riaPersonById(ids.p)), g = bossGoalGap(riaPersonById(ids.p)), g0 = bossGoalGap(riaPersonById(ids.sr));
       const m = bossMatureRebalancing(riaVisible());
-      return {sw: s.switches.map(x => x.scheme), holds: s.holds.map(x => x.scheme), nc: s.notCovered, goal: g.goals[0], gap: g.sipGap, need: g.sipNeededTotal, g0: g0.note,
+      return {sw: s.switches.map(x => x.scheme), holds: s.holds.map(x => x.scheme), nc: s.review.map(x => x.scheme), red: s.reduce.map(x => x.scheme), keys: Object.keys(s), goal: g.goals[0], gap: g.sipGap, need: g.sipNeededTotal, g0: g0.note,
         mature: m.clients.map(x => x.name + ' ' + x.midSmallValue), strategy: m.strategy};
     }, ids);
-    if(r.sw.length !== 2 || !r.sw.some(x => /DSP Midcap/.test(x)) || !r.sw.some(x => /Balanced Advantage/.test(x)) || r.holds.length !== 0 || r.nc.length !== 1
+    if(r.sw.length !== 2 || !r.sw.some(x => /DSP Midcap/.test(x)) || !r.sw.some(x => /Balanced Advantage/.test(x)) || r.holds.length !== 0 || r.nc.length !== 2 || r.red.length !== 1 || r.keys.some(k => /buy|sell|deRisk|watch|notCovered/i.test(k))
       || !r.goal || r.goal.goal !== 'Child education' || r.goal.rate !== 12 || !(r.goal.sipNeeded > 10000 && r.goal.sipNeeded < 20000) || r.gap !== r.need
       || !/No goals are mapped/.test(r.g0) || r.mature.join() !== 'ZZ Senior Test 800000' || !/15% Liquid/.test(r.strategy)) throw new Error(JSON.stringify(r));
-    return 'switches ' + r.sw.length + ', holds ' + r.holds.length + ', not in the sheet 1; goal: SIP ₹' + r.goal.sipNeeded.toLocaleString('en-IN') + '/mo for ₹25 L in ' + r.goal.years + ' yrs (no SIP running → gap the same); no goals → "map goals first"; mature: ' + r.mature.join(', ');
+    return 'switch ' + r.sw.length + ', reduce ' + r.red.length + ', review ' + r.nc.length + ', hold ' + r.holds.length + '; goal: SIP ₹' + r.goal.sipNeeded.toLocaleString('en-IN') + '/mo for ₹25 L in ' + r.goal.years + ' yrs (no SIP running → gap the same); no goals → "map goals first"; mature: ' + r.mature.join(', ');
   });
 
   await t.step('4. the review sheet: cards without a suggestion show the sheet’s; "Fill RIA suggestions" saves them and fills nothing twice', async () => {
@@ -111,7 +114,7 @@ suite(async t => {
     if(r.err) throw new Error(r.err);
     const card = (list, re) => list.find(c => re.test(c.name)) || {};
     const b = r.before;
-    if(!r.hasBtn || !/RIA: 🔴 Switch to Nippon India Gr Mid Cap/.test(card(b, /DSP Midcap/).sug) || !/RIA: 🟡 Watch/.test(card(b, /Kotak Flexi/).sug) || !/RIA: ⚪ Not in the quartile sheet/.test(card(b, /Unknown Thematic/).sug))
+    if(!r.hasBtn || !/RIA: 🔴 Switch to Nippon India Gr Mid Cap/.test(card(b, /DSP Midcap/).sug) || !/RIA: 🟠 Reduce — 38\.3% in one holding \(limit 25%\)/.test(card(b, /Kotak Flexi/).sug) || !/RIA: ⚪ Review — not in the quartile sheet/.test(card(b, /Unknown Thematic/).sug))
       throw new Error('before: ' + JSON.stringify(b).slice(0, 700));
     /* a suggestion the reviewer already typed is kept; the rest are filled */
     const r2 = await t.eval(async (id) => {
