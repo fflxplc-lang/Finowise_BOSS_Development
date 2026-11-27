@@ -29,6 +29,16 @@
         original file still loses 35 rows there as "Twice in file", and the
         clean import file goes in whole — 36 holdings on the client's book.
 
+   Since the attachment bar (27-11-2026) 📎 stages the file as a chip beside
+   the input; nothing is sent until Send / Enter, which sends the file and
+   the prompt together (an empty prompt is the full research). Tables in
+   answers are real tables: the research view's strip and holdings table
+   with Hold / Reduce / Switch / Review pills, and GitHub-style pipe tables.
+     8. staging: the chip shows the file, nothing is sent, the input has the
+        focus; ✕ removes it; a prompt typed with it is sent with it, and
+        the user's bubble shows the file badge and the prompt.
+     9. pipe tables in any answer become escaped, scrollable tables.
+
    Synthetic data only; nothing leaves the browser. */
 const fs = require('fs');
 const {suite} = require('../lib/harness');
@@ -38,12 +48,33 @@ suite(async t => {
   await t.home();
   const fresh = () => t.eval(async () => { aiCloseP(); navigate('dashboard'); ai.turns = []; aiClearDesk(); aiTogglePanel(); try { await aiRefreshStatus(true); } catch(e){} aiClearTurns(); });
   const ask = (q) => t.eval(async (q) => { const el = document.getElementById('aiInput'); if(el){ el.disabled = false; el.value = q; } ai.draft = q; await aiSend(); }, q);
-  const last = () => t.eval(() => { const x = ai.turns[ai.turns.length - 1] || {}; return {content: x.content || '', table: x.table || null, actions: (x.actions || []).map(a => a.label), files: x.upFiles ? Object.keys(x.upFiles) : []}; });
-  const upload = async (name, mimeType, buffer) => {
+  const last = () => t.eval(() => { const x = ai.turns[ai.turns.length - 1] || {}; return {content: x.content || '', view: x.upView || null, actions: (x.actions || []).map(a => a.label), files: x.upFiles ? Object.keys(x.upFiles) : [],
+    err: ai.stageErr || ''}; });
+  /* 📎 stages the file; nothing is sent until Send */
+  const stage = async (name, mimeType, buffer) => {
+    const before = await t.eval(() => ai.turns.length);
     await t.page.setInputFiles('#riaUpFile', {name, mimeType, buffer});
-    for(let i = 0; i < 80; i++){ const busy = await t.eval(() => ai.busy); if(!busy) break; await new Promise(r => setTimeout(r, 250)); }
+    await t.wait(150);
+    return t.eval((before) => ({turns: ai.turns.length - before, staged: ai.staged ? ai.staged.name : null, err: ai.stageErr || '',
+      chip: (document.getElementById('riaAttach') || {}).innerText || '', focus: (document.activeElement || {}).id || '', busy: ai.busy}), before);
+  };
+  const send = async (prompt) => {
+    await t.eval(async (q) => { const el = document.getElementById('aiInput'); if(el){ el.value = q; } ai.draft = q; await aiSend(); }, prompt || '');
+    for(let i = 0; i < 80; i++){ const busy = await t.eval(() => ai.busy); if(!busy) break; await t.wait(250); }
     return last();
   };
+  const upload = async (name, mimeType, buffer, prompt) => { const s = await stage(name, mimeType, buffer); if(!s.staged) return last(); return send(prompt); };
+  /* the answer as drawn: the strip, the table and its pills, the buttons under it */
+  const drawn = () => t.eval(() => { const turns = [...document.querySelectorAll('#aiTurns .ai-turn')]; const bot = turns[turns.length - 1], me = [...document.querySelectorAll('#aiTurns .ai-me')].pop();
+    const tb = bot && bot.querySelector('.ria-up-table');
+    return {strip: bot ? [...bot.querySelectorAll('.ria-up-strip > div')].map(d => d.innerText.replace(/\s+/g, ' ').trim()) : [],
+      head: tb ? [...tb.querySelectorAll('th')].map(x => x.textContent.trim()) : [], rows: tb ? tb.querySelectorAll('tbody tr').length : 0,
+      pills: bot ? [...bot.querySelectorAll('.ria-up-table .ria-pill')].map(x => x.className.replace('ria-pill ', '') + ':' + x.textContent) : [],
+      wrapped: !!(tb && tb.closest('.ria-table-wrap')), wrapOverflow: tb ? getComputedStyle(tb.closest('.ria-table-wrap')).overflowX : '',
+      buttonsAfter: bot ? (() => { const v = bot.querySelector('.ria-up'), b = bot.querySelector('.ria-acts'); return !!(v && b && (v.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)); })() : false,
+      buttons: bot ? [...bot.querySelectorAll('.ria-act')].map(x => x.textContent.trim()) : [],
+      meBadge: me ? ((me.querySelector('.ria-attach-badge') || {}).innerText || '') : '', meText: me ? me.innerText : '',
+      drawerW: (document.getElementById('aiTurns') || {}).clientWidth || 0, wrapW: tb ? tb.closest('.ria-table-wrap').clientWidth : 0}; });
   const download = async (label) => {
     const dl = t.page.waitForEvent('download', {timeout: 15000});
     await t.eval((label) => { const b = [...document.querySelectorAll('#aiTurns .ria-act')].reverse().find(x => x.textContent.trim().indexOf(label) === 0); if(!b) throw new Error('no button ' + label); b.click(); }, label);
@@ -65,7 +96,14 @@ suite(async t => {
     await fresh();
     const bytes = await t.eval((rows) => Array.from(xlsxBuild([{name: 'Investment Details', cols: ['Scheme / product', 'Asset class', 'Folio / account', 'ISIN', 'Units', 'NAV / price', 'Invested', 'Current value', 'Invested on', 'Note'], rows}])), sanjay);
     sanjayBytes = Buffer.from(bytes);
-    const r = await upload('Investment Details.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', sanjayBytes);
+    const sg = await stage('Investment Details.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', sanjayBytes);
+    if(sg.turns !== 0 || sg.staged !== 'Investment Details.xlsx' || !/Investment Details\.xlsx/.test(sg.chip) || !/XLSX/.test(sg.chip) || sg.focus !== 'aiInput') throw new Error('not staged: ' + JSON.stringify(sg));
+    const r = await send('');
+    const d = await drawn();
+    if(!/Investment Details\.xlsx/.test(d.meBadge) || !/Research this file/.test(d.meText) || d.strip.length !== 4 || !/^Total holdings 36/i.test(d.strip[0]) || !/Over 25% · data issues 1 · 36/i.test(d.strip[3])
+      || d.head.join('|') !== 'Scheme / Product|Current value|Weight %|Action|Rationale / Switch target' || d.rows !== 36 || d.pills.some(p => p !== 'ria-pill-review:Review') || !d.wrapped || d.wrapOverflow !== 'auto'
+      || !d.buttonsAfter || d.buttons.slice(0, 4).join('|') !== '📊 Research report (.xlsx)|📑 Research report (.csv)|📥 Clean import file (.xlsx)|📥 Clean import file (.csv)' || d.wrapW > d.drawerW)
+      throw new Error('drawn: ' + JSON.stringify(d));
     const st = await t.eval(() => ({n: ai.upload && ai.upload.up.rows.length, subject: ai.subject, noName: ai.upload && ai.upload.up.rows.filter(r => r.noName).length,
       acts: ai.upload && [...new Set(ai.upload.up.rows.map(r => r.action))], w7: ai.upload && ai.upload.up.rows[6].weightPct, total: ai.upload && ai.upload.x.curKnown}));
     sanjayBook = st;
@@ -73,8 +111,8 @@ suite(async t => {
     if(st.n !== 36 || st.noName !== 36 || st.subject !== 'upload' || st.acts.join() !== 'Review' || Math.round(st.total) !== sanjayTotal
       || !/Read \*\*36 rows\*\*, kept \*\*36\*\* — none merged: 36 rows look alike/.test(c) || !/36 rows have no scheme \/ scrip name \(the name column holds "Statement - SANJAY NARAYAN SONAWANE\.pdf"\)/.test(c)
       || !/reject \*\*35\*\* as "Twice in file"/.test(c) || !/36 rows? with no known asset class \(36 given as "Unclassified"\)/.test(c) || !/Review 36/.test(c) || !/Unidentified holding 07 [\d.]+% → Review/.test(c)
-      || BAD.test(c) || !r.table || r.table.rows.length !== 25 || r.files.join() !== 'research,import' || r.actions.length !== 5) throw new Error(JSON.stringify({st, c: c.slice(0, 1400), table: r.table && r.table.rows.length, actions: r.actions}));
-    return '36 read, 36 kept, 36 flagged (no name), 35 would-be "Twice in file" rejects counted; row 7 at ' + st.w7 + '% shown with its action (Review: identify it first)';
+      || BAD.test(c) || !r.view || r.view.rows.length !== 36 || r.files.join() !== 'research,import' || r.actions.length !== 5) throw new Error(JSON.stringify({st, c: c.slice(0, 1400), view: r.view && r.view.rows.length, actions: r.actions}));
+    return 'staged as a chip (nothing sent, input focused); Send with no prompt → full research: strip "' + d.strip[0] + '", 36-row table with Review pills in a scroller, 4 downloads under it; 35 would-be "Twice in file" rejects counted';
   });
 
   await t.step('2. the downloads: research report and clean CRM import file, .xlsx and .csv', async () => {
@@ -108,7 +146,7 @@ suite(async t => {
     await ask('clean import sheet bana do');
     const c = await last();
     if(!/^\*\*📎 Research: Investment Details\.xlsx\*\*/.test(a.content) || !/Hold \/ Reduce \/ Switch:\*\* Hold 0 · Reduce 0 · Switch 0 · Review 36/.test(a.content)
-      || !b.table || !/^Largest holdings/.test(b.table.title) || b.table.rows[0][0] !== 7
+      || !b.view || !/^Largest holdings/.test(b.view.title) || b.view.rows[0].n !== 7
       || !/^\*\*📥 Clean CRM import file — Investment Details\.xlsx\*\*/.test(c.content) || !/All \*\*36\*\* rows/.test(c.content) || !/reject 35 row\(s\) as "Twice in file"/.test(c.content) || !/^📥 Clean import file \(\.xlsx\)/.test(c.actions[0])
       || [a, b, c].some(x => BAD.test(x.content))) throw new Error(JSON.stringify({a: a.content.slice(0, 300), b: b.table && b.table.title, c: c.content.slice(0, 400), ca: c.actions}));
     return 'analysis, "Largest holdings" (row 7 first) and the clean import answer — all about the file, no model call';
@@ -123,14 +161,18 @@ suite(async t => {
       'ZZ Csv Investor,ICICI Prudential Balanced Advantage Fund Growth,F-105,,2000,50,90000,100000',
       'ZZ Csv Investor,HDFC Bank Ltd,DP-1,INE040A01034,100,1500,120000,150000',
       'Total,,,,,,750000,1000000'].join('\n');
-    const r = await upload('MF statement.csv', 'text/csv', Buffer.from(csv));
+    const r = await upload('MF statement.csv', 'text/csv', Buffer.from(csv), 'isko Hold / Reduce / Switch analysis do');
+    const d = await drawn();
+    if(!/MF statement\.csv/.test(d.meBadge) || !/isko Hold \/ Reduce \/ Switch analysis do/.test(d.meText) || d.pills[0] !== 'ria-pill-switch:Switch'
+      || !['ria-pill-reduce:Reduce', 'ria-pill-hold:Hold', 'ria-pill-review:Review'].every(p => d.pills.includes(p)) || d.buttons.length < 4)
+      throw new Error('drawn: ' + JSON.stringify(d));
     const rows = await t.eval(() => ai.upload.up.rows.map(r => ({n: r.name.split(' ').slice(0, 2).join(' '), a: r.action, w: r.weightPct, to: r.target, why: r.why})));
     const by = n => rows.filter(r => r.n === n);
     if(rows.length !== 6 || by('DSP Midcap')[0].a !== 'Switch' || !/Nippon India Gr Mid Cap/.test(by('DSP Midcap')[0].to) || by('Kotak Flexi')[0].a !== 'Reduce' || by('Kotak Flexi')[0].w !== 45
       || by('HDFC Bank')[0].a !== 'Review' || !/quartile sheet covers mutual funds only/.test(by('HDFC Bank')[0].why) || by('Motilal Oswal').length !== 2 || by('ICICI Prudential')[0].a !== 'Hold'
       || !/Read \*\*6 rows\*\*, kept \*\*6\*\* — none merged\./.test(r.content) || !/Kotak Flexi Cap Fund Regular Growth 45% → Reduce/.test(r.content) || BAD.test(r.content))
       throw new Error(JSON.stringify({rows, c: r.content.slice(0, 900)}));
-    return rows.map(x => x.n + ' ' + x.a + ' (' + x.w + '%)').join(', ') + '; the Total line skipped';
+    return 'file + "isko Hold / Reduce / Switch analysis do" in one bubble; pills Switch first: ' + d.pills.map(p => p.split(':')[1]).join(', ') + ' | ' + rows.map(x => x.n + ' ' + x.a + ' (' + x.w + '%)').join(', ') + '; the Total line skipped';
   });
 
   await t.step('5. a PDF statement is read by the statement reader', async () => {
@@ -151,13 +193,13 @@ suite(async t => {
       out.afterClear = riaUpFollowUp('concentration check karo') || !!ai.upload;
       return out;
     });
-    const bad = await upload('notes.txt', 'text/plain', Buffer.from('hello'));
-    const big = await upload('big.csv', 'text/csv', Buffer.alloc(11 * 1024 * 1024, 65));
+    const bad = await stage('notes.txt', 'text/plain', Buffer.from('hello'));
+    const big = await stage('big.csv', 'text/csv', Buffer.alloc(11 * 1024 * 1024, 65));
     const moved = await t.eval(() => { ai.upload = {up: {rows: [], name: 'x'}, x: {}}; ai.subject = 'upload'; const a = riaUpFollowUp('iska analysis do'); const c = DB.clients.find(x => !x.deletedAt);
       riaSetActiveClient(c); return {a, b: riaUpFollowUp('iska analysis do'), subject: ai.subject}; });
-    if(!r.beforeClear || r.afterClear || !/reads \.xlsx, \.xls, \.csv and \.pdf files/.test(bad.content) || !/reads files up to 10 MB/.test(big.content) || !moved.a || moved.b || moved.subject !== 'client')
-      throw new Error(JSON.stringify({r, bad: bad.content, big: big.content, moved}));
-    return 'Clear forgets it; a named client takes over; .txt and an 11 MB file refused with a plain reason';
+    if(!r.beforeClear || r.afterClear || bad.staged || bad.turns || !/reads \.xlsx, \.xls, \.csv and \.pdf files/.test(bad.err) || big.staged || !/reads files up to 10 MB/.test(big.err) || !moved.a || moved.b || moved.subject !== 'client')
+      throw new Error(JSON.stringify({r, bad, big, moved}));
+    return 'Clear forgets it; a named client takes over; .txt and an 11 MB file refused on the attachment bar, nothing staged or sent';
   });
 
   await t.step('7. production\'s client-wise importer: the original file loses 35 rows as "Twice in file"; the clean import file goes in whole', async () => {
@@ -187,5 +229,30 @@ suite(async t => {
       return {n: rows.length, total: Math.round(rows.reduce((n, r) => n + Number(r.current_value || 0), 0)), names: rows.slice(0, 2).map(r => r.security_name)}; }, cid);
     if(book.n !== 36 || book.total !== sanjayTotal) throw new Error('after import: ' + JSON.stringify(book) + ' want 36 / ' + sanjayTotal);
     return 'original: 36 read, ' + orig.dup + ' "Twice in file" (the reported failure, reproduced) | clean file: 36 new, 0 twice, 0 incomplete → imported: ' + book.n + ' holdings, ₹' + book.total.toLocaleString('en-IN') + ' on the book (platform ' + clean.platform + ')';
+  });
+
+  await t.step('8. staging: ✕ removes the file; a typed prompt goes with the file; nothing goes before Send', async () => {
+    await fresh();
+    const a = await stage('MF statement.csv', 'text/csv', Buffer.from('Scheme Name,Units,NAV,Current Value\nDSP Midcap Fund Regular Growth,10,100,1000\n'));
+    await t.eval(() => { document.querySelector('#riaAttach .ria-attach-x').click(); });
+    const gone = await t.eval(() => ({staged: ai.staged, chip: !!document.getElementById('riaAttach'), turns: ai.turns.length}));
+    if(a.turns || !a.staged || gone.staged || gone.chip || gone.turns) throw new Error(JSON.stringify({a, gone}));
+    /* Enter in the input sends the staged file with what was typed */
+    await stage('MF statement.csv', 'text/csv', Buffer.from('Scheme Name,Units,NAV,Current Value\nDSP Midcap Fund Regular Growth,10,100,1000\nKotak Flexi Cap Fund Regular Growth,5,100,500\n'));
+    await t.page.fill('#aiInput', 'concentration check karo');
+    await t.page.press('#aiInput', 'Enter');
+    for(let i = 0; i < 80; i++){ const busy = await t.eval(() => ai.busy); if(!busy) break; await t.wait(250); }
+    const r = await last(), d = await drawn();
+    const st = await t.eval(() => ({staged: ai.staged, chip: !!document.getElementById('riaAttach'), users: ai.turns.filter(x => x.role === 'user').length}));
+    if(st.staged || st.chip || st.users !== 1 || !/MF statement\.csv/.test(d.meBadge) || !/concentration check karo/.test(d.meText) || !r.view || !/^Largest holdings/.test(r.view.title) || d.rows !== 2)
+      throw new Error(JSON.stringify({st, d, title: r.view && r.view.title}));
+    return '✕ removed the chip with nothing sent; Enter sent file + "concentration check karo" as one message → "' + r.view.title + '", chip cleared';
+  });
+
+  await t.step('9. pipe tables in any answer become escaped, scrollable tables', async () => {
+    const r = await t.eval(() => { const h = aiFormat('Intro **bold**\n| Scheme | Value | Action |\n|---|---:|---|\n| ZZ <script>x</script> Fund | ₹1,20,000 | Hold |\n| Kotak | 45% | Reduce |\nAfter'); return h; });
+    if(!/^Intro <b>bold<\/b><div class="ria-table-wrap"><table class="ria-md-table">/.test(r) || !/<th>Scheme<\/th><th>Value<\/th><th>Action<\/th>/.test(r) || /<script>/.test(r) || !/&lt;script&gt;/.test(r)
+      || !/<td class="num">₹1,20,000<\/td>/.test(r) || !/<td class="num">45%<\/td>/.test(r) || !/<\/table><\/div>After$/.test(r)) throw new Error(r);
+    return 'header, right-aligned figures, escaped cells, text around the table kept';
   });
 });

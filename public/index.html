@@ -2884,6 +2884,58 @@ html,body{overflow-x:hidden;max-width:100%}
 #aiTurns .ria-tile-b{display:block!important;font-size:11px!important;color:var(--muted,#5F6B7A)!important;line-height:1.35!important}
 @media (max-width:360px){#aiTurns .ria-tiles{grid-template-columns:1fr!important}}
 html.dark #aiTurns .ria-tile{background:var(--card,#0d2430)!important;border-color:var(--line,#16323f)!important}
+/* RIA AI tables (27-11-2026): pipe tables in an answer, and the uploaded-file research view — always inside a sideways scroller, never wider than the drawer. */
+.ria-table-wrap{box-sizing:border-box;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px 0;border:1px solid var(--line);border-radius:10px;background:var(--card,#fff)}
+/* a bot turn shrink-wraps its parts; the research view and a bubble holding a table take the drawer's width instead, and the table scrolls inside it */
+.ai-turn.ai-bot > .ria-up{align-self:stretch;min-width:0;max-width:100%}
+.ai-turn.ai-bot > .ai-bubble:has(.ria-table-wrap){align-self:stretch;min-width:0;max-width:100%;box-sizing:border-box}
+.ria-md-table,.ria-up-table{width:100%;border-collapse:collapse;font-size:12px;line-height:1.35}
+.ria-md-table th,.ria-up-table th{position:sticky;top:0;background:var(--bg-soft,#f4f7f9);color:var(--muted,#5F6B7A);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.ria-md-table td,.ria-up-table td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.ria-md-table tbody tr:nth-child(even) td,.ria-up-table tbody tr:nth-child(even) td{background:rgba(22,75,94,.03)}
+.ria-md-table tbody tr:last-child td,.ria-up-table tbody tr:last-child td{border-bottom:0}
+.ria-md-table .num,.ria-up-table .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ria-up-table .ria-up-name{font-weight:600;color:var(--ink,#1d2b36);min-width:160px}
+.ria-up-table .ria-up-sub{font-size:11px;color:var(--muted,#5F6B7A);font-weight:400;margin-top:2px}
+.ria-up-table .ria-up-warn{color:#B45309}
+.ria-up-table .ria-up-why{min-width:180px;max-width:320px;color:var(--ink,#1d2b36)}
+.ria-up-table .ria-up-why b{color:var(--navy,#164B5E)}
+.ria-pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.02em;white-space:nowrap;border:1px solid transparent}
+.ria-pill-hold{background:#E7F6EC;color:#1E7A3D;border-color:#BFE5CB}
+.ria-pill-reduce{background:#FFF1E0;color:#B45309;border-color:#F8D3A6}
+.ria-pill-switch{background:#FDE8E8;color:#B42318;border-color:#F6C3C0}
+.ria-pill-review{background:#EEF1F5;color:#475467;border-color:#D5DBE3}
+.ria-up-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:4px 0}
+.ria-up-strip>div{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card,#fff)}
+.ria-up-strip span{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#5F6B7A)}
+.ria-up-strip b{display:block;font-size:15px;color:var(--navy,#164B5E);margin-top:2px;font-variant-numeric:tabular-nums}
+.ria-up-strip i{display:block;font-style:normal;font-size:11px;color:var(--muted,#5F6B7A);margin-top:1px}
+.ria-up-strip .warn{border-color:#F8D3A6;background:#FFF8EE}
+.ria-up-strip .warn b{color:#B45309}
+.ria-up-foot{font-size:11px;color:var(--muted,#5F6B7A);margin:2px 0 4px}
+.ria-up + .ria-acts,.ai-bot .ria-up ~ .ria-acts{margin-top:6px}
+.ria-attach-bar{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px 0;border-top:1px solid var(--line)}
+.ria-attach-bar + .ai-compose{border-top:0}
+.ria-attach{display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:6px 8px 6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg-soft,#f4f7f9);font-size:12px}
+.ria-attach-ico{font-size:18px;line-height:1}
+.ria-attach-name{font-weight:600;color:var(--ink,#1d2b36);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
+.ria-attach-meta{color:var(--muted,#5F6B7A);font-size:11px;white-space:nowrap}
+.ria-attach-x{border:0;background:transparent;cursor:pointer;font-size:13px;line-height:1;padding:4px 6px;border-radius:6px;color:var(--muted,#5F6B7A)}
+.ria-attach-x:hover{background:rgba(180,35,24,.08);color:#B42318}
+.ria-attach-err{width:100%;font-size:12px;color:#B42318}
+.ria-attach-badge{display:inline-flex;align-items:center;gap:6px;margin:0 0 6px;padding:4px 8px;border-radius:8px;background:rgba(255,255,255,.16);font-size:12px;font-weight:600}
+.ria-attach-badge i{font-style:normal;font-weight:400;opacity:.8}
+html.dark .ria-table-wrap,html.dark .ria-up-strip>div{background:var(--card,#0d2430);border-color:var(--line,#16323f)}
+html.dark .ria-md-table th,html.dark .ria-up-table th{background:#10303d;color:#A9B8C2}
+html.dark .ria-md-table tbody tr:nth-child(even) td,html.dark .ria-up-table tbody tr:nth-child(even) td{background:rgba(255,255,255,.03)}
+html.dark .ria-up-table .ria-up-name,html.dark .ria-up-table .ria-up-why,html.dark .ria-attach-name{color:#EEE8E2}
+html.dark .ria-up-strip b,html.dark .ria-up-table .ria-up-why b{color:#7FD3EA}
+html.dark .ria-pill-hold{background:rgba(52,168,83,.16);color:#7BD99A;border-color:rgba(52,168,83,.35)}
+html.dark .ria-pill-reduce{background:rgba(245,158,11,.16);color:#F8C26B;border-color:rgba(245,158,11,.35)}
+html.dark .ria-pill-switch{background:rgba(240,68,56,.16);color:#F7A39C;border-color:rgba(240,68,56,.35)}
+html.dark .ria-pill-review{background:rgba(152,162,179,.16);color:#C5CDD8;border-color:rgba(152,162,179,.35)}
+html.dark .ria-up-strip .warn{background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.35)}
+html.dark .ria-attach{background:#10303d;border-color:var(--line,#16323f)}
 html.dark #aiTurns .ria-greet,html.dark #aiTurns .ria-tile-t{color:#EEE8E2!important}
 html.dark #aiTurns .ria-tile:hover{border-color:var(--teal,#5EC2DE)!important;box-shadow:0 6px 18px rgba(0,0,0,.35)!important}
 /* =====================================================================
@@ -59194,7 +59246,7 @@ function aiCloseP(){ ai.open = false; aiDrawPanel(); }
 function aiClearTurns(){
   ai.conv = (ai.conv || 0) + 1;
   ai.turns = []; ai.report = null; ai.error = null;
-  ai.forceClient = null; ai.selection = null; ai.selectionEl = null; ai.activeClient = null; ai.upload = null; ai.subject = null;
+  ai.forceClient = null; ai.selection = null; ai.selectionEl = null; ai.activeClient = null; ai.upload = null; ai.subject = null; ai.staged = null; ai.stageErr = null;
   ai.scrollAnchor = null; ai.phase = ''; ai.busy = false; ai.draft = '';
   const el = document.getElementById('aiInput'); if(el) el.value = '';
   ai.context = aiContextOf();
@@ -59300,13 +59352,17 @@ function aiDrawPanel(){
               .map(q=>`<button class="quick-chip" onclick="aiReframe(${JSON.stringify(q).replace(/"/g,'&quot;')})">${esc(q)}</button>`).join('')}
           </div>
         </div>`:''}
+      ${ai.staged || ai.stageErr ? `<div class="ria-attach-bar">${ai.staged ? `<div class="ria-attach" id="riaAttach" title="${esc(ai.staged.name)}">
+          <span class="ria-attach-ico">${riaUpIcon(ai.staged.kind)}</span><span class="ria-attach-name">${esc(ai.staged.name)}</span>
+          <span class="ria-attach-meta">${esc(String(ai.staged.kind || '').toUpperCase())} · ${esc(riaUpSize(ai.staged.size))}</span>
+          <button class="ria-attach-x" onclick="riaUpUnstage()" title="Remove the file" aria-label="Remove the attached file">✕</button></div>` : ''}${ai.stageErr ? `<div class="ria-attach-err" id="riaAttachErr">⚠ ${esc(ai.stageErr)}</div>` : ''}</div>` : ''}
       <div class="ai-compose">
-        <textarea id="aiInput" rows="2" placeholder="${blocked? 'The assistant is not available' : 'Ask in English or Hinglish…'}"
-          ${blocked?'disabled':''} onkeydown="aiComposeKey(event)">${esc(ai.draft||'')}</textarea>
+        <textarea id="aiInput" rows="2" placeholder="${ai.staged ? 'Ask about this file — or press Enter for the full research…' : blocked && !riaUpTyping() ? 'The assistant is not available' : 'Ask in English or Hinglish…'}"
+          ${blocked && !riaUpTyping()?'disabled':''} onkeydown="aiComposeKey(event)">${esc(ai.draft||'')}</textarea>
         <input type="file" id="riaUpFile" accept=".xlsx,.xls,.csv,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onchange="riaUpRead(this)">
         <button class="btn ghost sm ria-up-btn" ${ai.busy?'disabled':''} onclick="riaUpPick()" title="Upload a statement or holdings sheet (.xlsx, .xls, .csv, .pdf) for RIA AI to research" aria-label="Upload a file">📎</button>
         <button class="btn ghost sm ria-menu-btn" ${blocked||ai.busy?'disabled':''} onclick="riaShowMenu()" title="Main menu" aria-label="Main menu">☰</button>
-        <button class="btn primary sm" ${blocked||ai.busy?'disabled':''} onclick="aiSend()">Send</button>
+        <button class="btn primary sm" id="aiSendBtn" ${(blocked && !riaUpTyping())||ai.busy?'disabled':''} onclick="aiSend()">Send</button>
       </div>
       <div class="ai-foot">Answers are generated. Check anything you are going to act on — and nothing here changes a BOSS record.</div>
     </aside>`;
@@ -59329,9 +59385,10 @@ function aiScrollTurns(keepTop){
 }
 function aiTurnHtml(t){
   const ti = ai.turns.indexOf(t);
-  if(t.role==='user') return `<div class="ai-turn ai-me" data-ti="${ti}"><div class="ai-bubble">${esc(t.content)}</div></div>`;
+  if(t.role==='user') return `<div class="ai-turn ai-me" data-ti="${ti}"><div class="ai-bubble">${t.attach ? `<div class="ria-attach-badge">${riaUpIcon(t.attach.kind)} ${esc(t.attach.name)} <i>${esc(riaUpSize(t.attach.size))}</i></div>${t.content ? '<br>' : ''}` : ''}${esc(t.content)}</div></div>`;
+  if(t.upView && !t.live) return `<div class="ai-turn ai-bot" data-ti="${ti}">${riaUpViewHtml(t.upView)}${riaActionsHtml(t, ti)}${t.content ? `<div class="ai-bubble ria-up-notes">${aiFormat(t.content)}</div>` : ''}${bossTurnFoot(t)}</div>`;
   return `<div class="ai-turn ai-bot" data-ti="${ti}">${t.content || t.live || !t.ui ? `<div class="ai-bubble${t.live?' ai-caret':''}"${t.live?' id="aiLiveBubble"':''}>${aiFormat(t.content)}</div>` : ''}
-    ${t.ui ? riaUiHtml(t, ti) : ''}${t.table && !t.live ? riaTableHtml(t.table) : ''}
+    ${t.ui ? riaUiHtml(t, ti) : ''}${t.table && !t.live ? riaTableHtml(t.table) : ''}${t.upView && !t.live ? riaUpViewHtml(t.upView) : ''}
     ${t.live? '' : bossTurnFoot(t)}${t.live? '' : riaActionsHtml(t, ti)}
     ${t.replaceable? `<div class="ai-acts">
       <button class="btn sm ghost" onclick="aiCopy(${t.i})">Copy</button>
@@ -59342,8 +59399,29 @@ function aiTurnHtml(t){
 /* Plain text with line breaks, simple bullets and **bold**. Nothing from a
    model is ever put on the page as markup: it is escaped first, and only the
    bold markers are turned into tags afterwards. */
+/* A GitHub-style table ("| a | b |", then "|---|---|") becomes a real table, every cell escaped like the rest, inside a sideways scroller. */
 function aiFormat(text){
-  return esc(String(text||'')).replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>');
+  const inline = t => esc(t).replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
+  const lines = String(text||'').split('\n'), out = [];
+  let buf = [];
+  const flush = () => { if(buf.length){ out.push(buf.map(inline).join('<br>')); buf = []; } };
+  const isRow = l => /^\s*\|.*\|\s*$/.test(l);
+  const isSep = l => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c=>c.trim());
+  const numeric = c => /^[-+]?(₹|Rs\.?\s*)?[-+]?[\d,]+(\.\d+)?\s*(%|L|Cr|K)?(\/mo)?$/i.test(c.replace(/\*\*/g, ''));
+  for(let i = 0; i < lines.length; i++){
+    if(isRow(lines[i]) && i + 1 < lines.length && isSep(lines[i + 1])){
+      flush();
+      const head = cells(lines[i]), body = [];
+      i += 2;
+      while(i < lines.length && isRow(lines[i])){ body.push(cells(lines[i])); i++; }
+      i--;
+      out.push('<div class="ria-table-wrap"><table class="ria-md-table"><thead><tr>' + head.map(h=>'<th>' + inline(h) + '</th>').join('') + '</tr></thead><tbody>'
+        + body.map(r=>'<tr>' + head.map((h, k)=>{ const c = r[k] == null ? '' : r[k]; return '<td' + (numeric(c) ? ' class="num"' : '') + '>' + inline(c) + '</td>'; }).join('') + '</tr>').join('') + '</tbody></table></div>');
+    } else buf.push(lines[i]);
+  }
+  flush();
+  return out.join('');
 }
 function aiPrefill(q){
   const el = document.getElementById('aiInput');
@@ -59434,6 +59512,7 @@ async function aiPageOutdated(){
 async function aiSend(){
   const el = document.getElementById('aiInput');
   const q = (el ? el.value : ai.draft || '').trim();
+  if(ai.staged && !ai.busy){ ai.draft = ''; if(el) el.value = ''; return riaUpSendStaged(q); }
   if(!q || ai.busy) return;
   ai.draft = ''; if(el) el.value = '';
   ai.error = null;
@@ -63804,7 +63883,6 @@ function riaUpTurn(up, x, focus){
   const mix = Object.keys(x.mix).sort((a, b)=>x.mix[b] - x.mix[a]).map(k=>k + ' ' + riaPct(x.mix[k], x.total) + '% (' + riaUpMoney(x.mix[k]) + ')').join(', ');
   const L = ['**📎 Research: ' + up.name + '**',
     'Read **' + riaN(n) + ' row' + (n === 1 ? '' : 's') + '**, kept **' + riaN(n) + '** — none merged' + (q.alikeRows ? ': ' + riaN(q.alikeRows) + ' rows look alike (same name, folio and ISIN) but differ in units / price / value, so each stays a holding of its own.' : '.'),
-    '', '**Holdings:** ' + riaN(n) + ' · **Invested:** ' + riaUpMoney(x.invested || null) + ' · **Current value:** ' + riaUpMoney(x.curKnown || null) + ' · **Gain:** ' + (x.gain == null ? '—' : riaUpMoney(x.gain) + (x.invested ? ' (' + (Math.round(x.gain / x.invested * 1000) / 10) + '%)' : '')),
     '', '**Asset mix:** ' + (mix || '—'),
     '**Concentration (over ' + RIA_CONC_LIMIT + '% in one holding):** ' + (x.conc.length ? x.conc.slice(0, 5).map(r=>(r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name) + ' ' + r.weightPct + '% → ' + r.action + (r.noName ? ' (identify it first)' : '')).join(', ') : 'none'),
     '**Hold / Reduce / Switch:** ' + RIA_ACTIONS.map(k=>k + ' ' + x.count[k]).join(' · ')];
@@ -63817,18 +63895,21 @@ function riaUpTurn(up, x, focus){
   (up.notes || []).forEach(t=>dq.push(t));
   if(dq.length) L.push('', '**Data quality:**', ...dq.map(t=>'- ' + t));
   const acts = up.rows.filter(r=>r.action !== 'Hold').sort((a, b)=>({Switch: 0, Reduce: 1, Review: 2}[a.action] - {Switch: 0, Reduce: 1, Review: 2}[b.action]) || (b.weightPct - a.weightPct));
-  const named = acts.filter(r=>!r.noName).slice(0, focus === 'actions' ? 15 : 5);
-  if(named.length) L.push('', '**Actions:**', ...named.map(r=>'- **' + r.action + '** — ' + r.name + ' (' + r.weightPct + '%): ' + r.why));
-  if(acts.some(r=>r.noName)) L.push('- **Review** — ' + riaN(acts.filter(r=>r.noName).length) + ' unidentified holding(s): no name to judge them by.');
-  L.push('', 'Downloads below: the **research report** (every holding with its weight, note and recommendation) and a **clean CRM import file** (' + RIA_UP_IMPORT_COLS.join(', ') + ').',
+  L.push('', 'The table shows each holding with its action; downloads below it: the **research report** (every holding with its weight, note and recommendation) and a **clean CRM import file** (' + RIA_UP_IMPORT_COLS.join(', ') + ').',
     'Read in your browser: the file was not uploaded or stored, and Clear forgets it. Recommendations are for the advisor to review — human advisor & client approval is mandatory before any transaction.');
-  const show = focus === 'concentration' ? up.rows.slice().sort((a, b)=>b.weightPct - a.weightPct).slice(0, 15) : focus === 'quality' ? up.rows.filter(r=>r.noName || !r.isin || r.cls === 'Unclassified').slice(0, 25) : up.rows.slice(0, 25);
+  const ord = {Switch: 0, Reduce: 1, Review: 2, Hold: 3};
+  const pickRows = focus === 'concentration' ? up.rows.slice().sort((a, b)=>b.weightPct - a.weightPct)
+    : focus === 'quality' ? up.rows.filter(r=>r.noName || !r.isin || r.cls === 'Unclassified')
+    : focus === 'actions' ? up.rows.slice().sort((a, b)=>(ord[a.action] - ord[b.action]) || (b.weightPct - a.weightPct)) : up.rows;
+  const show = pickRows.slice(0, 40);
   const files = riaUpFiles(up, x);
+  const issues = up.rows.filter(r=>r.noName || !r.isin || r.cls === 'Unclassified').length;
   return {content: L.join('\n'), upFiles: files,
-    table: {title: (focus === 'concentration' ? 'Largest holdings' : focus === 'quality' ? 'Rows that need enrichment' : 'Holdings') + ' — ' + up.name, show: 25,
-      cols: ['#', 'Holding', 'Class', 'Units', 'NAV / price', 'Invested', 'Current value', 'Weight %', 'Action'],
-      rows: show.map(r=>[r.n, r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name, r.cls, r.units == null ? '' : r.units, r.price == null ? '' : r.price,
-        r.invested == null ? '' : riaUpMoney(r.invested), r.current == null ? '' : riaUpMoney(r.current), r.weightPct, r.action])},
+    upView: {file: up.name, title: (focus === 'concentration' ? 'Largest holdings' : focus === 'quality' ? 'Rows that need enrichment' : focus === 'actions' ? 'Hold / Reduce / Switch — by action' : 'Holdings') + ' — ' + up.name,
+      total: pickRows.length, all: n,
+      strip: {holdings: n, invested: x.invested || null, current: x.curKnown || null, gainPct: x.gain != null && x.invested ? Math.round(x.gain / x.invested * 1000) / 10 : null, conc: x.conc.length, issues},
+      rows: show.map(r=>({n: r.n, name: r.noName ? 'Unidentified holding ' + String(r.n).padStart(2, '0') : r.name, noName: r.noName, cls: r.cls, isin: r.isin, current: r.current, weight: r.weightPct,
+        action: r.action, why: r.why, target: r.target, record: r.record}))},
     actions: [{label: '📊 Research report (.xlsx)', act: {t: 'updl', file: 'research', fmt: 'xlsx'}}, {label: '📑 Research report (.csv)', act: {t: 'updl', file: 'research', fmt: 'csv'}},
       {label: '📥 Clean import file (.xlsx)', act: {t: 'updl', file: 'import', fmt: 'xlsx'}}, {label: '📥 Clean import file (.csv)', act: {t: 'updl', file: 'import', fmt: 'csv'}},
       {label: '☰ Main Menu', act: {t: 'menu'}}]};
@@ -63839,27 +63920,72 @@ function riaUpDownload(ti, which, fmt){
   aiDownload(xlsxBuild([{name: (which === 'import' ? 'Investment Details' : 'Research').slice(0, 31), cols: f.cols, rows: f.rows}]), f.file + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   return {filename: f.file + '.xlsx', rows: f.rows.length};
 }
+/* 📎 stages the file beside the input, like any chat: the advisor types what they want of it (or nothing, for the full research) and sends both together. */
+const riaUpIcon = k => /pdf/i.test(k || '') ? '📄' : /csv/i.test(k || '') ? '🧾' : '📊';
+const riaUpSize = b => { b = Number(b) || 0; return b >= 1048576 ? (Math.round(b / 1048576 * 10) / 10) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; };
+/* the input stays usable for a staged or read file even where no AI connector is on: the file is answered here */
+const riaUpTyping = () => !!(ai.staged || (ai.upload && ai.subject === 'upload'));
 function riaUpPick(){ if(ai.busy) return; const i = document.getElementById('riaUpFile'); if(i){ i.value = ''; i.click(); } }
-async function riaUpRead(input){ const f = input && input.files && input.files[0]; if(f) await riaUpHandle(f); }
-/* A file dropped into the chat: read, researched, kept as the conversation's subject. */
-async function riaUpHandle(file){
-  if(!file || ai.busy) return {};
+function riaUpRead(input){ const f = input && input.files && input.files[0]; if(f) riaUpStage(f); }
+function riaUpStage(file){
+  if(!file || ai.busy) return;
+  const fname = String(file.name || 'file'), kind = (fname.match(RIA_UP_EXT) || [])[1];
+  ai.stageErr = null;
+  if(!kind){ ai.staged = null; ai.stageErr = 'RIA AI reads .xlsx, .xls, .csv and .pdf files. "' + fname + '" is none of these.'; }
+  else if(file.size > RIA_UP_MAX_BYTES){ ai.staged = null; ai.stageErr = '"' + fname + '" is ' + riaUpSize(file.size) + '; RIA AI reads files up to 10 MB.'; }
+  else ai.staged = {file, name: fname, size: file.size, kind: kind.toLowerCase()};
+  ai.open = true;
+  const el = document.getElementById('aiInput'); if(el) ai.draft = el.value;
+  aiDrawPanel();
+  const box = document.getElementById('aiInput'); if(box){ box.disabled = false; box.focus(); }
+}
+function riaUpUnstage(){ ai.staged = null; ai.stageErr = null; const el = document.getElementById('aiInput'); if(el) ai.draft = el.value; aiDrawPanel(); const box = document.getElementById('aiInput'); if(box) box.focus(); }
+/* Send with a staged file: the file and the prompt go together; the answer follows the prompt ("isko Hold / Reduce / Switch analysis do", "clean import sheet bana do"), or is the full research. */
+async function riaUpSendStaged(q){
+  const st = ai.staged; if(!st || ai.busy) return {};
+  ai.staged = null; ai.stageErr = null; ai.error = null;
+  ai.turns.push({role: 'user', content: q || 'Research this file', attach: {name: st.name, size: st.size, kind: st.kind}});
+  aiAnchorTurn(ai.turns.length - 1);
   const conv = ai.conv || 0;
-  riaPushUser('📎 ' + (file.name || 'file') + ' (' + Math.max(1, Math.round((file.size || 0) / 1024)) + ' KB)');
   ai.busy = true; ai.phase = 'RIA AI is reading the file'; ai.open = true; aiDrawPanel();
   try {
-    const up = await riaUpParse(file);
+    const up = await riaUpParse(st.file);
     if(conv !== (ai.conv || 0)) return {};
     const x = riaUpAnalyse(up);
     ai.upload = {up, x}; ai.subject = 'upload';
-    riaPushBot(riaUpTurn(up, x));
+    riaUpAnswer(q);
   } catch(e){
     if(conv !== (ai.conv || 0)) return {};
     riaPushBot({content: '⚠ ' + (e && e.message || e)});
   } finally {
-    if(conv === (ai.conv || 0)){ ai.busy = false; ai.phase = ''; riaDone(); }
+    if(conv === (ai.conv || 0)){ ai.busy = false; ai.phase = ''; riaDone(); ai.scrollAnchor = null; }
   }
   return {};
+}
+/* The research view: a strip of totals, then the holdings with an action pill each. */
+function riaUpViewHtml(v){
+  const pill = a => `<span class="ria-pill ria-pill-${esc(String(a).toLowerCase())}">${esc(a)}</span>`;
+  const short = t => { t = String(t || ''); const cut = t.search(/\.\s|\s—\s/); t = cut > 30 ? t.slice(0, cut) : t; return t.length > 150 ? t.slice(0, 147) + '…' : t; };
+  const st = v.strip || {};
+  const rows = (v.rows || []).map(r=>{
+    const why = r.action === 'Switch' && r.target ? `<b>→ ${esc(riaShortFund(r.target))}</b><div class="ria-up-sub">${esc(r.record ? 'Quartile: ' + r.record : short(r.why))}</div>` : esc(short(r.why));
+    const sub = [r.cls, r.noName ? '<span class="ria-up-warn">⚠ name missing</span>' : !r.isin ? 'no ISIN' : ''].filter(Boolean).map(x=>x.indexOf('<span') === 0 ? x : esc(x)).join(' · ');
+    return `<tr><td class="ria-up-name">${esc(r.name)}<div class="ria-up-sub">${sub}</div></td><td class="num">${r.current == null ? '—' : esc(riaUpMoney(r.current))}</td>
+      <td class="num">${esc(String(r.weight))}%</td><td>${pill(r.action)}</td><td class="ria-up-why">${why}</td></tr>`;
+  }).join('');
+  return `<div class="ria-up">
+    <div class="ria-chart-h"><span>📎 ${esc(v.file || '')}</span><span class="small-note" style="margin:0">read in your browser</span></div>
+    <div class="ria-up-strip">
+      <div><span>Total holdings</span><b>${esc(riaN(st.holdings || 0))}</b><i>none merged</i></div>
+      <div><span>Total invested</span><b>${esc(st.invested == null ? '—' : riaCompact2(st.invested))}</b></div>
+      <div><span>Current value</span><b>${esc(st.current == null ? '—' : riaCompact2(st.current))}</b>${st.gainPct == null ? '' : `<i>${st.gainPct >= 0 ? '+' : ''}${esc(String(st.gainPct))}% on cost</i>`}</div>
+      <div class="${st.conc || st.issues ? 'warn' : ''}"><span>Over 25% · data issues</span><b>${esc(String(st.conc || 0))} · ${esc(riaN(st.issues || 0))}</b><i>over 25% · rows to enrich</i></div>
+    </div>
+    <div class="ria-chart-h" style="margin-top:8px"><span>${esc(v.title || '')}</span></div>
+    <div class="ria-table-wrap"><table class="ria-up-table"><thead><tr><th>Scheme / Product</th><th class="num">Current value</th><th class="num">Weight %</th><th>Action</th><th>Rationale / Switch target</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    ${v.total > (v.rows || []).length ? `<div class="ria-up-foot">Showing ${(v.rows || []).length} of ${esc(riaN(v.total))} — every holding is in the research report below.</div>` : ''}
+  </div>`;
 }
 /* A question about the file just read — while it is the subject and no client is named. */
 const RIA_UP_WORDS = /\b(file|upload\w*|statement|sheet|excel|csv|pdf|import|iska|iski|iske|isme|ismein|is file|this file|concentration|weight\w*|hold|reduce|switch|review|analysis|verdict\w*|research|quality|missing|isin|unclassified|clean|total|aum|invested|current value|mix|allocation|summary|report|download|holdings?|naam|names?)\b/i;
