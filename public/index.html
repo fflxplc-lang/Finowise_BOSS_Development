@@ -2954,7 +2954,7 @@ html.dark .ai-panel .ai-me .ai-bubble{background:#0f766e}
 html.dark .ai-panel .ai-bot .ai-bubble{background:#0d2430;border-color:#16323f;box-shadow:none}
 html.dark .ai-panel .ai-turn.ai-bot::before{color:#5eead4;background:rgba(45,212,191,.10);border-color:rgba(45,212,191,.25)}
 /* SOP guides (27-11-2026): the filterable list, and the read-only viewer — a canvas, no browser PDF toolbar, never printed. */
-.ria-soplist{margin:6px 0 4px;display:flex;flex-direction:column;gap:6px;max-width:100%}
+.ria-soplist{margin:6px 0 4px;display:flex;flex-direction:column;gap:6px;max-width:100%}.ria-sop-scroll{display:flex;flex-direction:column;gap:6px;max-height:min(420px,55vh);overflow-y:auto;overscroll-behavior:contain;padding-right:4px}.ria-sop-n{font-weight:500;opacity:.6;font-size:.9em}
 .ria-sop-filter{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:8px 11px;font:inherit;font-size:12.5px;background:#fff;outline:none}
 .ria-sop-filter:focus{border-color:#0d9488;box-shadow:0 0 0 3px rgba(13,148,136,.12)}
 .ria-sop-cat-h{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#5F6B7A);margin:6px 2px 4px}
@@ -63422,6 +63422,7 @@ function riaFollow(ti, k){
   if(a.act.t==='sopview') return riaSopView(a.act.id);
   if(a.act.t==='sopup') return riaSopUploadPick(a.act.id);
   if(a.act.t==='sopbulk') return riaSopBulkPick();
+  if(a.act.t==='soppick') return riaSopPick(a.act.id);
   if(a.act.t==='sopall'){ riaPushUser(a.label.replace(/^\W+\s*/, '')); return riaSopBrowse().then(riaDone); }
   return riaRun(a.act, a.label).catch(aiIgnoreStale);
 }
@@ -64438,19 +64439,29 @@ const RIA_SOP_ASK = /\b(sop|sops|process|procedure|steps?|kaise|kese|kaisa|how|d
 function riaSopScore(s, t){
   const n = ' ' + riaUpNorm(t) + ' ';
   let score = 0;
-  (s.aliases || []).forEach(a=>{ const k = riaUpNorm(a); if(k && n.indexOf(' ' + k + ' ') >= 0) score = Math.max(score, 10 + k.split(' ').length * 3); });
+  /* an alias as typed scores most; all its words present, in any order ("email change online" for "change email online"), one less */
+  (s.aliases || []).forEach(a=>{ const k = riaUpNorm(a); if(!k) return; const w = k.split(' ');
+    if(n.indexOf(' ' + k + ' ') >= 0) score = Math.max(score, 10 + w.length * 3);
+    else if(w.length > 1 && w.every(x=>n.indexOf(' ' + x + ' ') >= 0)) score = Math.max(score, 9 + w.length * 3); });
   score += (s.keywords || []).filter(k=>String(k).length > 2 && n.indexOf(' ' + riaUpNorm(k) + ' ') >= 0).length * 2;
   score += riaUpNorm(s.title).split(' ').filter(w=>w.length > 3 && n.indexOf(' ' + w + ' ') >= 0).length;
   return score;
 }
-function riaSopFor(q, list){
+/* The guides a question points at, best first: one of its phrases (an alias) clears 12; with none, words from the
+   title and keywords may still pick a guide (5 or more) when it stands clear of the next, or ties at 7 or more.
+   Close runners-up ride along as buttons. */
+function riaSopRank(q, list){
   const t = String(q || '');
-  if(!RIA_SOP_ASK.test(t)) return null;
-  const best = (list || riaSopList()).map(s=>({s, sc: riaSopScore(s, t)})).filter(x=>x.sc >= 12).sort((a, b)=>b.sc - a.sc)[0];
-  return best ? best.s : null;
+  if(!RIA_SOP_ASK.test(t)) return [];
+  const all = (list || riaSopList()).map(s=>({s, sc: riaSopScore(s, t)})).filter(x=>x.sc > 0).sort((a, b)=>b.sc - a.sc);
+  const top = all[0];
+  if(!top || !(top.sc >= 12 || (top.sc >= 5 && (!all[1] || top.sc > all[1].sc || top.sc >= 7)))) return [];
+  return all.filter((x, i)=>i === 0 || (x.sc >= top.sc - 3 && (x.sc >= 9 || x.sc === top.sc))).slice(0, 4).map(x=>x.s);
 }
+function riaSopFor(q, list){ const r = riaSopRank(q, list); if(r.length){ r[0].__alts = r.slice(1).map(x=>x.id); return r[0]; } return null; }
 /* The guide as an answer: its steps, then the read-only view (or, for an admin, a way to add its PDF). */
-function riaSopAnswer(s){
+function riaSopAnswer(s, alts){
+  alts = (alts || s.__alts || []).map(id=>riaSopById(id)).filter(Boolean); delete s.__alts;
   const admin = typeof isAdmin === 'function' && isAdmin();
   const meta = [s.category, s.docNo ? 'Doc ' + s.docNo : '', s.date ? 'dated ' + s.date : '', s.owner ? 'owner: ' + s.owner : ''].filter(Boolean).join(' · ');
   const steps = (s.steps || []).map((x, i)=>(i + 1) + '. ' + x).join('\n');
@@ -64459,8 +64470,9 @@ function riaSopAnswer(s){
   const actions = [];
   if(s.available) actions.push({label: '📄 View Visual SOP Guide (Read-Only)', act: {t: 'sopview', id: s.id}});
   else if(admin) actions.push({label: '⬆ Add the visual guide (PDF)', act: {t: 'sopup', id: s.id}});
+  alts.forEach(a=>actions.push({label: '📘 ' + a.title, act: {t: 'soppick', id: a.id}}));
   actions.push({label: '📚 All SOP Guides (Read-Only)', act: {t: 'sopall'}}, {label: '☰ Main Menu', act: {t: 'menu'}});
-  riaPushBot({content: '**📘 SOP: ' + s.title + '**\n' + meta + '\n\n' + (steps || 'No steps are recorded for this guide yet.') + '\n\n' + tail, actions, sopDoc: s.id});
+  riaPushBot({content: '**📘 SOP: ' + s.title + '**\n' + meta + '\n\n' + (steps || 'No steps are recorded for this guide yet.') + '\n\n' + tail + (alts.length ? '\n\nNot the one? Other guides that may fit are below.' : ''), actions, sopDoc: s.id});
   return {};
 }
 /* A model answer that leaned on an SOP the registry maps gets the same button. */
@@ -64479,10 +64491,10 @@ async function riaSopBrowse(){
 function riaSopListHtml(ti){
   const list = riaSopList(), cats = [...new Set(list.map(s=>s.category || 'General'))].sort();
   return `<div class="ria-soplist" data-ti="${ti}"><input type="search" class="ria-sop-filter" placeholder="Filter guides — e.g. nominee, NRI, PAN, NJ…" oninput="riaSopFilter(this)" aria-label="Filter SOP guides">
-    ${cats.map(c=>`<div class="ria-sop-cat" data-cat="${esc(c)}"><div class="ria-sop-cat-h">${esc(c)}</div>${list.filter(s=>(s.category || 'General') === c).map(s=>
+    <div class="ria-sop-scroll">${cats.map(c=>`<div class="ria-sop-cat" data-cat="${esc(c)}"><div class="ria-sop-cat-h">${esc(c)} <span class="ria-sop-n">${list.filter(s=>(s.category || 'General') === c).length}</span></div>${list.filter(s=>(s.category || 'General') === c).map(s=>
       `<button type="button" class="ria-sop-item" data-q="${esc(riaUpNorm([s.title, s.category, (s.keywords || []).join(' '), (s.aliases || []).join(' ')].join(' ')))}" onclick="riaSopPick('${esc(s.id)}')">
         <span class="ria-sop-t">${esc(s.title)}</span><span class="ria-sop-b ${s.available ? 'on' : ''}">${s.available ? '📄 Visual guide' : 'Steps only'}</span></button>`).join('')}</div>`).join('')}
-    <div class="ria-sop-none" hidden>No guide matches.</div></div>`;
+    <div class="ria-sop-none" hidden>No guide matches.</div></div></div>`;
 }
 function riaSopFilter(el){
   const box = el.closest('.ria-soplist'), words = riaUpNorm(el.value).split(' ').filter(Boolean);
