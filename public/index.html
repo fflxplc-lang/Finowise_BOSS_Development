@@ -36259,7 +36259,15 @@ function navigate(view, arg){
   } else if(arg!==undefined){
     clientDetailId = arg;
   }
+  /* RIA AI follows the page: what is open now is its context, a record Clear dropped is forgotten once it is no longer open,
+     and an open drawer is redrawn — the CMS list after a client page no longer says "Active client: …". */
+  if(typeof ai !== 'undefined' && typeof aiContextOf === 'function'){
+    const nc = aiContextOf();
+    if(ai.droppedRecord && ai.droppedRecord !== nc.recordId) ai.droppedRecord = null;
+    ai.context = nc;
+  }
   render();
+  if(typeof ai !== 'undefined' && ai.open && typeof aiDrawPanel === 'function') aiDrawPanel();
 }
 
 async function boot(){
@@ -63251,9 +63259,13 @@ function riaMenuHtml(open, ti){
   /* Online only when a connector would answer; the desk itself works from the records either way. */
   const live = typeof aiPickConnector==='function' && !!aiPickConnector();
   const badge = `<span class="ria-live-badge${live ? '' : ' off'}" title="${live ? 'An AI connector is answering' : 'No AI connector: answers come from BOSS records and SOPs'}"><span class="ria-live-dot"></span>${live ? 'Online' : 'Records only'}</span>`;
-  /* The client this conversation is about, or the one open on screen. */
+  /* The client this conversation is about (named in it since the last Clear), or the one genuinely open on screen now — read
+     from the page as it is, not from when the drawer opened, so the CMS list never shows a client that was open earlier. A
+     client Clear dropped is not shown again until it is opened afresh (left and reopened, or another record opened). */
+  const scr = typeof aiContextOf==='function' ? aiContextOf() : ai.context;
+  const onScreen = scr && scr.module==='CMS' && scr.recordId && scr.recordId !== ai.droppedRecord ? scr.recordId : null;
   const pc = (ai.activeClient && typeof riaPersonById==='function' && riaPersonById(ai.activeClient))
-    || (ai.context && ai.context.module==='CMS' && ai.context.recordId && typeof riaPersonById==='function' ? riaPersonById(ai.context.recordId) : null);
+    || (onScreen && typeof riaPersonById==='function' ? riaPersonById(onScreen) : null);
   const pill = pc && typeof bossCanSeeClient==='function' && bossCanSeeClient(pc) ? `<div class="ria-ctx-pill"><div>👤 <b>Active client:</b> ${esc(clientDisplayName(pc))}</div>
       <div class="ria-ctx-btns"><button class="ria-ctx-btn" onclick="riaPillAct('${esc(pc.id)}','personal')">👤 Profile</button>
       <button class="ria-ctx-btn" onclick="riaPillAct('${esc(pc.id)}','kyc')">🪪 KYC</button>
