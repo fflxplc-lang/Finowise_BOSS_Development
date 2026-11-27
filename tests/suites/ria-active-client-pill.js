@@ -46,8 +46,12 @@ suite(async t => {
 
   await t.step('2. a client opened with the drawer open shows; back to the list with the drawer open: gone', async () => {
     await go(id); const a = await pill();
+    /* the card is laid out as itself (its buttons beside or under the name), not squashed by the header's one-line pill */
+    const look = await t.eval(() => { const el = document.querySelector('.ai-panel .ria-ctx-btns').closest('div.ria-ctx-pill'); const cs = getComputedStyle(el);
+      return {ws: cs.whiteSpace, display: cs.display, h: el.getBoundingClientRect().height}; });
     await go(null); const b = await pill();
     if(!/Active client: ZZ Shubham Seth/.test(a) || b) throw new Error(JSON.stringify({open: a, list: b}));
+    if(look.ws === 'nowrap' || look.display !== 'flex' || look.h < 30) throw new Error('the Active client card is squashed: ' + JSON.stringify(look));
     return 'open: "' + a + '" → list: none';
   });
 
