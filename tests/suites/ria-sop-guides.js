@@ -62,7 +62,9 @@ suite(async t => {
     const r = await ask('nomination ka process kya hai');
     if(r.sopDoc !== 'nomination-sop' || !/^\*\*📘 SOP: Nominee updation \/ addition \(CAMS nomination form\)\*\*/.test(r.content) || !/\n1\. Search "CAMS Nomination Form"/.test(r.content) || !/\n8\. Documents: self-attested PAN and Aadhaar/.test(r.content)
       || r.inline || BAD.test(r.content) || r.actions.some(l => BAD.test(l))) throw new Error(JSON.stringify(r).slice(0, 700));
-    return reg.length + ' guides; the nomination steps, numbered; actions: ' + r.actions.join(' / ') + ' — nothing about uploading or browsing every guide';
+    const staff = await t.eval(() => { const real = window.isAdmin; window.isAdmin = () => false; riaSopAnswer(riaSopById('nomination-sop')); window.isAdmin = real; return ai.turns[ai.turns.length - 1].content; });
+    if(!/Admin note: this guide's PDF is not on the server yet/.test(r.content) || /Admin note|not on the server|Setup/.test(staff)) throw new Error('admin note: ' + JSON.stringify({admin: r.content.slice(-200), staff: staff.slice(-200)}));
+    return reg.length + ' guides; the nomination steps, numbered; actions: ' + r.actions.join(' / ') + ' — nothing about uploading or browsing every guide (an admin alone is told the PDF is missing)';
   });
 
   await t.step('2. an admin adds the PDF; not-a-PDF and unregistered names are refused', async () => {
@@ -83,7 +85,7 @@ suite(async t => {
 
   await t.step('3. the deck inline under the steps: every page stacked on canvases, scrolling, read-only — and full view scrolls the same', async () => {
     const r = await ask('nominee update kaise kare');
-    if(!r.inline || r.sopDoc !== 'nomination-sop' || BAD.test(r.content) || r.actions.some(l => BAD.test(l))) throw new Error('no inline guide: ' + JSON.stringify(r).slice(0, 500));
+    if(!r.inline || r.sopDoc !== 'nomination-sop' || BAD.test(r.content) || r.actions.some(l => BAD.test(l)) || !/The SOP file itself is right below these steps/.test(r.content)) throw new Error('no inline guide: ' + JSON.stringify(r).slice(0, 500));
     for(let i = 0; i < 60; i++){ if(await t.eval(() => [...document.querySelectorAll('#aiTurns .ria-sopi canvas')].filter(c => c.width > 100).length >= 3)) break; await t.wait(200); }
     const v = await t.eval(async () => {
       const box = [...document.querySelectorAll('#aiTurns .ria-sopi')].pop(), sc = box.querySelector('.ria-sopi-scroll');

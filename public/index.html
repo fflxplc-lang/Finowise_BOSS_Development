@@ -59665,7 +59665,9 @@ async function aiSend(){
     /* an SOP question gets the firm's own guide: its steps and its read-only deck */
     /* (a client's details pasted to onboard them are not an SOP question, however many SOP words they hold) */
     const onboarding = !awaiting && riaDetectClientOnboarding(q);
-    const sopDoc = upQ || diagC || awaiting || onboarding || q.length > 200 || !RIA_SOP_ASK.test(q) ? null : riaSopFor(q, await riaSopLoad());
+    let sopDoc = upQ || diagC || awaiting || onboarding || q.length > 200 || !RIA_SOP_ASK.test(q) ? null : riaSopFor(q, await riaSopLoad());
+    /* a guide whose PDF was added since the list was read (another tab, another admin): read the list again before answering */
+    if(sopDoc && !sopDoc.available){ const alts = sopDoc.__alts; await riaSopLoad(true); sopDoc = riaSopById(sopDoc.id) || sopDoc; if(alts) sopDoc.__alts = alts; }
     const nav = upQ || diagC || sopDoc || awaiting || onboarding ? null : bossPageOpenIntent(q);
     const desk = nav || upQ || diagC || sopDoc ? null : await riaDeskHandle(q);
     out = upQ ? riaUpAnswer(q)
@@ -64427,7 +64429,7 @@ function riaDiagClientAnswer(c, q){
    ===================================================================== */
 let riaSopCache = null;
 async function riaSopLoad(force){
-  if(riaSopCache && !force && Date.now() - riaSopCache.at < 300000) return riaSopCache.list;
+  if(riaSopCache && !force && Date.now() - riaSopCache.at < 60000) return riaSopCache.list;
   try {
     const r = await fetch('/api/sops/registry', {headers: apiHeaders(), credentials: 'same-origin', cache: 'no-store'});
     const j = r.ok ? await r.json() : null;
@@ -64477,10 +64479,14 @@ function riaSopAnswer(s, alts){
   alts = (alts || s.__alts || []).map(id=>riaSopById(id)).filter(Boolean); delete s.__alts;
   const meta = [s.category, s.docNo ? 'Doc ' + s.docNo : '', s.date ? 'dated ' + s.date : '', s.owner ? 'owner: ' + s.owner : ''].filter(Boolean).join(' · ');
   const steps = (s.steps || []).map((x, i)=>(i + 1) + '. ' + x).join('\n');
-  const tail = s.available ? '\n\n**Visual guide** — scroll through it below, or expand it (read-only).' : '';
+  const admin = typeof isAdmin === 'function' && isAdmin();
+  /* the deck is the point: say so at the top, so nobody stops at the text */
+  const head = s.available ? '\n📄 **The SOP file itself is right below these steps** — scroll inside it to read every page (read-only), or expand it.\n' : '';
+  const tail = s.available ? '\n\n**Visual guide (SOP file)** — scroll through it below ↓, or press Expand Full View.'
+    : admin ? '\n\n_Admin note: this guide\'s PDF is not on the server yet, so staff see the steps only — add it in Setup › SOP Visual Guides._' : '';
   const actions = alts.map(a=>({label: '📘 ' + a.title, act: {t: 'soppick', id: a.id}}));
   actions.push({label: '☰ Main Menu', act: {t: 'menu'}});
-  riaPushBot({content: '**📘 SOP: ' + s.title + '**\n' + meta + '\n\n' + (steps || 'No steps are recorded for this guide yet.') + tail + (alts.length ? '\n\nNot the one? Other guides that may fit are below.' : ''), actions, sopDoc: s.id, sopInline: !!s.available});
+  riaPushBot({content: '**📘 SOP: ' + s.title + '**\n' + meta + head + '\n' + (steps || 'No steps are recorded for this guide yet.') + tail + (alts.length ? '\n\nNot the one? Other guides that may fit are below.' : ''), actions, sopDoc: s.id, sopInline: !!s.available});
   return {};
 }
 /* A model answer that leaned on an SOP the registry maps gets the same button. */
