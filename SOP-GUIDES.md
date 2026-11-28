@@ -1,10 +1,18 @@
 # SOP guides in RIA AI
 
 RIA AI answers an SOP question ("nomination ka process kya hai", "NRI account
-opening documents", "PAN update kaise kare") with the firm's own steps, and —
-where the deck's PDF is on the server — a **📄 View Visual SOP Guide
-(Read-Only)** button. *Self Service & SOPs › All SOP Guides* lists every guide
-with a filter.
+opening documents", "PAN update kaise kare") with the one guide that matched:
+its steps and — where the deck's PDF is on the server — every page of the
+deck, stacked, in a read-only box that scrolls just below the steps
+(**⤢ Expand Full View (Read-Only)** shows the same scroll full screen, with
+zoom). Staff never see a list of every guide or anything about uploading;
+administrators manage the PDFs in **Setup › Email & Notifications › SOP
+Visual Guides (RIA AI)**.
+
+Matching: a guide's `aliases` (the phrases people type) count most; a guide
+with `requires` answers only a question naming one of those words (HUF, NRI,
+NFLX…), and one with `excludes` steps aside when a question names one of its
+(so "physical KYC" finds Individual KYC and "HUF KYC" the HUF guide).
 
 ## What is where
 
@@ -20,7 +28,8 @@ only files the registry names, `Content-Disposition: inline`,
 `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`. The viewer draws
 the pages onto a canvas (pdf.js): no browser PDF toolbar, no download or print
 button, right-click / drag / Ctrl+S / Ctrl+P refused, a faint watermark of the
-viewer, hidden when printing. It cannot stop a screenshot or a phone camera.
+viewer, hidden when printing. It cannot stop a screenshot or a phone camera,
+and the browser does receive the PDF bytes (that is how it draws them).
 
 ## Adding the remaining decks
 
@@ -57,13 +66,14 @@ viewer, hidden when printing. It cannot stop a screenshot or a phone camera.
 
    Withheld slides are never rendered into the PDF. A 3–4 MB deck comes out
    well under 1 MB.
-4. Or upload them in RIA AI. *All SOP Guides* shows an **admin** the button
-   **⬆ Add visual guides (several PDFs) — N missing**: pick all the PDFs at
-   once and each goes to the guide whose `pdfFile` it is named after (case,
-   spaces, `_` and `-` ignored); anything else is listed as not added. For
-   one guide, an admin asking for it gets **⬆ Add the visual guide (PDF)**.
-   Either way the file goes to the server's data folder, not git (≤ 20 MB,
-   must be a PDF, only a registered name).
+4. Or upload them in **Setup › SOP Visual Guides (RIA AI)** (administrators
+   only): **⬆ Add visual guides (several PDFs)** takes all the PDFs at once
+   and each goes to the guide whose `pdfFile` it is named after (case,
+   spaces, `_` and `-` ignored); anything else is listed as not added. Each
+   row also has Upload / Replace and View (read-only). The file goes to the
+   server's data folder, not git (≤ 20 MB, must be a PDF, only a registered
+   name). Upload the PDFs this script made — a deck exported by hand keeps
+   the client slides and the boxes that hide nothing.
 5. Tidy the drafted steps in `sop-registry.json` (set `"curated": true`),
    commit the registry, and check: `node scripts/sops-build.js --check`.
 

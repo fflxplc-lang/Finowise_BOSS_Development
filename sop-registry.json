@@ -1430,7 +1430,14 @@
       "reviewedSlides": [],
       "flatten": true,
       "reviewNote": "Slide 11 shows a client's bank account row — withheld.",
-      "curated": true
+      "curated": true,
+      "requires": [
+        "huf",
+        "non individual",
+        "non-individual",
+        "karta",
+        "hindu undivided family"
+      ]
     },
     {
       "id": "huf-physical-kyc",
@@ -1454,9 +1461,10 @@
         "huf kyc form",
         "karta kyc",
         "huf account kyc",
-        "huf documents",
-        "huf kyc kaise",
-        "non individual kyc huf"
+        "non individual kyc",
+        "non-individual kyc",
+        "huf kyc process",
+        "huf documents"
       ],
       "sopIds": [],
       "steps": [
@@ -1483,7 +1491,14 @@
       "reviewedSlides": [],
       "flatten": true,
       "reviewNote": "Slides 3–10 are a real HUF's filled KYC forms, HUF PAN, bank passbook and the Karta's PAN and Aadhaar — withheld; the steps carry the process.",
-      "curated": true
+      "curated": true,
+      "requires": [
+        "huf",
+        "non individual",
+        "non-individual",
+        "karta",
+        "hindu undivided family"
+      ]
     },
     {
       "id": "finowise-individual-single-moh",
@@ -1598,14 +1613,22 @@
         "update"
       ],
       "aliases": [
+        "individual kyc",
         "individual kyc offline",
+        "physical kyc",
+        "kyc process",
+        "kyc documents",
+        "offline kyc",
+        "kyc form",
         "kyc form offline",
         "amfi kyc form",
         "kyc update",
         "change of address kyc",
         "address change kyc",
-        "kyc kaise kare offline",
-        "kyc modification form"
+        "new kyc",
+        "kyc kaise kare",
+        "kyc karna",
+        "fresh kyc"
       ],
       "sopIds": [],
       "steps": [
@@ -1643,7 +1666,13 @@
       ],
       "flatten": true,
       "reviewNote": "Slides 5, 6, 8, 12, 15, 16, 18, 19 show clients' identifying details (PAN, UCC / client code, address, bank account, mobile, e-mail, a client list with amounts, or a customer's face on a video-KYC call) — withheld from the PDF. Remaining screenshots show at most a client's name.",
-      "curated": true
+      "curated": true,
+      "excludes": [
+        "huf",
+        "non individual",
+        "karta",
+        "hindu undivided family"
+      ]
     },
     {
       "id": "finowise-individual-anyone-or-survior-moh",
@@ -1993,7 +2022,17 @@
       "reviewedSlides": [],
       "flatten": true,
       "reviewNote": "Slides 3–10 are a real client's filled KYC form, driving licence, passports, PAN and Aadhaar — withheld; the steps carry the process.",
-      "curated": true
+      "curated": true,
+      "requires": [
+        "nri",
+        "us",
+        "usa",
+        "canada",
+        "canadian",
+        "american",
+        "overseas",
+        "foreign"
+      ]
     },
     {
       "id": "nri-onboarding-single-holding-moh",
@@ -2820,6 +2859,82 @@
       ],
       "flatten": false,
       "curated": true
+    },
+    {
+      "id": "nj-pms-account-opening-offline-form-sop",
+      "title": "PMS account opening — NJ (older NJAS form)",
+      "category": "NJ / PMS / AIF / Stocks",
+      "docNo": "",
+      "date": "",
+      "owner": "",
+      "keywords": [
+        "pms",
+        "nj",
+        "njas",
+        "account",
+        "opening",
+        "offline",
+        "form",
+        "sample"
+      ],
+      "aliases": [
+        "njas pms form",
+        "old nj pms form",
+        "older pms form",
+        "nj pms old form",
+        "purana pms form"
+      ],
+      "sopIds": [],
+      "steps": [
+        "Log in to NJ Partner Desk and click NJ Assist › More › PMS › PMS Registration; download the PMS account opening form.",
+        "Fill in CAPITAL letters with a ball-point pen; tick the type of account (individual resident / NRI).",
+        "Sole / first applicant: name, father's / husband's name, DOB, PAN, UID, nationality, contact details, occupation, annual income and net worth; tick Civil servant / PEP as applicable to the client.",
+        "Bank details: bank name, branch, address, account number, MICR, IFSC and account type.",
+        "Second and third holder details if available (you may refer to the first holder's details for help).",
+        "Other details: mention any registration with another broker / portfolio manager, investment experience, time period, objective, risk tolerance and horizon; write \"NA\" where there are no preferences or regulatory actions.",
+        "Depository details are for NJAS use only; under References, mention the partner's details and take the partner's signature as per NJ records.",
+        "Declaration: affix photographs and sign across them in black ink; holders' names and signatures, place and date.",
+        "Nomination: nominee details and percentage of allocation; guardian details if the nominee is a minor; witness details.",
+        "Strategies: write the investment amount against each portfolio — the minimum total across all portfolios is ₹25,00,000 and each strategy's minimum must be met; fill the cheque details, keep the HO-use box blank, and mention the client's e-mail on the consent letter.",
+        "Documents (individual): recent photographs signed across; certified PAN copy (mandatory); bank proof (cancelled cheque, or certified bank statement / banker's letter with seal and signature).",
+        "Address proof (one, certified true copy): valid passport, election card, valid driving licence, bank statement or utility bill not older than 2 months, or municipal tax copy.",
+        "Submit the form at the nearest NJ branch."
+      ],
+      "pdfFile": "NJ_PMS_Account_Opening_Offline_Form_SOP.pdf",
+      "source": "NJ_PMS_Account_Opening_Offline_Form_SOP.pptx",
+      "slides": 58,
+      "imageOnlySlides": [
+        2,
+        3,
+        4,
+        5,
+        57
+      ],
+      "withholdSlides": [
+        11,
+        15,
+        16,
+        17,
+        23,
+        25
+      ],
+      "reviewedSlides": [
+        2,
+        3,
+        4,
+        5,
+        57
+      ],
+      "flatten": false,
+      "reviewNote": "Older NJAS form filled with a sample client's details: slides 11, 15–17, 23 and 25 (name, address, partial PAN / mobile / bank, e-mail, nominee, cheque) — withheld. Superseded by the newer NJ PMS checklist deck.",
+      "curated": true,
+      "requires": [
+        "njas",
+        "old",
+        "older",
+        "purana",
+        "previous"
+      ]
     },
     {
       "id": "nj-pms-closure-offline-sop",
@@ -4693,6 +4808,68 @@
       "curated": true
     },
     {
+      "id": "final-physical-mandate-sop",
+      "title": "Bank mandate registration — physical (NFLX Advisory Khoj)",
+      "category": "Transactions",
+      "docNo": "OPN/COB/02/02",
+      "date": "12-02-2026",
+      "owner": "Aman & Priya",
+      "keywords": [
+        "mandate",
+        "physical",
+        "ach",
+        "registration",
+        "upload",
+        "nse",
+        "signature"
+      ],
+      "aliases": [
+        "nflx physical mandate",
+        "freedom lifex physical mandate",
+        "nflx mandate physical"
+      ],
+      "sopIds": [],
+      "steps": [
+        "Open the NFLX AdvisoryKhoj software, go to Search › Investor Search, search the investor's name and click Client View.",
+        "Go to Invest Online › NSENMF Platform › Online Transactions › Bank Mandate Registration and click Create New Mandate.",
+        "Fill all the details very carefully, select Mandate Type \"Physical\", fill the mandate dates / amount (or Until Cancelled) and ARN number, and click Submit.",
+        "Check the Order Summary and click Proceed.",
+        "Check the client's registered mail ID first for the NSE mail, then download the physical mandate image attached to it.",
+        "Take the investor's signature on the mandate.",
+        "Upload it on the Next Freedom LIFEX portal: NSENMF Platform Online Transactions › Bank Mandate Upload — select the client code, bank and mandate ID, choose the file and click Upload."
+      ],
+      "pdfFile": "FINAL_Physical_Mandate_SOP_.pdf",
+      "source": "FINAL_Physical_Mandate_SOP_.pptx",
+      "slides": 16,
+      "imageOnlySlides": [],
+      "withholdSlides": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "reviewedSlides": [],
+      "flatten": true,
+      "reviewNote": "Built on the NFLX (Next Freedom LifeX) Advisory Khoj with the same client screenshots as the Finowise deck; slides 3–10 and 12–16 show clients' names with PAN, mobile, e-mail, address, IIN and mandate details — withheld.",
+      "curated": true,
+      "requires": [
+        "nflx",
+        "freedom lifex",
+        "freedomlifex",
+        "next freedom",
+        "freedom life x"
+      ]
+    },
+    {
       "id": "physical-mandate-sop",
       "title": "Bank mandate registration — physical (NSE, Finowise platform)",
       "category": "Transactions",
@@ -4745,6 +4922,65 @@
       "flatten": true,
       "reviewNote": "Slides 4, 6, 7, 9, 11, 13, 14, 15 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
+    },
+    {
+      "id": "final-aadhar-sop-with-logo-br",
+      "title": "E-mandate registration — Aadhaar (NFLX Advisory Khoj)",
+      "category": "Transactions",
+      "docNo": "OPN/COB/02/02",
+      "date": "11-02-2026",
+      "owner": "Aman & Priya",
+      "keywords": [
+        "mandate",
+        "emandate",
+        "registration",
+        "aadhaar",
+        "nse",
+        "advisorykhoj",
+        "authorization"
+      ],
+      "aliases": [
+        "nflx aadhaar mandate",
+        "nflx e mandate aadhaar",
+        "freedom lifex aadhaar mandate",
+        "nflx mandate registration"
+      ],
+      "sopIds": [],
+      "steps": [
+        "Open the NFLX AdvisoryKhoj software, go to Search › Investor Search and search the investor's name.",
+        "Click Client View, then Invest Online › NSENMF Platform › Online Transactions.",
+        "Select Bank Mandate Registration, choose the NSE client code and click Create New Mandate.",
+        "Fill all the details very carefully: bank details, mandate amount, mandate from / to date (or Until Cancelled) and the ARN number.",
+        "Select Mandate Type \"E-Mandate\" and Mandate Option \"Aadhaar\", click Submit, check the Order Summary and click Proceed.",
+        "Authorization from the client: on the NSE eNACH Authorization page, select Authorization Mode \"Aadhaar Card\" and click Confirm."
+      ],
+      "pdfFile": "FINAL_Aadhar_SOP_with_Logo_BR.pdf",
+      "source": "FINAL_Aadhar_SOP_with_Logo_BR.pptx",
+      "slides": 13,
+      "imageOnlySlides": [],
+      "withholdSlides": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        13
+      ],
+      "reviewedSlides": [],
+      "flatten": true,
+      "reviewNote": "Built on the NFLX (Next Freedom LifeX) Advisory Khoj with the same client screenshots as the Finowise deck; slides 3–10, 12 and 13 show clients' names with PAN, mobile, e-mail, address, IIN and mandate details — withheld.",
+      "curated": true,
+      "requires": [
+        "nflx",
+        "freedom lifex",
+        "freedomlifex",
+        "next freedom",
+        "freedom life x"
+      ]
     },
     {
       "id": "mandate-registration-e-mandate-aadhar-card-1",
@@ -4800,6 +5036,64 @@
       "curated": true
     },
     {
+      "id": "final-debitcard-sop-with-logo-br",
+      "title": "E-mandate registration — debit card (NFLX Advisory Khoj)",
+      "category": "Transactions",
+      "docNo": "OPN/COB/02/02",
+      "date": "11-02-2026",
+      "owner": "Aman & Priya",
+      "keywords": [
+        "mandate",
+        "emandate",
+        "registration",
+        "debit",
+        "nse",
+        "advisorykhoj",
+        "authorization"
+      ],
+      "aliases": [
+        "nflx debit card mandate",
+        "nflx e mandate debit card",
+        "freedom lifex debit card mandate"
+      ],
+      "sopIds": [],
+      "steps": [
+        "Open the NFLX AdvisoryKhoj software, go to Search › Investor Search and search the investor's name.",
+        "Click Client View, then Invest Online › NSENMF Platform › Online Transactions.",
+        "Select Bank Mandate Registration, choose the NSE client code and click Create New Mandate.",
+        "Fill all the details very carefully: bank details, mandate amount, mandate from / to date (or Until Cancelled) and the ARN number.",
+        "Select Mandate Type \"E-Mandate\" and Mandate Option \"Debit Card\", click Submit, check the Order Summary and click Proceed.",
+        "Authorization from the client: on the NSE eNACH Authorization page, select Authorization Mode \"Debit Card\" and click Confirm."
+      ],
+      "pdfFile": "FINAL_DebitCard_SOP_with_Logo_BR.pdf",
+      "source": "FINAL_DebitCard_SOP_with_Logo_BR.pptx",
+      "slides": 13,
+      "imageOnlySlides": [],
+      "withholdSlides": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        13
+      ],
+      "reviewedSlides": [],
+      "flatten": true,
+      "reviewNote": "Built on the NFLX (Next Freedom LifeX) Advisory Khoj with the same client screenshots as the Finowise deck; slides 3–10, 12 and 13 show clients' names with PAN, mobile, e-mail, address, IIN and mandate details — withheld.",
+      "curated": true,
+      "requires": [
+        "nflx",
+        "freedom lifex",
+        "freedomlifex",
+        "next freedom",
+        "freedom life x"
+      ]
+    },
+    {
       "id": "mandate-registration-e-mandate-debit-card",
       "title": "E-mandate registration — debit card (NSE MF, Finowise software)",
       "category": "Transactions",
@@ -4851,6 +5145,64 @@
       "flatten": true,
       "reviewNote": "Slides 4, 5, 6, 7, 9, 10, 11, 12, 13 show clients' identifying details (PAN, IIN / client code, folio, bank account, address, mobile, e-mail, or a client list with amounts) — withheld from the PDF. Remaining screenshots show at most a client's name.",
       "curated": true
+    },
+    {
+      "id": "final-netbanking-sop-with-logo-br",
+      "title": "E-mandate registration — net banking (NFLX Advisory Khoj)",
+      "category": "Transactions",
+      "docNo": "OPN/COB/02/01",
+      "date": "10-02-2026",
+      "owner": "Aman & Priya",
+      "keywords": [
+        "mandate",
+        "emandate",
+        "registration",
+        "netbanking",
+        "nse",
+        "advisorykhoj",
+        "authorization"
+      ],
+      "aliases": [
+        "nflx net banking mandate",
+        "nflx e mandate net banking",
+        "freedom lifex net banking mandate"
+      ],
+      "sopIds": [],
+      "steps": [
+        "Open the NFLX AdvisoryKhoj software, go to Search › Investor Search and search the investor's name.",
+        "Click Client View, then Invest Online › NSENMF Platform › Online Transactions.",
+        "Select Bank Mandate Registration, choose the NSE client code and click Create New Mandate.",
+        "Fill all the details very carefully: bank details, mandate amount, mandate from / to date (or Until Cancelled) and the ARN number.",
+        "Select Mandate Type \"E-Mandate\" and Mandate Option \"Net Banking\", click Submit, check the Order Summary and click Proceed.",
+        "Authorization from the client: on the NSE eNACH Authorization page, select Authorization Mode \"Net Banking\" and click Confirm."
+      ],
+      "pdfFile": "FINAL_NetBanking_SOP_with_Logo_BR.pdf",
+      "source": "FINAL_NetBanking_SOP_with_Logo_BR.pptx",
+      "slides": 13,
+      "imageOnlySlides": [],
+      "withholdSlides": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        13
+      ],
+      "reviewedSlides": [],
+      "flatten": true,
+      "reviewNote": "Built on the NFLX (Next Freedom LifeX) Advisory Khoj with the same client screenshots as the Finowise deck; slides 3–10, 12 and 13 show clients' names with PAN, mobile, e-mail, address, IIN and mandate details — withheld.",
+      "curated": true,
+      "requires": [
+        "nflx",
+        "freedom lifex",
+        "freedomlifex",
+        "next freedom",
+        "freedom life x"
+      ]
     },
     {
       "id": "mandate-registration-e-mandate-net-banking",

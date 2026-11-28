@@ -2954,16 +2954,6 @@ html.dark .ai-panel .ai-me .ai-bubble{background:#0f766e}
 html.dark .ai-panel .ai-bot .ai-bubble{background:#0d2430;border-color:#16323f;box-shadow:none}
 html.dark .ai-panel .ai-turn.ai-bot::before{color:#5eead4;background:rgba(45,212,191,.10);border-color:rgba(45,212,191,.25)}
 /* SOP guides (27-11-2026): the filterable list, and the read-only viewer — a canvas, no browser PDF toolbar, never printed. */
-.ria-soplist{margin:6px 0 4px;display:flex;flex-direction:column;gap:6px;max-width:100%}.ria-sop-scroll{display:flex;flex-direction:column;gap:6px;max-height:min(420px,55vh);overflow-y:auto;overscroll-behavior:contain;padding-right:4px}.ria-sop-n{font-weight:500;opacity:.6;font-size:.9em}
-.ria-sop-filter{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:8px 11px;font:inherit;font-size:12.5px;background:#fff;outline:none}
-.ria-sop-filter:focus{border-color:#0d9488;box-shadow:0 0 0 3px rgba(13,148,136,.12)}
-.ria-sop-cat-h{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#5F6B7A);margin:6px 2px 4px}
-.ria-sop-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;text-align:left;padding:8px 10px;margin:0 0 5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-size:12.5px}
-.ria-sop-item:hover{border-color:#5eead4;background:#f0fdfa}
-.ria-sop-t{font-weight:600;color:var(--ink,#0f172a)}
-.ria-sop-b{flex:0 0 auto;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:#f1f5f9;color:#64748b;white-space:nowrap}
-.ria-sop-b.on{background:#ccfbf1;color:#0f766e}
-.ria-sop-none{font-size:12px;color:var(--muted,#5F6B7A);padding:4px 2px}
 .ria-sopv{position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(15,23,42,.62);-webkit-user-select:none;user-select:none}
 .ria-sopv-card{display:flex;flex-direction:column;width:min(1100px,100%);height:min(92vh,100%);background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.35)}
 .ria-sopv-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid #e2e8f0;background:#f8fafc}
@@ -2979,15 +2969,21 @@ html.dark .ai-panel .ai-turn.ai-bot::before{color:#5eead4;background:rgba(45,212
 .ria-sopv-x{font-size:18px;line-height:1}
 .ria-sopv-page,.ria-sopv-zoom{min-width:56px;text-align:center;font-size:12.5px;font-weight:600;color:#0f172a;font-variant-numeric:tabular-nums}
 .ria-sopv-sep{width:1px;height:22px;background:#e2e8f0;margin:0 2px}
-.ria-sopv-body{flex:1;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:16px;background:#e2e8f0}
+.ria-sopv-body{flex:1;overflow-y:auto;overflow-x:auto;display:flex;flex-direction:column;align-items:center;gap:14px;padding:16px;background:#e2e8f0;overscroll-behavior:contain}
+.ria-sopp{display:flex;flex-direction:column;align-items:center;gap:4px;flex:0 0 auto}
+.ria-sopp-no{font-size:11px;font-weight:600;color:#64748b;letter-spacing:.02em}
+.ria-sopp-c{display:block;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.16);border-radius:4px;pointer-events:none;-webkit-user-drag:none}
+.ria-sopi-slot{margin:8px 0 2px;align-self:stretch;width:100%}
+.ria-sopi{border:1px solid #cbd5e1;border-radius:12px;overflow:hidden;background:#f8fafc;-webkit-user-select:none;user-select:none;outline:none}
+.ria-sopi:focus-visible{box-shadow:0 0 0 3px rgba(13,148,136,.25)}
+.ria-sopi-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid #e2e8f0;background:#fff}
+.ria-sopi-n{flex:1 1 auto;font-size:12px;font-weight:600;color:#334155}
+.ria-sopi-x{border:1px solid #99f6e4;background:#f0fdfa;color:#0f766e;border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.ria-sopi-x:hover{background:#ccfbf1}
+.ria-sopi-scroll{max-height:min(520px,62vh);min-height:220px;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px 8px;background:#e2e8f0;overscroll-behavior:contain}
 .ria-sopv-canvas{display:block;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.18);pointer-events:none;-webkit-user-drag:none}
 .ria-sopv-msg{margin:auto;font-size:13px;color:#334155}
-@media print{.ria-sopv,#riaSopViewer{display:none!important}}
-html.dark .ria-sop-filter,html.dark .ria-sop-item{background:#0d2430;border-color:#1f4a5a;color:#EEE8E2}
-html.dark .ria-sop-item:hover{background:rgba(45,212,191,.08);border-color:rgba(45,212,191,.4)}
-html.dark .ria-sop-t{color:#EEE8E2}
-html.dark .ria-sop-b{background:#10303d;color:#A9B8C2}
-html.dark .ria-sop-b.on{background:rgba(45,212,191,.16);color:#5eead4}
+@media print{.ria-sopv,#riaSopViewer,.ria-sopi,.ria-sopi-slot{display:none!important}}
 html.dark .ria-sopv-card{background:#0b1f29}
 html.dark .ria-sopv-head{background:#0d2430;border-color:#16323f}
 html.dark .ria-sopv-title b,html.dark .ria-sopv-page,html.dark .ria-sopv-zoom{color:#EEE8E2}
@@ -2996,6 +2992,12 @@ html.dark .ria-sopv-btn:hover:not(:disabled){background:rgba(45,212,191,.12);col
 html.dark .ria-sopv-sep{background:#1f4a5a}
 html.dark .ria-sopv-body{background:#06141b}
 html.dark .ria-sopv-msg{color:#A9B8C2}
+html.dark .ria-sopp-no{color:#A9B8C2}
+html.dark .ria-sopi{background:#0b1f29;border-color:#1f4a5a}
+html.dark .ria-sopi-head{background:#0d2430;border-color:#16323f}
+html.dark .ria-sopi-n{color:#EEE8E2}
+html.dark .ria-sopi-x{background:rgba(45,212,191,.12);border-color:rgba(45,212,191,.4);color:#5eead4}
+html.dark .ria-sopi-scroll{background:#06141b}
 /* RIA AI tables (27-11-2026): pipe tables in an answer, and the uploaded-file research view — always inside a sideways scroller, never wider than the drawer. */
 .ria-table-wrap{box-sizing:border-box;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px 0;border:1px solid var(--line);border-radius:10px;background:var(--card,#fff)}
 /* a bot turn shrink-wraps its parts; the research view and a bubble holding a table take the drawer's width instead, and the table scrolls inside it */
@@ -59495,6 +59497,7 @@ function aiDrawPanel(){
       <div class="ai-foot">Answers are generated. Check anything you are going to act on — and nothing here changes a BOSS record.</div>
     </aside>`;
   aiScrollTurns(keepTop);
+  if(typeof riaSopMount === 'function') riaSopMount();
 }
 /* A new answer opens at its start: the question just above it at the top
    of the panel, the answer reading down from there, charts and all —
@@ -60647,7 +60650,10 @@ function bossTurnFoot(t){
       <button class="btn sm ghost" onclick="bossDownloadTurnReport(${ti}, 'csv')">📑 Download CSV</button></div>` : '';
   /* an answer that leaned on an SOP with a visual guide offers it, read-only */
   const sd = typeof riaSopDocsFor === 'function' ? riaSopDocsFor(t).map(s=>`<button class="quick-chip ria-act" onclick="riaSopView('${esc(s.id)}')">📄 View Visual SOP Guide (Read-Only) — ${esc(s.title)}</button>`).join('') : '';
-  return (cl || sp || op || ch || mk || chs || ex || sd) ? `${mk}${ch}${chs}${gov}${ex}<div class="ai-acts" style="flex-wrap:wrap">${op}${pdf}${cl}${sd}</div>${sp}` : '';
+  /* the matched SOP's own visual guide, inline (riaSopMount puts the drawn viewer in this slot after every redraw) */
+  const sv = t.sopInline && t.sopDoc ? `<div class="ria-sopi-slot" data-sop="${esc(t.sopDoc)}" data-ti="${ti}"></div>` : '';
+  if(sv && !(cl || sp || op || ch || mk || chs || ex || sd)) return sv;
+  return (cl || sp || op || ch || mk || chs || ex || sd) ? `${sv}${mk}${ch}${chs}${gov}${ex}<div class="ai-acts" style="flex-wrap:wrap">${op}${pdf}${cl}${sd}</div>${sp}` : '';
 }
 
 /* =====================================================================
@@ -63280,7 +63286,7 @@ const RIA_MENU = [
   {id:'self', icon:'🛠️', title:'Self Service & SOPs', blurb:'eKYC, mandates, transfers, LA MF, nominee, transmission',
    subs:[['q:fresh eKYC process steps documents', 'Fresh eKYC'], ['q:physical KYC process steps documents', 'Physical KYC'], ['q:mandate registration process steps', 'Mandate Registration'],
      ['q:change of broker process steps documents', 'Change of Broker'], ['q:transfer of units process', 'Transfer of Units'], ['q:loan against mutual funds LAMF', 'LA MF'],
-     ['q:nominee and bank update process steps documents', 'Nominee / Bank Update'], ['q:transmission process documents', 'Transmission'], ['sopall', '📚 All SOP Guides (Read-Only)'], ['screens', 'Open Any BOSS Screen']]},
+     ['q:nominee and bank update process steps documents', 'Nominee / Bank Update'], ['q:transmission process documents', 'Transmission'], ['screens', 'Open Any BOSS Screen']]},
   {id:'help', icon:'🆘', title:'Help & Support', blurb:'QMS tickets, escalation matrix, TATs',
    subs:[['qms', 'QMS Ticket Status'], ['escalation', 'Level 1 / 2 / 3 Escalation Matrix'], ['tat', 'TATs']]},
 ];
@@ -63346,7 +63352,6 @@ function riaUiHtml(t, ti){
   const u = t.ui;
   if(!u) return '';
   if(u.kind==='menu') return riaMenuHtml(u.open || null, ti);
-  if(u.kind==='soplist') return riaSopListHtml(ti);
   if(u.kind==='list') return `<div class="ria-list">${u.items.map((it, k)=>`<button class="ria-sub" onclick="riaAct(${ti},${k})">${esc(it.label)}</button>`).join('')}</div>`;
   return '';
 }
@@ -63388,7 +63393,6 @@ async function riaSubPick(ti, catId, k){
   riaPushUser(label);
   if(RIA_LOOKUP_TOPICS[key]) riaStartLookup(key, label);
   else if(key==='screens') riaScreens();
-  else if(key==='sopall') return riaSopBrowse().then(riaDone);
   else if(key==='escalation') riaEscalation();
   else if(key==='tat') riaTats();
   else if(key==='qms') riaQms();
@@ -63422,10 +63426,7 @@ function riaFollow(ti, k){
   if(a.act.t==='dl') return riaDownloadTable(ti, a.act.fmt);
   if(a.act.t==='updl') return riaUpDownload(ti, a.act.file, a.act.fmt);
   if(a.act.t==='sopview') return riaSopView(a.act.id);
-  if(a.act.t==='sopup') return riaSopUploadPick(a.act.id);
-  if(a.act.t==='sopbulk') return riaSopBulkPick();
   if(a.act.t==='soppick') return riaSopPick(a.act.id);
-  if(a.act.t==='sopall'){ riaPushUser(a.label.replace(/^\W+\s*/, '')); return riaSopBrowse().then(riaDone); }
   return riaRun(a.act, a.label).catch(aiIgnoreStale);
 }
 async function riaRun(act, label){
@@ -64440,6 +64441,10 @@ const riaSopById = id => riaSopList().find(s=>s.id === id) || null;
 const RIA_SOP_ASK = /\b(sop|sops|process|procedure|steps?|kaise|kese|kaisa|how|documents?|docs|form|guide|karna|karein|kare|karte|update|updation|correction|change|opening|kholna|onboarding|registration|add|addition)\b/i;
 function riaSopScore(s, t){
   const n = ' ' + riaUpNorm(t) + ' ';
+  /* a guide for one kind of client only (HUF, NRI…) answers only a question that names that kind */
+  if((s.requires || []).length && !s.requires.some(r=>{ const k = riaUpNorm(r); return k && n.indexOf(' ' + k + ' ') >= 0; })) return 0;
+  /* and a general guide steps aside when the question names a kind it is not for ("non-individual KYC") */
+  if((s.excludes || []).some(r=>{ const k = riaUpNorm(r); return k && n.indexOf(' ' + k + ' ') >= 0; })) return 0;
   let score = 0;
   /* an alias as typed scores most; all its words present, in any order ("email change online" for "change email online"), one less */
   (s.aliases || []).forEach(a=>{ const k = riaUpNorm(a); if(!k) return; const w = k.split(' ');
@@ -64467,18 +64472,15 @@ function riaSopRank(q, list){
 function riaSopFor(q, list){ const r = riaSopRank(q, list); if(r.length){ r[0].__alts = r.slice(1).map(x=>x.id); return r[0]; } return null; }
 /* The guide as an answer: its steps, then the read-only view (or, for an admin, a way to add its PDF). */
 function riaSopAnswer(s, alts){
+  /* Only the guide that matched: its steps, and — when its PDF is on the server — the deck itself, read-only,
+     scrolling just below them. No list of every guide, and nothing about uploading: that lives in Setup. */
   alts = (alts || s.__alts || []).map(id=>riaSopById(id)).filter(Boolean); delete s.__alts;
-  const admin = typeof isAdmin === 'function' && isAdmin();
   const meta = [s.category, s.docNo ? 'Doc ' + s.docNo : '', s.date ? 'dated ' + s.date : '', s.owner ? 'owner: ' + s.owner : ''].filter(Boolean).join(' · ');
   const steps = (s.steps || []).map((x, i)=>(i + 1) + '. ' + x).join('\n');
-  const tail = s.available ? 'The visual guide — the deck with its screenshots — opens read-only below.'
-    : admin ? 'No visual guide is on the server for this SOP yet: add its PDF below (admins only).' : 'The visual guide for this SOP has not been added yet.';
-  const actions = [];
-  if(s.available) actions.push({label: '📄 View Visual SOP Guide (Read-Only)', act: {t: 'sopview', id: s.id}});
-  else if(admin) actions.push({label: '⬆ Add the visual guide (PDF)', act: {t: 'sopup', id: s.id}});
-  alts.forEach(a=>actions.push({label: '📘 ' + a.title, act: {t: 'soppick', id: a.id}}));
-  actions.push({label: '📚 All SOP Guides (Read-Only)', act: {t: 'sopall'}}, {label: '☰ Main Menu', act: {t: 'menu'}});
-  riaPushBot({content: '**📘 SOP: ' + s.title + '**\n' + meta + '\n\n' + (steps || 'No steps are recorded for this guide yet.') + '\n\n' + tail + (alts.length ? '\n\nNot the one? Other guides that may fit are below.' : ''), actions, sopDoc: s.id});
+  const tail = s.available ? '\n\n**Visual guide** — scroll through it below, or expand it (read-only).' : '';
+  const actions = alts.map(a=>({label: '📘 ' + a.title, act: {t: 'soppick', id: a.id}}));
+  actions.push({label: '☰ Main Menu', act: {t: 'menu'}});
+  riaPushBot({content: '**📘 SOP: ' + s.title + '**\n' + meta + '\n\n' + (steps || 'No steps are recorded for this guide yet.') + tail + (alts.length ? '\n\nNot the one? Other guides that may fit are below.' : ''), actions, sopDoc: s.id, sopInline: !!s.available});
   return {};
 }
 /* A model answer that leaned on an SOP the registry maps gets the same button. */
@@ -64486,88 +64488,199 @@ function riaSopDocsFor(t){
   const ids = (t && t.sops || []).map(x=>x.id);
   return ids.length ? riaSopList().filter(s=>s.available && (s.sopIds || []).some(id=>ids.indexOf(id) >= 0)) : [];
 }
-/* All SOP Guides: every guide, grouped, with a filter. */
-async function riaSopBrowse(){
-  const list = await riaSopLoad();
-  const admin = typeof isAdmin === 'function' && isAdmin(), missing = list.filter(s=>!s.available && s.pdfFile).length;
-  riaPushBot({content: '**📚 All SOP Guides (Read-Only)** — ' + riaN(list.length) + ' guide' + (list.length === 1 ? '' : 's') + ', ' + riaN(list.filter(s=>s.available).length) + ' with a visual guide. Type to filter; pick one for its steps.', ui: {kind: 'soplist'},
-    actions: admin ? [{label: '⬆ Add visual guides (several PDFs)' + (missing ? ' — ' + riaN(missing) + ' missing' : ''), act: {t: 'sopbulk'}}] : undefined});
-  return {};
-}
-function riaSopListHtml(ti){
-  const list = riaSopList(), cats = [...new Set(list.map(s=>s.category || 'General'))].sort();
-  return `<div class="ria-soplist" data-ti="${ti}"><input type="search" class="ria-sop-filter" placeholder="Filter guides — e.g. nominee, NRI, PAN, NJ…" oninput="riaSopFilter(this)" aria-label="Filter SOP guides">
-    <div class="ria-sop-scroll">${cats.map(c=>`<div class="ria-sop-cat" data-cat="${esc(c)}"><div class="ria-sop-cat-h">${esc(c)} <span class="ria-sop-n">${list.filter(s=>(s.category || 'General') === c).length}</span></div>${list.filter(s=>(s.category || 'General') === c).map(s=>
-      `<button type="button" class="ria-sop-item" data-q="${esc(riaUpNorm([s.title, s.category, (s.keywords || []).join(' '), (s.aliases || []).join(' ')].join(' ')))}" onclick="riaSopPick('${esc(s.id)}')">
-        <span class="ria-sop-t">${esc(s.title)}</span><span class="ria-sop-b ${s.available ? 'on' : ''}">${s.available ? '📄 Visual guide' : 'Steps only'}</span></button>`).join('')}</div>`).join('')}
-    <div class="ria-sop-none" hidden>No guide matches.</div></div></div>`;
-}
-function riaSopFilter(el){
-  const box = el.closest('.ria-soplist'), words = riaUpNorm(el.value).split(' ').filter(Boolean);
-  let shown = 0;
-  box.querySelectorAll('.ria-sop-item').forEach(b=>{ const q = b.getAttribute('data-q') || ''; const ok = words.every(w=>q.indexOf(w) >= 0); b.hidden = !ok; if(ok) shown++; });
-  box.querySelectorAll('.ria-sop-cat').forEach(c=>{ c.hidden = !c.querySelector('.ria-sop-item:not([hidden])'); });
-  const none = box.querySelector('.ria-sop-none'); if(none) none.hidden = shown > 0;
-}
 function riaSopPick(id){
   if(ai.busy) return;
   const s = riaSopById(id); if(!s) return;
   riaPushUser(s.title); riaSopAnswer(s); riaDone();
 }
-/* An admin adds a guide's PDF: it goes to the server's data folder, not git. */
-function riaSopUploadPick(id){
-  const s = riaSopById(id); if(!s || !(typeof isAdmin === 'function' && isAdmin())) return;
-  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/pdf,.pdf';
-  inp.onchange = async ()=>{
-    const f = inp.files && inp.files[0]; if(!f) return;
-    if(f.size > 20 * 1048576){ riaPushBot({content: '⚠ That PDF is over 20 MB. Compress it first (scripts/sops-build.js --convert).'}); return riaDone(); }
+/* ---- Setup › SOP Visual Guides (admins): every guide, which have their PDF, and adding them ----
+   PDFs go to the server's data folder, never git. Many at once: each file goes to the guide whose pdfFile
+   it is named after (case, spaces, _ and - ignored); anything else is reported, not guessed. */
+const riaSopFileKey = n => String(n || '').toLowerCase().replace(/\.pdf$/, '').replace(/[^a-z0-9]+/g, '');
+const riaSopAdmin = {msg: '', busy: false, filter: ''};
+async function riaSopPut(s, f){
+  if(f.size > 20 * 1048576) return {ok: false, why: 'over 20 MB'};
+  try {
     const r = await fetch('/api/sops/pdf/' + encodeURIComponent(s.pdfFile), {method: 'PUT', headers: Object.assign({'Content-Type': 'application/pdf'}, apiHeaders()), credentials: 'same-origin', body: f});
     const j = await r.json().catch(()=>({}));
-    if(!r.ok){ riaPushBot({content: '⚠ ' + (j.error || 'The guide could not be added.')}); return riaDone(); }
-    await riaSopLoad(true);
-    riaPushBot({content: '✅ Added the visual guide for **' + s.title + '** (' + riaUpSize(j.bytes) + ').', actions: [{label: '📄 View Visual SOP Guide (Read-Only)', act: {t: 'sopview', id: s.id}}]});
-    riaDone();
-  };
-  inp.click();
-}
-/* An admin adds many guides at once: each PDF goes to the guide whose pdfFile has its name (case and _ / - / space ignored). */
-const riaSopFileKey = n => String(n || '').toLowerCase().replace(/\.pdf$/, '').replace(/[^a-z0-9]+/g, '');
-function riaSopBulkPick(){
-  if(!(typeof isAdmin === 'function' && isAdmin())) return;
-  const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.accept = 'application/pdf,.pdf';
-  inp.onchange = ()=>riaSopBulkUpload([...(inp.files || [])]);
-  inp.click();
+    return r.ok ? {ok: true, bytes: j.bytes} : {ok: false, why: j.error || 'refused (' + r.status + ')'};
+  } catch(e){ return {ok: false, why: 'the upload failed'}; }
 }
 async function riaSopBulkUpload(files){
-  if(!files.length || !(typeof isAdmin === 'function' && isAdmin())) return;
+  if(!files.length || !(typeof isAdmin === 'function' && isAdmin())) return null;
   const byKey = {}; riaSopList().forEach(s=>{ if(s.pdfFile) byKey[riaSopFileKey(s.pdfFile)] = s; });
   const done = [], skipped = [];
-  riaPushBot({content: '⏳ Adding ' + riaN(files.length) + ' PDF' + (files.length === 1 ? '' : 's') + '…'});
-  riaDone();
   for(const f of files){
     const s = byKey[riaSopFileKey(f.name)];
     if(!s){ skipped.push(f.name + ' — no guide has this file name'); continue; }
-    if(f.size > 20 * 1048576){ skipped.push(f.name + ' — over 20 MB'); continue; }
-    try {
-      const r = await fetch('/api/sops/pdf/' + encodeURIComponent(s.pdfFile), {method: 'PUT', headers: Object.assign({'Content-Type': 'application/pdf'}, apiHeaders()), credentials: 'same-origin', body: f});
-      const j = await r.json().catch(()=>({}));
-      if(r.ok) done.push(s.title); else skipped.push(f.name + ' — ' + (j.error || 'refused'));
-    } catch(e){ skipped.push(f.name + ' — the upload failed'); }
+    const r = await riaSopPut(s, f);
+    if(r.ok) done.push(s.title); else skipped.push(f.name + ' — ' + r.why);
   }
   const list = await riaSopLoad(true);
-  riaPushBot({content: '✅ Added ' + riaN(done.length) + ' visual guide' + (done.length === 1 ? '' : 's') + '. ' + riaN(list.filter(s=>s.available).length) + ' of ' + riaN(list.length) + ' guides now have one.'
-    + (skipped.length ? '\n\nNot added (' + riaN(skipped.length) + '):\n' + skipped.slice(0, 30).map(x=>'• ' + x).join('\n') + (skipped.length > 30 ? '\n• …and ' + riaN(skipped.length - 30) + ' more' : '') : ''),
-    actions: [{label: '📚 All SOP Guides (Read-Only)', act: {t: 'sopall'}}]});
-  riaDone();
+  return {done, skipped, available: list.filter(s=>s.available).length, total: list.length};
 }
-/* ---- the read-only viewer ---- */
-const riaSopV = {pdf: null, page: 1, pages: 0, scale: null, id: null, keys: null, rendering: null};
+function riaSopPickFiles(multiple, then){
+  const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = !!multiple; inp.accept = 'application/pdf,.pdf';
+  inp.onchange = ()=>then([...(inp.files || [])]); inp.click();
+}
+function riaSopAdminRefresh(){ if(typeof navigate === 'function') navigate('settings', 'sopguides'); }
+function riaSopBulkPick(){
+  if(!(typeof isAdmin === 'function' && isAdmin())) return;
+  riaSopPickFiles(true, async files=>{
+    if(!files.length) return;
+    riaSopAdmin.busy = true; riaSopAdmin.msg = '⏳ Adding ' + files.length + ' PDF' + (files.length === 1 ? '' : 's') + '…'; riaSopAdminRefresh();
+    const r = await riaSopBulkUpload(files);
+    riaSopAdmin.busy = false;
+    riaSopAdmin.msg = r ? '✅ Added ' + r.done.length + ' visual guide' + (r.done.length === 1 ? '' : 's') + '. ' + r.available + ' of ' + r.total + ' guides now have one.'
+      + (r.skipped.length ? '\nNot added (' + r.skipped.length + '):\n' + r.skipped.map(x=>'• ' + x).join('\n') : '') : '';
+    riaSopAdminRefresh();
+  });
+}
+function riaSopUploadPick(id){
+  const s = riaSopById(id); if(!s || !(typeof isAdmin === 'function' && isAdmin())) return;
+  riaSopPickFiles(false, async files=>{
+    const f = files[0]; if(!f) return;
+    const r = await riaSopPut(s, f); await riaSopLoad(true);
+    riaSopAdmin.msg = r.ok ? '✅ Added the visual guide for ' + s.title + ' (' + riaUpSize(r.bytes) + ').' : '⚠ ' + s.title + ': ' + r.why;
+    riaSopAdminRefresh();
+  });
+}
+function riaSopAdminFilter(el){
+  riaSopAdmin.filter = el.value;
+  const words = riaUpNorm(el.value).split(' ').filter(Boolean);
+  document.querySelectorAll('#sopGuideTable tbody tr').forEach(tr=>{ const q = tr.getAttribute('data-q') || ''; tr.hidden = !words.every(w=>q.indexOf(w) >= 0); });
+}
+function renderSettingsSopGuides(){
+  if(!(typeof isAdmin === 'function' && isAdmin())) return `<div class="empty">Only an administrator manages the SOP visual guides.</div>`;
+  if(!riaSopCache){ riaSopLoad().then(()=>{ if(typeof currentView === 'undefined' || true) riaSopAdminRefresh(); }); return `<div class="empty">Loading the SOP guides…</div>`; }
+  const list = riaSopList(), on = list.filter(s=>s.available).length;
+  return `
+    <div class="section-title" style="margin-top:0">SOP Visual Guides (RIA AI)</div>
+    <p style="color:var(--muted);font-size:13px;margin-top:0">When somebody asks RIA AI how to do something, it answers with the matching guide's steps and —
+      once its PDF is here — the deck itself, read-only, scrolling just below the steps. Nobody but an administrator sees this list or can add files.
+      PDFs are kept in the server's data folder, never in git, and are served only to signed-in users.</p>
+    ${kpiCards([{label: 'Guides', value: list.length}, {label: 'With a visual guide', value: on}, {label: 'Missing', value: list.length - on}])}
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin:12px 0">
+      <button class="btn primary" id="sopBulkBtn" ${riaSopAdmin.busy ? 'disabled' : ''} onclick="riaSopBulkPick()">⬆ Add visual guides (several PDFs)</button>
+      <input type="search" class="search list-search" style="max-width:320px" placeholder="Filter — e.g. nominee, NJ, KYC" value="${esc(riaSopAdmin.filter)}" oninput="riaSopAdminFilter(this)" aria-label="Filter SOP guides">
+    </div>
+    ${riaSopAdmin.msg ? `<div class="card" id="sopAdminMsg" style="padding:10px 12px;margin-bottom:12px;white-space:pre-line;font-size:13px">${esc(riaSopAdmin.msg)}</div>` : ''}
+    <div class="table-wrap"><table class="table" id="sopGuideTable"><thead><tr><th>Guide</th><th>Category</th><th>PDF file name</th><th>Visual guide</th><th></th></tr></thead><tbody>
+      ${list.map(s=>`<tr data-q="${esc(riaUpNorm([s.title, s.category, s.pdfFile, (s.aliases || []).join(' ')].join(' ')))}" ${riaSopAdmin.filter && !riaUpNorm(riaSopAdmin.filter).split(' ').filter(Boolean).every(w=>riaUpNorm([s.title, s.category, s.pdfFile, (s.aliases || []).join(' ')].join(' ')).indexOf(w) >= 0) ? 'hidden' : ''}>
+        <td>${esc(s.title)}</td><td>${esc(s.category || '')}</td><td style="font-family:var(--mono,monospace);font-size:12px">${esc(s.pdfFile || '')}</td>
+        <td>${s.available ? '<span class="badge ok">On the server</span>' : '<span class="badge warn">Missing</span>'}</td>
+        <td style="white-space:nowrap">${s.available ? `<button class="btn sm ghost" onclick="riaSopView('${esc(s.id)}')">View (read-only)</button> ` : ''}<button class="btn sm ghost" onclick="riaSopUploadPick('${esc(s.id)}')">${s.available ? 'Replace' : 'Upload'}</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+/* ---- the read-only viewer: every page stacked, one scroll from top to bottom ----
+   The guide draws inside the SOP answer itself, just below its steps, in a box of its own that scrolls
+   (and, from there, full-screen in "Expand Full View" — the same continuous scroll, with zoom). Pages are
+   drawn onto canvases by pdf.js as they come into view, each with a faint watermark of who is looking.
+   There is no download, print or open-in-a-tab control, no <iframe> or <embed>, no browser PDF toolbar;
+   right-click, drag, select, copy and Ctrl/⌘+S / P are refused while the reader is in a guide, and
+   printing the page leaves the guides out. The PDF itself is only ever served to a signed-in user. */
+const riaSopDocCache = new Map();
+function riaSopDoc(s){
+  if(!riaSopDocCache.has(s.id)) riaSopDocCache.set(s.id, (async ()=>{
+    const r = await fetch('/api/sops/pdf/' + encodeURIComponent(s.pdfFile), {headers: apiHeaders(), credentials: 'same-origin', cache: 'no-store'});
+    if(!r.ok) throw new Error(r.status === 401 ? 'Your session has ended — sign in again.' : 'The guide could not be opened (' + r.status + ').');
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    const lib = await maLoadPdfJs();
+    return lib.getDocument({data: bytes, isEvalSupported: false}).promise;
+  })().catch(e=>{ riaSopDocCache.delete(s.id); throw e; }));
+  return riaSopDocCache.get(s.id);
+}
+const riaSopKeys = {hover: 0, installed: false};
+function riaSopGuard(el){
+  const stop = e => { e.preventDefault(); e.stopPropagation(); return false; };
+  ['contextmenu', 'dragstart', 'selectstart', 'copy', 'cut'].forEach(ev=>el.addEventListener(ev, stop, true));
+  el.addEventListener('mouseenter', ()=>{ riaSopKeys.hover++; });
+  el.addEventListener('mouseleave', ()=>{ riaSopKeys.hover = Math.max(0, riaSopKeys.hover - 1); });
+  if(riaSopKeys.installed) return;
+  riaSopKeys.installed = true;
+  document.addEventListener('keydown', e=>{
+    const k = String(e.key || '').toLowerCase();
+    if(!((e.ctrlKey || e.metaKey) && (k === 's' || k === 'p'))) return;
+    const inGuide = document.getElementById('riaSopViewer') || riaSopKeys.hover > 0 || (document.activeElement && document.activeElement.closest && document.activeElement.closest('.ria-sopi'));
+    if(inGuide){ e.preventDefault(); e.stopPropagation(); }
+  }, true);
+}
+function riaSopMark(ctx, canvas, dpr){
+  const who = (typeof me === 'function' && me()) || {};
+  const mark = 'BOSS · read-only · ' + [who.name, who.email].filter(Boolean).join(' · ') + ' · ' + new Date().toLocaleDateString('en-IN');
+  ctx.save(); ctx.globalAlpha = 0.08; ctx.fillStyle = '#0f172a'; ctx.font = Math.round(13 * dpr) + 'px sans-serif';
+  ctx.translate(canvas.width / 2, canvas.height / 2); ctx.rotate(-Math.PI / 7);
+  const step = 160 * dpr;
+  for(let y = -canvas.height; y < canvas.height; y += step) for(let x = -canvas.width; x < canvas.width; x += step * 2.4) ctx.fillText(mark, x, y);
+  ctx.restore();
+}
+/* Every page of the guide into `box` (the element that scrolls), stacked; each drawn when it nears the view. */
+async function riaSopPages(box, s, opt){
+  opt = opt || {};
+  const pdf = await riaSopDoc(s);
+  const first = await pdf.getPage(1), v1 = first.getViewport({scale: 1});
+  const fit = () => Math.max(0.2, (box.clientWidth - (opt.pad || 18)) / v1.width);
+  const scale = (opt.scale && opt.scale()) || fit();
+  box.innerHTML = '';
+  const pages = [];
+  for(let n = 1; n <= pdf.numPages; n++){
+    const w = document.createElement('div'); w.className = 'ria-sopp'; w.setAttribute('data-n', n);
+    w.innerHTML = `<div class="ria-sopp-no">Page ${n} of ${pdf.numPages}</div><canvas class="ria-sopp-c" draggable="false"></canvas>`;
+    const c = w.querySelector('canvas'); c.style.width = Math.floor(v1.width * scale) + 'px'; c.style.height = Math.floor(v1.height * scale) + 'px';
+    box.appendChild(w); pages.push(w);
+  }
+  const draw = async w => {
+    if(w.getAttribute('data-drawn')) return; w.setAttribute('data-drawn', '1');
+    const page = await pdf.getPage(+w.getAttribute('data-n')), dpr = Math.min(2, window.devicePixelRatio || 1);
+    const vp = page.getViewport({scale: scale * dpr}), c = w.querySelector('canvas');
+    c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+    c.style.width = Math.floor(vp.width / dpr) + 'px'; c.style.height = Math.floor(vp.height / dpr) + 'px';
+    const ctx = c.getContext('2d');
+    try { await page.render({canvasContext: ctx, viewport: vp}).promise; } catch(e){ w.removeAttribute('data-drawn'); return; }
+    riaSopMark(ctx, c, dpr);
+  };
+  if(typeof IntersectionObserver === 'function'){
+    const io = new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting){ io.unobserve(e.target); draw(e.target); } }), {root: box, rootMargin: '700px 0px'});
+    pages.forEach(w=>io.observe(w));
+  } else pages.forEach(draw);
+  draw(pages[0]);
+  return {pdf, pages, scale, fit: fit()};
+}
+/* The guide inside the answer: kept per turn, so redrawing the conversation moves it back, already drawn. */
+const riaSopInline = new Map();
+function riaSopInlineBuild(s){
+  const el = document.createElement('div');
+  el.className = 'ria-sopi'; el.tabIndex = 0; el.setAttribute('data-sop', s.id); el.setAttribute('aria-label', 'Visual SOP guide, read-only: ' + s.title);
+  el.innerHTML = `<div class="ria-sopi-head"><span class="ria-sopv-lock">🔒 Read-only</span><span class="ria-sopi-n">Visual guide — opening…</span>
+    <button type="button" class="ria-sopi-x" title="Expand full view (read-only)">⤢ Expand Full View (Read-Only)</button></div>
+    <div class="ria-sopi-scroll"><div class="ria-sopv-msg">Opening the guide…</div></div>`;
+  riaSopGuard(el);
+  el.querySelector('.ria-sopi-x').addEventListener('click', ()=>riaSopView(s.id));
+  const sc = el.querySelector('.ria-sopi-scroll');
+  sc.addEventListener('scroll', ()=>{ el._top = sc.scrollTop; }, {passive: true});
+  el._start = () => { if(el._started) return; el._started = true;
+    riaSopPages(sc, s, {}).then(r=>{ el.querySelector('.ria-sopi-n').textContent = 'Visual guide · ' + r.pdf.numPages + ' page' + (r.pdf.numPages === 1 ? '' : 's') + ' · scroll to read'; })
+      .catch(e=>{ sc.innerHTML = `<div class="ria-sopv-msg">⚠ ${esc(e && e.message || String(e))}</div>`; el._started = false; }); };
+  return el;
+}
+function riaSopMount(){
+  const slots = document.querySelectorAll('#aiTurns .ria-sopi-slot');
+  for(const k of [...riaSopInline.keys()]){ const [ti, id] = k.split('|'); const t = ai.turns[+ti]; if(!t || t.sopDoc !== id) riaSopInline.delete(k); }
+  slots.forEach(slot=>{
+    const id = slot.getAttribute('data-sop'), key = slot.getAttribute('data-ti') + '|' + id;
+    let el = riaSopInline.get(key);
+    if(!el){ const s = riaSopById(id); if(!s || !s.available) return; el = riaSopInlineBuild(s); riaSopInline.set(key, el); }
+    slot.appendChild(el); el._start();
+    if(el._top){ const sc = el.querySelector('.ria-sopi-scroll'); if(sc) sc.scrollTop = el._top; }
+  });
+}
+/* Expand Full View: the same continuous scroll, full screen, with zoom. */
+const riaSopV = {id: null, scale: null, fit: null, pages: 0, keys: null};
 function riaSopClose(){
   const el = document.getElementById('riaSopViewer'); if(el) el.remove();
   document.documentElement.classList.remove('ria-sopv-open');
   if(riaSopV.keys){ document.removeEventListener('keydown', riaSopV.keys, true); riaSopV.keys = null; }
-  if(riaSopV.pdf){ try { riaSopV.pdf.destroy(); } catch(e){} }
-  Object.assign(riaSopV, {pdf: null, page: 1, pages: 0, scale: null, id: null, rendering: null});
+  Object.assign(riaSopV, {id: null, scale: null, fit: null, pages: 0});
 }
 async function riaSopView(id){
   let s = riaSopById(id);
@@ -64580,9 +64693,7 @@ async function riaSopView(id){
     <div class="ria-sopv-head">
       <div class="ria-sopv-title"><span class="ria-sopv-lock">🔒 Read-only</span><b>${esc(s.title)}</b><span class="ria-sopv-meta">${esc([s.category, s.docNo].filter(Boolean).join(' · '))}</span></div>
       <div class="ria-sopv-ctl">
-        <button type="button" class="ria-sopv-btn" data-k="prev" title="Previous page" aria-label="Previous page">‹</button>
         <span class="ria-sopv-page" id="riaSopPage">– / –</span>
-        <button type="button" class="ria-sopv-btn" data-k="next" title="Next page" aria-label="Next page">›</button>
         <span class="ria-sopv-sep" aria-hidden="true"></span>
         <button type="button" class="ria-sopv-btn" data-k="out" title="Zoom out" aria-label="Zoom out">−</button>
         <span class="ria-sopv-zoom" id="riaSopZoom">Fit</span>
@@ -64593,72 +64704,45 @@ async function riaSopView(id){
     </div>
     <div class="ria-sopv-body" id="riaSopBody"><div class="ria-sopv-msg">Opening the guide…</div></div>
   </div>`;
-  const stop = e => { e.preventDefault(); e.stopPropagation(); return false; };
-  ['contextmenu', 'dragstart', 'selectstart', 'copy'].forEach(ev=>ov.addEventListener(ev, stop, true));
+  riaSopGuard(ov);
   ov.addEventListener('click', e=>{ const b = e.target.closest('[data-k]'); if(b) riaSopCtl(b.getAttribute('data-k')); else if(e.target === ov) riaSopClose(); });
-  riaSopV.keys = e => {
-    if(!document.getElementById('riaSopViewer')) return;
-    const k = String(e.key || '').toLowerCase();
-    if((e.ctrlKey || e.metaKey) && (k === 's' || k === 'p')){ e.preventDefault(); e.stopPropagation(); return; }
-    if(k === 'escape'){ e.preventDefault(); riaSopClose(); } else if(k === 'arrowright' || k === 'pagedown') riaSopCtl('next'); else if(k === 'arrowleft' || k === 'pageup') riaSopCtl('prev');
-  };
+  riaSopV.keys = e => { if(document.getElementById('riaSopViewer') && String(e.key || '').toLowerCase() === 'escape'){ e.preventDefault(); riaSopClose(); } };
   document.addEventListener('keydown', riaSopV.keys, true);
   document.body.appendChild(ov);
   document.documentElement.classList.add('ria-sopv-open');
   riaSopV.id = id;
   const body = document.getElementById('riaSopBody');
+  body.addEventListener('scroll', riaSopPageNo, {passive: true});
+  await riaSopRender();
+}
+function riaSopPageNo(){
+  const body = document.getElementById('riaSopBody'), pg = document.getElementById('riaSopPage');
+  if(!body || !pg || !riaSopV.pages) return;
+  const top = body.getBoundingClientRect().top + 40;
+  let n = 1; body.querySelectorAll('.ria-sopp').forEach(w=>{ if(w.getBoundingClientRect().top <= top) n = +w.getAttribute('data-n'); });
+  pg.textContent = 'Page ' + n + ' / ' + riaSopV.pages;
+}
+async function riaSopRender(){
+  const body = document.getElementById('riaSopBody'), s = riaSopById(riaSopV.id);
+  if(!body || !s) return;
+  const at = body.scrollHeight ? body.scrollTop / body.scrollHeight : 0;
   try {
-    const r = await fetch('/api/sops/pdf/' + encodeURIComponent(s.pdfFile), {headers: apiHeaders(), credentials: 'same-origin', cache: 'no-store'});
-    if(!r.ok) throw new Error(r.status === 401 ? 'Your session has ended — sign in again.' : 'The guide could not be opened (' + r.status + ').');
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    if(riaSopV.id !== id) return;
-    const lib = await maLoadPdfJs();
-    riaSopV.pdf = await lib.getDocument({data: bytes, isEvalSupported: false}).promise;
-    if(riaSopV.id !== id){ try { riaSopV.pdf.destroy(); } catch(e){} return; }
-    riaSopV.pages = riaSopV.pdf.numPages; riaSopV.page = 1; riaSopV.scale = null;
-    body.innerHTML = '<canvas id="riaSopCanvas" class="ria-sopv-canvas" draggable="false"></canvas>';
-    await riaSopRender();
-  } catch(e){ if(body) body.innerHTML = `<div class="ria-sopv-msg">⚠ ${esc(e && e.message || String(e))}</div>`; }
+    const r = await riaSopPages(body, s, {scale: ()=>riaSopV.scale, pad: 36});
+    riaSopV.pages = r.pdf.numPages; riaSopV.fit = r.fit;
+    body.scrollTop = at * body.scrollHeight;
+    const zm = document.getElementById('riaSopZoom'); if(zm) zm.textContent = riaSopV.scale ? Math.round(riaSopV.scale / r.fit * 100) + '%' : 'Fit';
+    riaSopPageNo();
+  } catch(e){ body.innerHTML = `<div class="ria-sopv-msg">⚠ ${esc(e && e.message || String(e))}</div>`; }
 }
 function riaSopCtl(k){
   if(k === 'close') return riaSopClose();
-  if(!riaSopV.pdf) return;
-  if(k === 'next' && riaSopV.page < riaSopV.pages) riaSopV.page++;
-  else if(k === 'prev' && riaSopV.page > 1) riaSopV.page--;
-  else if(k === 'in') riaSopV.scale = Math.min(4, (riaSopV.scale || riaSopV.fitScale || 1) * 1.2);
-  else if(k === 'out') riaSopV.scale = Math.max(0.3, (riaSopV.scale || riaSopV.fitScale || 1) / 1.2);
+  if(!riaSopV.pages) return;
+  const cur = riaSopV.scale || riaSopV.fit || 1;
+  if(k === 'in') riaSopV.scale = Math.min((riaSopV.fit || 1) * 4, cur * 1.25);
+  else if(k === 'out') riaSopV.scale = Math.max((riaSopV.fit || 1) * 0.4, cur / 1.25);
   else if(k === 'fit') riaSopV.scale = null;
   else return;
   riaSopRender();
-}
-async function riaSopRender(){
-  const canvas = document.getElementById('riaSopCanvas'), body = document.getElementById('riaSopBody');
-  if(!canvas || !riaSopV.pdf) return;
-  const n = riaSopV.page, page = await riaSopV.pdf.getPage(n);
-  const base = page.getViewport({scale: 1});
-  riaSopV.fitScale = Math.max(0.3, (body.clientWidth - 32) / base.width);
-  const scale = riaSopV.scale || riaSopV.fitScale, dpr = Math.min(2, window.devicePixelRatio || 1);
-  const vp = page.getViewport({scale: scale * dpr});
-  canvas.width = Math.floor(vp.width); canvas.height = Math.floor(vp.height);
-  canvas.style.width = Math.floor(vp.width / dpr) + 'px'; canvas.style.height = Math.floor(vp.height / dpr) + 'px';
-  const ctx = canvas.getContext('2d');
-  if(riaSopV.rendering){ try { riaSopV.rendering.cancel(); } catch(e){} }
-  riaSopV.rendering = page.render({canvasContext: ctx, viewport: vp});
-  try { await riaSopV.rendering.promise; } catch(e){ return; }
-  riaSopV.rendering = null;
-  /* who is looking, faintly across the page */
-  const who = (typeof me === 'function' && me()) || {};
-  const mark = 'BOSS · read-only · ' + [who.name, who.email].filter(Boolean).join(' · ') + ' · ' + new Date().toLocaleDateString('en-IN');
-  ctx.save(); ctx.globalAlpha = 0.08; ctx.fillStyle = '#0f172a'; ctx.font = Math.round(14 * dpr) + 'px sans-serif';
-  ctx.translate(canvas.width / 2, canvas.height / 2); ctx.rotate(-Math.PI / 7);
-  const step = 170 * dpr;
-  for(let y = -canvas.height; y < canvas.height; y += step) for(let x = -canvas.width; x < canvas.width; x += step * 2.4) ctx.fillText(mark, x, y);
-  ctx.restore();
-  const pg = document.getElementById('riaSopPage'), zm = document.getElementById('riaSopZoom');
-  if(pg) pg.textContent = n + ' / ' + riaSopV.pages;
-  if(zm) zm.textContent = riaSopV.scale ? Math.round(riaSopV.scale * 100) + '%' : 'Fit';
-  const ov = document.getElementById('riaSopViewer');
-  if(ov){ ov.querySelector('[data-k="prev"]').disabled = n <= 1; ov.querySelector('[data-k="next"]').disabled = n >= riaSopV.pages; }
 }
 /* ---------------------------------------------------------------------
    THE CLIENT THIS CONVERSATION IS ABOUT, AND A BRANCH NAMED IN A QUESTION
@@ -80188,6 +80272,7 @@ const SETTINGS_CATEGORIES = [
     ['templatesettings','Campaign Templates','manageFields','tab','The email and WhatsApp templates a marketing campaign picks from.'],
     ['notifications','Notifications','manageModuleSettings','tab','What BOSS tells somebody about, and how loudly.'],
     ['sops','SOP Library','manageFields','tab','The procedures an adviser is shown inside a review.'],
+    ['sopguides','SOP Visual Guides (RIA AI)','manageFields','tab','The read-only decks RIA AI shows under an SOP answer — which guides have theirs, and adding them (administrators only).'],
     ['allocdrafts','Asset Allocation Drafts','manageFields','tab','The standing wording on an allocation \u2014 objective and conclusion.'],
   ]},
   {id:'forms', label:'Forms & Fields', icon:'\ud83d\udcd0', tabs:[
@@ -80311,6 +80396,7 @@ const SETTINGS_TAB_VIEWS = {
   fsl: ()=>renderSettingsFsl(),
   gab: ()=>renderSettingsGab(),
   sops: ()=>renderSettingsSops(),
+  sopguides: ()=>renderSettingsSopGuides(),
   cifconfig: ()=>renderSettingsCifConfig(),
   templatesettings: ()=>campTemplatesTab(),
   schememaster: ()=>viewSchemeMaster(), multiproduct: ()=>viewMultiProductMaster(),
