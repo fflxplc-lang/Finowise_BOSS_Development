@@ -1121,6 +1121,8 @@ app.get('/api/sops/registry', checkApiKey, (req, res) => {
   res.set('Cache-Control', 'no-store').json({ sops: reg.sops.map(s => ({
     id: s.id, title: s.title, category: s.category, docNo: s.docNo || '', date: s.date || '', owner: s.owner || '',
     keywords: s.keywords || [], aliases: s.aliases || [], sopIds: s.sopIds || [], steps: s.steps || [],
+    requires: s.requires || [], excludes: s.excludes || [],
+    pages: s.slides ? Math.max(0, s.slides - (s.withholdSlides || []).length) : null,
     pdfFile: s.pdfFile || '', available: !!(s.pdfFile && sopPdfPath(s.pdfFile)) })) });
 });
 app.get('/api/sops/pdf/:file', checkApiKey, (req, res) => {

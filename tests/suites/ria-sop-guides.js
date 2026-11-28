@@ -56,8 +56,9 @@ suite(async t => {
 
   await t.step('1. the registry, and an SOP question answered with that guide\'s steps only — no list, no upload, no admin hint', async () => {
     await fresh();
-    const reg = await t.eval(async () => (await riaSopLoad(true)).map(s => ({id: s.id, file: s.pdfFile, on: s.available, steps: s.steps.length})));
-    if(reg.length !== N || N < 108 || reg.some(s => s.on) || !reg.some(s => s.file === 'Nomination_SOP.pdf')) throw new Error(JSON.stringify(reg).slice(0, 400));
+    const reg = await t.eval(async () => (await riaSopLoad(true)).map(s => ({id: s.id, file: s.pdfFile, on: s.available, steps: s.steps.length, req: (s.requires || []).length, exc: (s.excludes || []).length, pages: s.pages})));
+    if(reg.length !== N || N < 108 || reg.some(s => s.on) || !reg.some(s => s.file === 'Nomination_SOP.pdf') || reg.some(s => !(s.pages > 0))
+      || !reg.find(s => s.id === 'huf-physical-kyc').req || !reg.find(s => s.id === 'individual-kyc-sop-change-of-address').exc) throw new Error(JSON.stringify(reg).slice(0, 400));
     const r = await ask('nomination ka process kya hai');
     if(r.sopDoc !== 'nomination-sop' || !/^\*\*📘 SOP: Nominee updation \/ addition \(CAMS nomination form\)\*\*/.test(r.content) || !/\n1\. Search "CAMS Nomination Form"/.test(r.content) || !/\n8\. Documents: self-attested PAN and Aadhaar/.test(r.content)
       || r.inline || BAD.test(r.content) || r.actions.some(l => BAD.test(l))) throw new Error(JSON.stringify(r).slice(0, 700));
