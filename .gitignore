@@ -20,3 +20,8 @@ push-vapid.json
 # SOP source decks: their screenshots often show clients (names, PAN, Aadhaar). They stay out of git;
 # scripts/sops-build.js reads them from here (or --src) and writes PDFs to the server data folder.
 sops-src/
+
+# RIA AI Python engine: its database lives beside data.json on the server, never in git
+ria-engine.sqlite
+*.sqlite
+__pycache__/

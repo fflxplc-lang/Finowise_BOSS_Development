@@ -35,6 +35,7 @@ install_and_start() {   # $1 = commit
   (cd $APP && as_app npm ci --omit=dev --no-audit --no-fund --loglevel=error) &&
   as_app "$NODE" --check $APP/server.js &&
   systemctl restart finowise-test &&
+  { systemctl try-restart ria-engine-$U 2>/dev/null || true; } &&
   healthy
 }
 

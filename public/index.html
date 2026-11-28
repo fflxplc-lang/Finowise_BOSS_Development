@@ -59346,7 +59346,7 @@ async function aiAsk(messages, opts){
 function aiTogglePanel(){
   if(!aiAvailable()) return;
   ai.open = !ai.open;
-  if(ai.open){ ai.context = aiContextOf(); aiRefreshStatus(true).then(aiDrawPanel); if(typeof riaSopLoad === 'function') riaSopLoad(); }
+  if(ai.open){ ai.context = aiContextOf(); aiRefreshStatus(true).then(aiDrawPanel); if(typeof riaSopLoad === 'function') riaSopLoad(); if(typeof riaEngStatus === 'function') riaEngStatus(); }
   aiDrawPanel();
   if(ai.open) setTimeout(()=>{ const el = document.getElementById('aiInput'); if(el) el.focus(); }, 30);
 }
@@ -59665,12 +59665,15 @@ async function aiSend(){
     /* an SOP question gets the firm's own guide: its steps and its read-only deck */
     /* (a client's details pasted to onboard them are not an SOP question, however many SOP words they hold) */
     const onboarding = !awaiting && riaDetectClientOnboarding(q);
-    let sopDoc = upQ || diagC || awaiting || onboarding || q.length > 200 || !RIA_SOP_ASK.test(q) ? null : riaSopFor(q, await riaSopLoad());
+    /* RIA AI's Python engine, when it is running: model portfolios, rebalancing, the book report, a client's portfolio analysis */
+    const eng = upQ || diagC || awaiting || onboarding ? null : await riaEngIntent(q);
+    let sopDoc = eng || upQ || diagC || awaiting || onboarding || q.length > 200 || !RIA_SOP_ASK.test(q) ? null : riaSopFor(q, await riaSopLoad());
     /* a guide whose PDF was added since the list was read (another tab, another admin): read the list again before answering */
     if(sopDoc && !sopDoc.available){ const alts = sopDoc.__alts; await riaSopLoad(true); sopDoc = riaSopById(sopDoc.id) || sopDoc; if(alts) sopDoc.__alts = alts; }
-    const nav = upQ || diagC || sopDoc || awaiting || onboarding ? null : bossPageOpenIntent(q);
-    const desk = nav || upQ || diagC || sopDoc ? null : await riaDeskHandle(q);
-    out = upQ ? riaUpAnswer(q)
+    const nav = eng || upQ || diagC || sopDoc || awaiting || onboarding ? null : bossPageOpenIntent(q);
+    const desk = eng || nav || upQ || diagC || sopDoc ? null : await riaDeskHandle(q);
+    out = eng ? await riaEngRun(eng, q)
+        : upQ ? riaUpAnswer(q)
         : diagC ? riaDiagClientAnswer(diagC, q)
         : sopDoc ? riaSopAnswer(sopDoc)
         : desk ? desk
@@ -63429,6 +63432,7 @@ function riaFollow(ti, k){
   if(a.act.t==='updl') return riaUpDownload(ti, a.act.file, a.act.fmt);
   if(a.act.t==='sopview') return riaSopView(a.act.id);
   if(a.act.t==='soppick') return riaSopPick(a.act.id);
+  if(a.act.t==='eng') return riaEngAct(a.act);
   return riaRun(a.act, a.label).catch(aiIgnoreStale);
 }
 async function riaRun(act, label){
@@ -64408,6 +64412,126 @@ function riaDiagClientAnswer(c, q){
   turn.clients = [{id: c.id, name: clientDisplayName(c)}];
   riaPushBot(turn);
   return {};
+}
+/* =====================================================================
+   RIA AI'S PYTHON ENGINE (28-11-2026)
+
+   When the server's Python engine is running (GET /api/ria/engine/health),
+   these questions are answered by it — from the records this person may
+   see, which the server passes, never more:
+     · "model portfolio moderate 10 years 10 lakh + 15k SIP", "Ramesh ke liye
+       portfolio banao"           → the fund basket's cell, in rupees, saved
+                                     to RIA AI's own database;
+     · "rebalance Ramesh" / "iska rebalance"
+                                   → drift from the risk profile's target, what
+                                     to move from where into which funds;
+     · "book report", "poori book ka analysis"
+                                   → AUM, asset classes, branches, the largest
+                                     clients, the SIP book, clients to act on;
+     · "Ramesh ka portfolio analysis", "deep analysis" of the active client
+                                   → every holding's Hold / Reduce / Switch /
+                                     Review, the mix, overlap, clutter, tax.
+   When it is not running, nothing changes: the question goes where it always
+   went. Answers carry the engine's own words and numbers; nothing invented.
+   ===================================================================== */
+const riaEng = {up: null, at: 0, checking: null};
+async function riaEngStatus(force){
+  if(!force && riaEng.up !== null && Date.now() - riaEng.at < 120000) return riaEng.up;
+  if(riaEng.checking) return riaEng.checking;
+  riaEng.checking = (async ()=>{
+    try {
+      const r = await fetch('/api/ria/engine/health', {headers: apiHeaders(), credentials: 'same-origin', cache: 'no-store'});
+      riaEng.up = r.ok && !!((await r.json().catch(()=>({}))).ok);
+    } catch(e){ riaEng.up = false; }
+    riaEng.at = Date.now(); riaEng.checking = null;
+    return riaEng.up;
+  })();
+  return riaEng.checking;
+}
+const RIA_ENG_BUILD = /\b(model portfolio|portfolio\s+(bana\w*|create|build|suggest|design|construct)|(build|create|make|suggest|design)\s+(a\s+|an\s+|me\s+a\s+)?(new\s+|model\s+)*portfolio|naya portfolio)\b/i;
+const RIA_ENG_REBAL = /\b(re-?balanc\w*)\b/i;
+const RIA_ENG_BOOK = /\b(book report|book analysis|book ka analysis|book ki report|poori book|puri book|pure book|whole book|entire book|full book)\b/i;
+const RIA_ENG_ANALYZE = /\b(python|engine|deep)\s+(analysis|analyse|analyze|review)\b|\bportfolio\s+(analysis|analyse|analyze|review|health ?check)\b|\bportfolio ka (analysis|review)\b/i;
+/* "10 lakh", "₹5,00,000", "2.5 cr", "50k" → rupees */
+function riaEngAmount(t){
+  const m = String(t || '').match(/(?:₹|rs\.?|inr)?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(cr(?:ore)?s?|l(?:akh|ac|acs|akhs)?\b|k\b|thousand)?/i);
+  if(!m) return null;
+  let v = Number(m[1].replace(/,/g, '')); const u = (m[2] || '').toLowerCase();
+  if(/^cr/.test(u)) v *= 1e7; else if(/^l/.test(u)) v *= 1e5; else if(u === 'k' || u === 'thousand') v *= 1e3;
+  return isFinite(v) && v > 0 ? v : null;
+}
+function riaEngParams(q){
+  const t = String(q || '');
+  const out = {};
+  const prof = t.match(/\b(moderately\s+aggressive|moderately\s+conservative|aggressive|conservative|moderate|balanced)\b/i);
+  if(prof) out.profile = prof[1];
+  const yrs = t.match(/\b(\d{1,2})\s*(?:\+\s*)?(?:years?|yrs?|saal|sal|varsh)\b/i);
+  if(yrs) out.years = Number(yrs[1]);
+  const sip = t.match(/(?:sip\s*(?:of|ka|ki|:)?\s*)((?:₹|rs\.?)?\s*[0-9][0-9,.]*\s*(?:k|l(?:akh)?|thousand)?)|((?:₹|rs\.?)?\s*[0-9][0-9,.]*\s*(?:k|l(?:akh)?|thousand)?)\s*(?:monthly|per month|a month|\/month|\/m|p\.?m\.?|sip|mahina|mahine)/i);
+  if(sip) out.sip = riaEngAmount(sip[1] || sip[2]);
+  const rest = sip ? t.replace(sip[0], ' ') : t;
+  const lump = rest.match(/(?:₹|rs\.?|inr)?\s*[0-9][0-9,]*(?:\.[0-9]+)?\s*(?:cr(?:ore)?s?|lakhs?|lacs?|lac|l\b|k\b|thousand)|₹\s*[0-9][0-9,]{3,}/i);
+  if(lump) out.lumpsum = riaEngAmount(lump[0]);
+  return out;
+}
+function riaEngClient(q){
+  const named = typeof bossClientsNamedIn === 'function' ? bossClientsNamedIn(q) : [];
+  if(named.length === 1) return named[0];
+  if(named.length > 1) return null;
+  const f = typeof riaFollowUpClient === 'function' ? riaFollowUpClient(q) : null;
+  if(f) return f;
+  if(ai.activeClient && typeof riaPersonById === 'function'){ const c = riaPersonById(ai.activeClient); if(c) return c; }
+  const ctx = typeof aiContextOf === 'function' ? aiContextOf() : ai.context;
+  return ctx && ctx.module === 'CMS' && ctx.recordId && ctx.recordId !== ai.droppedRecord && typeof riaPersonById === 'function' ? (riaPersonById(ctx.recordId) || null) : null;
+}
+async function riaEngIntent(q){
+  const t = String(q || '');
+  if(t.length > 300) return null;
+  const kind = RIA_ENG_BUILD.test(t) ? 'build' : RIA_ENG_REBAL.test(t) ? 'rebalance' : RIA_ENG_BOOK.test(t) ? 'book' : RIA_ENG_ANALYZE.test(t) ? 'analyze' : null;
+  if(!kind || !(await riaEngStatus())) return null;
+  const c = kind === 'book' ? null : riaEngClient(t);
+  if((kind === 'rebalance' || kind === 'analyze') && !c) return null;   // no client to read: the usual answer path
+  return {kind, client: c, params: riaEngParams(t)};
+}
+async function riaEngPost(path, body){
+  const r = await fetch('/api/ria/engine/' + path, {method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()), credentials: 'same-origin', body: JSON.stringify(body || {})});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw Object.assign(new Error(j.error || ('The engine could not answer (' + r.status + ').')), {status: r.status});
+  return j;
+}
+async function riaEngRun(e, q){
+  const name = e.client ? clientDisplayName(e.client) : '';
+  const id = e.client ? e.client.id : null;
+  ai.phase = 'RIA AI engine is working…'; aiDrawPanel();
+  try {
+    let j, actions = [];
+    if(e.kind === 'build'){
+      j = await riaEngPost('portfolio/build', Object.assign({client_id: id}, e.params));
+      if(id) actions.push({label: '⚖️ Rebalance ' + name + ' to this', act: {t: 'eng', kind: 'rebalance', id, profile: j.risk_profile, horizon: j.horizon}});
+    } else if(e.kind === 'rebalance'){
+      j = await riaEngPost('portfolio/rebalance', Object.assign({client_id: id}, e.params));
+      actions.push({label: '🧩 Model portfolio for ' + name, act: {t: 'eng', kind: 'build', id, profile: j.risk_profile, horizon: j.horizon}});
+    } else if(e.kind === 'book'){
+      j = await riaEngPost('book/report', {});
+    } else {
+      j = await riaEngPost('client/analyze', {client_id: id});
+      actions.push({label: '⚖️ Rebalance ' + name, act: {t: 'eng', kind: 'rebalance', id}}, {label: '🧩 Model portfolio for ' + name, act: {t: 'eng', kind: 'build', id}});
+    }
+    if(e.client) riaSetActiveClient(e.client);
+    actions.push({label: '☰ Main Menu', act: {t: 'menu'}});
+    riaPushBot({content: riaActionWords(j.answer || 'The engine returned no answer.'), actions, engine: e.kind, clients: e.client ? [{id, name}] : undefined});
+  } catch(err){
+    if(err.status === 503){ riaEng.up = false; return await bossRunChat(q); }   // the engine stopped meanwhile: the usual answer
+    riaPushBot({content: '⚠ ' + (err.message || 'The engine could not answer.')});
+  }
+  return {};
+}
+function riaEngAct(a){
+  const c = a.id && typeof riaPersonById === 'function' ? riaPersonById(a.id) : null;
+  const label = a.kind === 'rebalance' ? 'Rebalance' : a.kind === 'build' ? 'Model portfolio' : 'Analysis';
+  riaPushUser(label + (c ? ' — ' + clientDisplayName(c) : ''));
+  ai.busy = true; aiDrawPanel();
+  return riaEngRun({kind: a.kind, client: c, params: {profile: a.profile, horizon: a.horizon}}, label).then(()=>{ ai.busy = false; ai.phase = ''; riaDone(); });
 }
 /* =====================================================================
    SOP GUIDES — STEPS IN CHAT, THE DECK READ-ONLY (27-11-2026)

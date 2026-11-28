@@ -3110,6 +3110,124 @@ function aiAumForFallback(req, question) {
   } catch (e) { return null; }
 }
 
+/* =====================================================================
+   RIA AI'S PYTHON ENGINE (28-11-2026)
+
+   A separate Python service (ria_engine/, python3 -m ria_engine.server) on
+   127.0.0.1:RIA_ENGINE_PORT does RIA AI's own analysis — a client's
+   portfolio with Hold / Reduce / Switch / Review, model portfolios from the
+   fund basket, rebalancing plans, the book report — and keeps its own SQLite
+   database of what it built and said (ria-engine.sqlite beside data.json).
+
+   The browser never talks to it. It asks /api/ria/engine/*, signed in; this
+   server works out which clients that person may see (the same scope as the
+   Dashboard's Live AUM: own / team / branch / firm), passes only those clients
+   and their holdings, SIPs and transactions, and relays the answer. The
+   engine never opens data.json. When the engine is not running (not
+   installed yet, restarting), these routes say so with 503 and RIA AI keeps
+   answering the way it always has.
+
+   RIA_ENGINE_URL (default http://127.0.0.1:8765) and RIA_ENGINE_TOKEN (shared
+   with the engine; put it in the server's env file, never in git).
+   ===================================================================== */
+const RIA_ENGINE_URL = process.env.RIA_ENGINE_URL || 'http://127.0.0.1:' + (process.env.RIA_ENGINE_PORT || 8765);
+const RIA_ENGINE_TOKEN = process.env.RIA_ENGINE_TOKEN || '';
+const RIA_ENGINE_DEFAULT_STORES = ['clients', 'platformHoldings', 'platformSips', 'transactions', 'schemes', 'amcs', 'config'];
+let riaEngineStoreKeys = null;
+function riaEngineCall(method, pathname, body, timeoutMs) {
+  return new Promise((resolve) => {
+    let u;
+    try { u = new URL(pathname, RIA_ENGINE_URL); } catch (e) { return resolve({ status: 503, body: { error: 'engine address is not valid' } }); }
+    const data = body ? Buffer.from(JSON.stringify(body)) : null;
+    const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method,
+      headers: Object.assign({ 'X-Ria-Engine-Token': RIA_ENGINE_TOKEN }, data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {}) }, (r) => {
+      const chunks = [];
+      r.on('data', (c) => chunks.push(c));
+      r.on('end', () => {
+        let j = null;
+        try { j = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) { j = { error: 'the engine answered with something that is not JSON' }; }
+        resolve({ status: r.statusCode, body: j });
+      });
+    });
+    req.setTimeout(timeoutMs || 60000, () => req.destroy(new Error('timeout')));
+    req.on('error', () => resolve({ status: 503, body: { error: 'RIA AI\'s Python engine is not running.' } }));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+async function riaEngineKeys() {
+  if (riaEngineStoreKeys) return riaEngineStoreKeys;
+  const h = await riaEngineCall('GET', '/health', null, 5000);
+  if (h.status === 200 && h.body && Array.isArray(h.body.stores)) riaEngineStoreKeys = h.body.stores;
+  return riaEngineStoreKeys || RIA_ENGINE_DEFAULT_STORES;
+}
+/* The person's clients (aumScopeFor; an account whose scope is the whole firm sees the whole firm here, as it does in the CRM). */
+function riaEngineScope(user) {
+  const s = aumStores();
+  const sc = aumScopeFor(user, s);
+  if (!sc.refuse) return sc;
+  if (sc.refuse === 'firm_wide_admin_only') return { kind: 'firm', label: 'Firm-wide', clients: s.clients.filter(c => c && !c.deletedAt) };
+  return sc;
+}
+/* Only what the person may see: their clients, and the rows of every other store that point at one of them. */
+function riaEngineStores(keys, clients) {
+  const ids = new Set(clients.map(c => c.id));
+  const out = { clients };
+  const clientOf = (r) => (r && (r.clientId || (r._c && r._c.clientId) || r.client_id)) || null;
+  const want = keys.filter(k => k !== 'clients');
+  const expand = [];
+  /* a multi-asset upload keeps its scheme rows under assetRows.<upload id>; its rows name no client id (the engine
+     matches them to a client by PAN, as the page does), so they go as they are and only the person's clients are read from them */
+  if (want.includes('assetUploads') && !want.some(k => k.startsWith('assetRows'))) want.push('assetRows.*');
+  want.forEach(k => { if (k.endsWith('*')) Object.keys(store).filter(x => x.startsWith(k.slice(0, -1))).forEach(x => expand.push(x)); else expand.push(k); });
+  expand.forEach(k => {
+    if (store[k] === undefined) return;
+    let v; try { v = JSON.parse(store[k]); } catch (e) { return; }
+    if (Array.isArray(v)) v = v.filter(r => { const c = clientOf(r); return !c || ids.has(c); });
+    /* staff records: only who they are and their branch — never salary, ID or bank fields */
+    if (k === 'team' && Array.isArray(v)) v = v.map(t => ({ id: t && t.id, name: t && (t.name || t.fullName || ''), branch: t && (t.branch || '') }));
+    out[k] = v;
+  });
+  return out;
+}
+function riaEngineRoute(pathname, opts) {
+  opts = opts || {};
+  return async (req, res) => {
+    const user = signedInUser(req);
+    if (!user) return res.status(401).json({ error: 'not signed in' });
+    const scope = riaEngineScope(user);
+    if (scope.refuse) return res.status(403).json({ error: scope.message });
+    const body = Object.assign({}, req.body || {}, { user: { id: user.id, name: user.name || '', email: user.email || '', role: user.role || '' }, scope: scope.label });
+    delete body.stores;
+    if (opts.needsData !== false) body.stores = riaEngineStores(await riaEngineKeys(), scope.clients);
+    if (opts.clientIds) body.client_ids = scope.clients.map(c => c.id);
+    const r = await riaEngineCall('POST', pathname, body, opts.timeout);
+    res.set('Cache-Control', 'no-store').status(r.status).json(r.body);
+  };
+}
+app.get('/api/ria/engine/health', checkApiKey, async (req, res) => {
+  if (!signedInUser(req)) return res.status(401).json({ error: 'not signed in' });
+  const r = await riaEngineCall('GET', '/health', null, 4000);
+  /* not running is an answer, not an error: 200 {ok:false}, so a page that asks does not log a failure */
+  if (r.status !== 200) return res.set('Cache-Control', 'no-store').json({ ok: false, error: (r.body && r.body.error) || 'engine not running' });
+  res.set('Cache-Control', 'no-store').json({ ok: true, version: r.body.version, quartiles: r.body.quartiles, basket: r.body.basket });
+});
+app.post('/api/ria/engine/client/analyze', checkApiKey, riaEngineRoute('/client/analyze'));
+app.post('/api/ria/engine/portfolio/build', checkApiKey, riaEngineRoute('/portfolio/build'));
+app.post('/api/ria/engine/portfolio/rebalance', checkApiKey, riaEngineRoute('/portfolio/rebalance'));
+app.post('/api/ria/engine/book/report', checkApiKey, riaEngineRoute('/book/report', { timeout: 120000 }));
+app.post('/api/ria/engine/portfolios', checkApiKey, riaEngineRoute('/portfolios', { needsData: false, clientIds: true }));
+app.post('/api/ria/engine/client/history', checkApiKey, async (req, res) => {
+  const user = signedInUser(req);
+  if (!user) return res.status(401).json({ error: 'not signed in' });
+  const scope = riaEngineScope(user);
+  if (scope.refuse) return res.status(403).json({ error: scope.message });
+  const id = String((req.body || {}).client_id || '');
+  if (!scope.clients.some(c => c.id === id)) return res.status(404).json({ error: 'That client is not among the records you can see.' });
+  const r = await riaEngineCall('POST', '/client/history', { client_id: id }, 10000);
+  res.set('Cache-Control', 'no-store').status(r.status).json(r.body);
+});
+
 // POST /api/ai/chat  { connector, system?, messages:[{role,content}], maxTokens?, temperature? }
 // Returns { ok, text } or { ok:false, message, reason }. Signed-in users only.
 app.post('/api/ai/chat', checkApiKey, (req, res) => {
